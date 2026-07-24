@@ -1,0 +1,1891 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>pyreplay — trace replayer</title>
+<style>
+  :root {
+    --bg: #14161c; --panel: #1c1f28; --border: #2a2e3b;
+    --text: #d6d9e0; --dim: #7d8493; --accent: #5eb1ff;
+    --hl: #2c3d5c; --changed-bg: #3d3320; --changed-text: #ffd479;
+    --call: #7ee08a; --line: #5eb1ff; --ret: #ff9d76; --err: #ff6b6b;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 13px/1.5 "SF Mono", "Fira Code", Consolas, Menlo, monospace;
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  header {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 8px 14px; background: var(--panel);
+    border-bottom: 1px solid var(--border);
+  }
+  header h1 { font-size: 14px; font-weight: 600; color: var(--accent); }
+  header h1 span { color: var(--dim); font-weight: 400; }
+  .controls { display: flex; gap: 6px; align-items: center; }
+  button {
+    background: #262b38; color: var(--text); border: 1px solid var(--border);
+    border-radius: 5px; padding: 4px 10px; font: inherit; cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  button.primary {
+    border-color: var(--accent); color: var(--accent); font-weight: 700;
+  }
+  #banner.info { background: #1d2a3a; color: var(--accent); }
+  select {
+    background: #262b38; color: var(--text); border: 1px solid var(--border);
+    border-radius: 5px; padding: 4px 6px; font: inherit;
+  }
+  #counter { color: var(--dim); margin-left: auto; }
+  #banner {
+    display: none; padding: 8px 14px; background: #3a1d1d;
+    color: var(--err); border-bottom: 1px solid var(--border);
+    white-space: pre-wrap;
+  }
+  #tabs {
+    display: flex; gap: 2px; background: var(--panel);
+    border-bottom: 1px solid var(--border); padding: 0 8px; overflow-x: auto;
+  }
+  .tab {
+    padding: 5px 12px; color: var(--dim); cursor: pointer;
+    border-bottom: 2px solid transparent; white-space: nowrap;
+  }
+  .tab.active { color: var(--text); border-bottom-color: var(--accent); }
+  main { flex: 1; display: flex; min-height: 0; }
+  #code { flex: 1; overflow: auto; padding: 8px 0; }
+  .ln { display: flex; white-space: pre; }
+  .ln .no {
+    width: 52px; text-align: right; padding-right: 14px; flex-shrink: 0;
+    color: #4a5060; user-select: none;
+  }
+  .ln.current { background: var(--hl); }
+  .ln.current .no { color: var(--accent); font-weight: 700; }
+  #divider {
+    width: 5px; flex-shrink: 0; cursor: col-resize;
+    background: var(--border);
+  }
+  #divider:hover, #divider.dragging { background: var(--accent); }
+  #side {
+    width: 340px; flex-shrink: 0; border-left: 1px solid var(--border);
+    background: var(--panel); overflow: auto; display: flex;
+    flex-direction: column;
+  }
+  #side section { border-bottom: 1px solid var(--border); padding: 10px 12px; }
+  #side h2 {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
+    color: var(--dim); margin-bottom: 8px;
+  }
+  #btn-collapse, #btn-stack {
+    float: right; padding: 0 8px; font-size: 11px; text-transform: none;
+    letter-spacing: normal;
+  }
+  .badge {
+    display: inline-block; padding: 1px 8px; border-radius: 4px;
+    font-weight: 700; font-size: 12px; color: #14161c;
+  }
+  .badge.call   { background: var(--call); }
+  .badge.line   { background: var(--line); }
+  .badge.return { background: var(--ret); }
+  .badge.exc    { background: var(--err); color: #fff; }
+  .badge.excsoft { background: #8a6d3b; color: #fff; }
+  .badge.yield  { background: #b48ead; }
+  .badge.resume { background: #b48ead; }
+  #ctx { color: var(--warn); font-size: 11px; margin-left: 10px; }
+  #hint { color: var(--dim); font-size: 11px; font-style: italic;
+          margin-top: 3px; }
+  .gly {
+    font-size: 10px; margin-left: 5px; padding: 0 4px;
+    border-radius: 3px; background: #262b38; user-select: none;
+  }
+  .gly.mut { color: var(--changed-text); }
+  .gly.reb { color: var(--accent); }
+  .gly.cell { color: #c792ea; }
+  .gly.def { color: var(--err); }
+  .exmsg { color: var(--err); font-weight: 600; word-break: break-all; }
+  .exmsg.soft { color: #d8b46a; }
+  .ln.current.excl { background: #4a2328; }
+  .ln.current.excl .no { color: var(--err); }
+  #excmarks { position: relative; height: 7px; margin: 0 7px 2px; }
+  .xmark {
+    position: absolute; top: 0; width: 4px; height: 7px;
+    background: var(--err); border-radius: 2px; cursor: pointer;
+    transform: translateX(-2px);
+  }
+  .xmark:hover { background: #ff9d9d; }
+  #bmarks { position: relative; height: 7px; margin: 0 7px 2px; }
+  .bmark {
+    position: absolute; top: 0; width: 4px; height: 7px;
+    background: #5ec8ff; border-radius: 2px; cursor: pointer;
+    transform: translateX(-2px);
+  }
+  .bmark:hover { background: #aee4ff; }
+  #thread { color: var(--changed-text); margin-left: 8px; }
+  #where { color: var(--dim); margin-top: 6px; word-break: break-all; }
+  #retval { margin-top: 6px; color: var(--ret); word-break: break-all; }
+  #retval .dur { color: var(--dim); }
+  #mro { margin-top: 8px; line-height: 2; }
+  #mro .mrolabel { color: var(--dim); font-size: 11px; }
+  .mroc {
+    background: #262b38; border: 1px solid var(--border);
+    border-radius: 4px; padding: 1px 7px; font-size: 11px;
+  }
+  .mroc.passed { opacity: .45; text-decoration: line-through; }
+  .mroc.sup { border-color: var(--call); color: var(--call);
+              font-weight: 700; }
+  .mroarrow { color: var(--dim); margin: 0 3px; }
+  #density {
+    display: flex; height: 8px; margin: 0 7px 3px;
+    border-radius: 3px; overflow: hidden;
+  }
+  .dbucket { flex: 1; cursor: pointer; background: #20242f; }
+  .dbucket:hover { filter: brightness(1.6); }
+  #cond { margin-top: 8px; }
+  #cond .cexpr { color: var(--dim); font-style: italic; }
+  #cond .cvars { display: flex; flex-direction: column; gap: 3px;
+                 padding: 4px 0; }
+  #cond .cvar .vn { color: var(--accent); }
+  #cond .cres { font-weight: 700; }
+  #cond .cres.true { color: var(--call); }
+  #cond .cres.false { color: var(--err); }
+  #cond .cres.done { color: var(--dim); }
+  #stack div { padding: 2px 0; color: var(--dim); }
+  #stack div.top { color: var(--text); }
+  #stack .fn { color: var(--call); }
+  .vrow { padding: 5px 0; border-bottom: 1px solid #232734; }
+  .vrow .vname { color: var(--accent); font-size: 12px; }
+  .vrow.changed .vname { color: var(--changed-text); font-weight: 700; }
+  .prov { font-size: 10.5px; color: var(--dim); margin: 1px 0 3px 0;
+    line-height: 1.5; }
+  .prov .provlink { background: none; border: 0; font: inherit; padding: 0;
+    color: var(--accent); cursor: pointer; text-decoration: underline dotted; }
+  .prov .provlink:hover { color: var(--changed-text); }
+  .vval { overflow-x: auto; white-space: nowrap; padding-top: 3px; }
+  .pv { word-break: break-all; }
+  .pv.str { color: #a8d08a; }
+  .pv.vchanged { background: var(--changed-bg); color: var(--changed-text);
+                 border-radius: 3px; padding: 0 3px; }
+  .cont { display: inline-flex; gap: 3px; align-items: flex-start;
+          vertical-align: top; }
+  .cont.dict { display: inline-block; }
+  .cell { display: inline-flex; flex-direction: column; align-items: center;
+          border: 1px solid #343a4c; border-radius: 4px; padding: 2px 7px;
+          background: #232838; min-width: 22px; }
+  .cell.changed { border-color: var(--changed-text);
+                  background: var(--changed-bg); color: var(--changed-text); }
+  .cell .idx { font-size: 9px; color: var(--dim); margin-top: 2px;
+               user-select: none; }
+  .cell.more { color: var(--dim); font-style: italic; justify-content: center; }
+  .tuple > .cell { border-radius: 11px; }
+  .set > .cell { border-style: dashed; }
+  .drow { display: flex; gap: 10px; padding: 1px 2px; }
+  .drow .dkey { color: #c792ea; }
+  .drow.changed { background: var(--changed-bg); border-radius: 3px; }
+  .drow.changed .dkey { color: var(--changed-text); }
+  .drow.more { color: var(--dim); font-style: italic; }
+  .viewsel, .ovsel {
+    float: right; background: #262b38; color: var(--dim);
+    border: 1px solid var(--border); border-radius: 4px; font: inherit;
+    font-size: 10px; padding: 0 2px; margin-left: 4px;
+  }
+  .vnav {
+    float: right; display: inline-flex; align-items: center; gap: 2px;
+    margin-left: 6px;
+  }
+  .vnav button { padding: 0 6px; font-size: 11px; line-height: 15px; }
+  .vcount {
+    color: var(--dim); font-size: 10px; cursor: pointer;
+    min-width: 30px; text-align: center; user-select: none;
+  }
+  .vcount:hover { color: var(--accent); text-decoration: underline; }
+  .vstrip {
+    position: relative; height: 9px; background: #20242f;
+    border-radius: 3px; margin: 4px 0 2px;
+  }
+  .vtick {
+    position: absolute; top: 1px; width: 3px; height: 7px;
+    background: var(--accent); border-radius: 1px;
+    transform: translateX(-1px); cursor: pointer;
+  }
+  .vtick.birth { background: var(--call); }
+  .vtick.cur { background: var(--changed-text); width: 5px; }
+  .vtick:hover { background: #fff; }
+  .gnodeg.vis circle { fill: #1d4430; stroke: #7ee08a; }
+  .gnodeg.fresh circle { stroke: var(--changed-text); stroke-width: 2.8; }
+  .gbadge {
+    fill: #9fd8ff; font-size: 10px; font-weight: 600; text-anchor: middle;
+    paint-order: stroke; stroke: #1c2130; stroke-width: 3px;
+  }
+  .gbadge.bnew { fill: var(--changed-text); }
+  table.grid { border-collapse: collapse; margin-top: 2px; }
+  table.grid th {
+    color: var(--dim); font-size: 9px; font-weight: 400; padding: 1px 5px;
+    text-align: center; user-select: none;
+  }
+  table.grid td.gcell {
+    border: 1px solid #343a4c; background: #232838; padding: 2px 7px;
+    text-align: center;
+  }
+  table.grid td.gcell.changed {
+    border-color: var(--changed-text); background: var(--changed-bg);
+    color: var(--changed-text);
+  }
+  td.gmore, .gmore {
+    color: var(--dim); font-style: italic; font-size: 11px; padding: 0 4px;
+  }
+  .barbox { display: inline-flex; align-items: flex-end; gap: 2px;
+            min-height: 60px; }
+  .bar { display: inline-block; width: 9px; background: var(--accent);
+         border-radius: 2px 2px 0 0; }
+  .bar.neg { background: var(--ret); }
+  .bar.changed { background: var(--changed-text); }
+  .bar.inf { border-top: 2px dashed var(--text); opacity: .75; }
+  .bar.nan { background: repeating-linear-gradient(45deg, #555 0 2px,
+             #333 2px 4px); }
+  .bscale { color: var(--dim); font-size: 10px; align-self: flex-start;
+            margin-left: 6px; user-select: none; }
+  table.grid th.changed, table.grid td.gmore.changed {
+    color: var(--changed-text); font-weight: 700; font-style: normal;
+  }
+  svg.graphview {
+    background: #1c2130; border: 1px solid var(--border);
+    border-radius: 6px; margin-top: 3px;
+  }
+  .gedge { stroke: #93a1c0; stroke-width: 1.6; }
+  .gedge.changed { stroke: var(--changed-text); stroke-width: 2.6; }
+  .gnodeg circle { fill: #303a55; stroke: #9db0d8; stroke-width: 1.8; }
+  .gnodeg.changed circle { stroke: var(--changed-text); stroke-width: 2.6;
+                           fill: #3d3320; }
+  .gnodeg text {
+    fill: #f0f3fa; font-size: 12px; font-weight: 600; text-anchor: middle;
+    paint-order: stroke; stroke: #1c2130; stroke-width: 3px;
+  }
+  .gnodeg.changed text { fill: var(--changed-text); }
+  .gw {
+    fill: #e8edf8; font-size: 11px; font-weight: 600; text-anchor: middle;
+    paint-order: stroke; stroke: #1c2130; stroke-width: 3.5px;
+  }
+  .gnote { color: var(--dim); font-style: italic; font-size: 11px;
+           padding: 2px 0; }
+  footer {
+    padding: 8px 14px; background: var(--panel);
+    border-top: 1px solid var(--border);
+  }
+  #scrub { width: 100%; accent-color: var(--accent); }
+  .empty { color: var(--dim); font-style: italic; }
+  #template-note {
+    display: none; padding: 40px; font-size: 15px; line-height: 2;
+  }
+  #template-note code { color: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>pyreplay <span id="script-name"></span></h1>
+  <div class="controls">
+    <button id="btn-first" title="Jump to start (Home)">&#9198; Start</button>
+    <button id="btn-prev"  title="One event back (&#8592;)">&#9664; Back</button>
+    <button id="btn-next" class="primary" title="One event forward (&#8594;)">Step &#9654;</button>
+    <button id="btn-over" title="Step over — skip nested calls, stay in this frame (O)">Over &#10549;</button>
+    <button id="btn-out" title="Step out — jump to the caller's next event (U)">Out &#10548;</button>
+    <button id="btn-play"  title="Auto-advance on/off (Space)">&#9654; Play</button>
+    <select id="speed" title="Play speed (events per second)">
+      <option value="2000">crawl (0.5 ev/s)</option>
+      <option value="1000" selected>slow (1 ev/s)</option>
+      <option value="300">normal (3 ev/s)</option>
+      <option value="80">fast (12 ev/s)</option>
+      <option value="15">turbo (66 ev/s)</option>
+    </select>
+    <button id="btn-last" title="Jump to end (End)">End &#9197;</button>
+  </div>
+  <div id="counter"></div>
+</header>
+<div id="banner"></div>
+<div id="template-note">
+  <p>&#9888; This is the <b>empty template</b> — it contains no trace data,
+  so the controls do nothing.</p>
+  <p>Generate and open a real trace instead:</p>
+  <p><code>python3 tracer.py your_script.py</code> &nbsp;&#8594;&nbsp;
+  then open <code>trace.html</code></p>
+</div>
+<div id="tabs"></div>
+<main>
+  <div id="code"></div>
+  <div id="divider" title="Drag to resize · double-click to reset"></div>
+  <div id="side">
+    <section>
+      <h2>Call stack
+        <button id="btn-stack" title="Show/hide the call stack">hide</button></h2>
+      <div id="stack"></div>
+    </section>
+    <section>
+      <h2>Event</h2>
+      <div><span id="badge" class="badge line">LINE</span><span id="thread"></span><span id="ctx"></span></div>
+      <div id="where"></div>
+      <div id="hint"></div>
+      <div id="retval"></div>
+      <div id="mro"></div>
+      <div id="cond"></div>
+    </section>
+    <section style="flex:1">
+      <h2>Variables <span style="color:var(--changed-text)">(changed)</span>
+        <button id="btn-collapse" title="Show only the variables changing at this event (C)">collapse</button></h2>
+      <div id="vars"></div>
+    </section>
+  </div>
+</main>
+<footer>
+  <input type="range" id="scrub" min="0" value="0">
+</footer>
+
+<!-- Trace data lives in a non-executing JSON tag: a bad payload can never
+     kill the viewer's JavaScript, and the raw template stays valid. -->
+<script id="trace-data" type="application/json">__TRACE_DATA__</script>
+
+<script>
+const $ = id => document.getElementById(id);
+
+/* Any uncaught error becomes a visible banner instead of dead buttons. */
+window.onerror = function (msg, src, lineno) {
+  const b = $("banner");
+  b.style.display = "block";
+  b.textContent = "Viewer error: " + msg + " (line " + lineno + ")\n" +
+    "Please report this message.";
+  return false;
+};
+
+const raw = $("trace-data").textContent.trim();
+if (raw.indexOf("__TRACE" + "_DATA__") === 0) {
+  $("template-note").style.display = "block";
+  document.querySelector("main").style.display = "none";
+  throw new Error("template opened directly — no trace data embedded");
+}
+let DATA;
+try {
+  DATA = JSON.parse(raw);
+} catch (e) {
+  throw new Error("trace data is corrupt: " + e.message);
+}
+const events = DATA.events;
+
+$("script-name").textContent = "· " + DATA.script + " · " +
+  events.length + " events" +
+  (DATA.granularity === "fn" ? " · fn granularity" : "");
+if (DATA.error || DATA.truncated) {
+  const b = $("banner");
+  b.style.display = "block";
+  b.textContent = (DATA.error ? "Run ended with " + DATA.error + ". " : "") +
+    (DATA.truncated ? "Trace truncated at event cap." : "") +
+    " The trace up to that point is fully replayable.";
+} else if (DATA.startAt) {
+  const b = $("banner");
+  b.className = "info";
+  b.style.display = "block";
+  b.textContent = "⚡ Recording began at trigger [" + DATA.startAt +
+    "] — everything before it ran normally but is NOT in this trace. " +
+    "The first events reconstruct the call stack and variables at that moment.";
+}
+
+/* ---------- code panes: one pre-rendered pane per source file ---------- */
+const panes = {};
+function escapeHtml(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+const esc2 = escapeHtml;
+for (const [rel, text] of Object.entries(DATA.sources)) {
+  const pane = document.createElement("div");
+  pane.style.display = "none";
+  const lines = text.replace(/\n$/, "").split("\n");
+  const lineEls = lines.map((src, i) => {
+    const div = document.createElement("div");
+    div.className = "ln";
+    div.innerHTML = '<span class="no">' + (i + 1) + '</span><span class="src">'
+      + (escapeHtml(src) || " ") + "</span>";
+    pane.appendChild(div);
+    return div;
+  });
+  $("code").appendChild(pane);
+  panes[rel] = { pane, lineEls };
+
+  const tab = document.createElement("div");
+  tab.className = "tab";
+  tab.textContent = rel;
+  tab.onclick = () => activateFile(rel);
+  $("tabs").appendChild(tab);
+  panes[rel].tab = tab;
+}
+
+let activeFile = null;
+function activateFile(rel) {
+  if (rel === activeFile || !panes[rel]) return;
+  if (activeFile) {
+    panes[activeFile].pane.style.display = "none";
+    panes[activeFile].tab.classList.remove("active");
+  }
+  panes[rel].pane.style.display = "block";
+  panes[rel].tab.classList.add("active");
+  activeFile = rel;
+}
+
+/* ---------- semantic value rendering ----------
+   Values arrive as typed structures: {t: "p"|"s"|"o", v: text} or
+   {t: "list"|"tuple"|"set"|"dict", n: realLength, v: elements}.
+   renderValue picks a renderer by type — generic for any program's data.
+   `old` (the value before this event) enables element-level diffing:
+   exactly the cells that changed get highlighted. */
+function sig(x) { return JSON.stringify(x); }
+
+const CONT = new Set(["list", "tuple", "set", "dict"]);
+
+/* Hover tooltip: the value's real Python type (+ true size for containers). */
+function titleAttr(enc) {
+  let label;
+  if (enc.t === "obj")
+    label = (enc.c || "object") + " · " + enc.n +
+      (enc.n === 1 ? " attr" : " attrs");
+  else if (CONT.has(enc.t))
+    label = (enc.c || enc.t) + " · " + enc.n +
+      (enc.n === 1 ? " item" : " items");
+  else label = enc.c || enc.t;
+  return ' title="' + escapeHtml(label) + '"';
+}
+
+/* Highlighting philosophy: mark ONLY the deepest thing that changed.
+   If an element is a container of the same type as before, recursion
+   marks the leaf inside it; the containing boxes stay unmarked. */
+function renderValue(enc, old) {
+  if (!enc || typeof enc !== "object") return "";
+  if (enc.t === "p" || enc.t === "o" || enc.t === "s") {
+    const ch = old !== undefined && sig(old) !== sig(enc) ? " vchanged" : "";
+    const cls = enc.t === "s" ? " str" : "";
+    const text = enc.t === "s" ? JSON.stringify(enc.v) : String(enc.v);
+    return '<span class="pv' + cls + ch + '"' + titleAttr(enc) + ">" +
+      escapeHtml(text) + "</span>";
+  }
+  if (CONT.has(enc.t) && enc.n === 0) {
+    const ch = old !== undefined && sig(old) !== sig(enc) ? " vchanged" : "";
+    const lit = { list: "[]", tuple: "()", set: "set()", dict: "{}" }[enc.t];
+    return '<span class="pv' + ch + '"' + titleAttr(enc) + ">" + lit +
+      "</span>";
+  }
+  if (enc.t === "obj") {
+    // nested instances render as an attribute table (top-level object
+    // variables get their attributes promoted to real rows instead)
+    const sameType = old !== undefined && old.t === "obj";
+    const oldMap = {};
+    if (sameType) old.v.forEach(p => { oldMap[p[0]] = p[1]; });
+    let rows = enc.v.map(([k, v]) => {
+      let ch = "", oldItem;
+      if (old !== undefined) {
+        if (!sameType) ch = " changed";
+        else {
+          oldItem = oldMap[k];
+          if (oldItem === undefined) ch = " changed";
+          else if (sig(oldItem) !== sig(v))
+            ch = CONT.has(v.t) && oldItem.t === v.t ? "" : " changed";
+        }
+      }
+      return '<div class="drow' + ch + '"><span class="dkey">.' +
+        escapeHtml(k) + "</span><span>" + renderValue(v, oldItem) +
+        "</span></div>";
+    }).join("");
+    if (enc.n > enc.v.length)
+      rows += '<div class="drow more">+' + (enc.n - enc.v.length) +
+        " more</div>";
+    return '<span class="cont dict"' + titleAttr(enc) + ">" + rows +
+      "</span>";
+  }
+  if (enc.t === "set") return renderSet(enc, old);
+  if (enc.t === "list" || enc.t === "tuple") {
+    const off = enc.off || 0;
+    const sameType = old !== undefined && old.t === enc.t;
+    const oldAbs = {};
+    if (sameType) {
+      const oldOff = old.off || 0;
+      old.v.forEach((it, i) => { oldAbs[oldOff + i] = it; });
+    }
+    let cells = "";
+    if (off > 0)
+      cells += '<span class="cell more" title="' + off +
+        ' elements before this window">…' + off + "</span>";
+    const chi = enc.chi ? new Set(enc.chi) : null;
+    cells += enc.v.map((item, i) => {
+      const abs = off + i;
+      let ch = "", oldItem;
+      if (old !== undefined) {
+        if (chi) {
+          // tracer stamped the changed indices — authoritative
+          ch = chi.has(abs) ? " changed" : "";
+        } else if (!sameType) ch = " changed";
+        else {
+          oldItem = oldAbs[abs];
+          if (oldItem === undefined) {
+            if (abs >= old.n) ch = " changed";   // grew: element is new
+            // else: outside the old window — unknown, leave unmarked
+          } else if (sig(oldItem) !== sig(item)) {
+            ch = CONT.has(item.t) && oldItem.t === item.t
+              ? "" : " changed";                 // container: leaf will glow
+          }
+        }
+      }
+      const idx = '<span class="idx">' + abs + "</span>";
+      return '<span class="cell' + ch + '"' + titleAttr(item) + ">" +
+        renderValue(item, oldItem) + idx + "</span>";
+    }).join("");
+    const after = enc.n - off - enc.v.length;
+    if (after > 0)
+      cells += '<span class="cell more" title="' + after +
+        ' more elements after this window">+' + after + "</span>";
+    return '<span class="cont ' + enc.t + '"' + titleAttr(enc) + ">" +
+      cells + "</span>";
+  }
+  if (enc.t === "dict") {
+    const sameType = old !== undefined && old.t === "dict";
+    const oldMap = {};
+    if (sameType) old.v.forEach(p => { oldMap[p[0]] = p[1]; });
+    const oldPartial = sameType && old.n > old.v.length;
+    let rows = enc.v.map(([k, v], i) => {
+      let ch = "", oldItem;
+      if (old !== undefined) {
+        if (enc.nc !== undefined) {
+          // tracer stamped changed-pairs-first — authoritative
+          ch = i < enc.nc ? " changed" : "";
+        } else if (!sameType) ch = " changed";
+        else {
+          oldItem = oldMap[k];
+          if (oldItem === undefined) {
+            // absent from a PARTIAL old encoding = unknown, not new
+            ch = oldPartial ? "" : " changed";
+          } else if (sig(oldItem) !== sig(v)) {
+            ch = CONT.has(v.t) && oldItem.t === v.t
+              ? "" : " changed";                             // leaf will glow
+          }
+        }
+      }
+      return '<div class="drow' + ch + '"><span class="dkey">' +
+        escapeHtml(k) + "</span><span>" + renderValue(v, oldItem) +
+        "</span></div>";
+    }).join("");
+    if (enc.n > enc.v.length)
+      rows += '<div class="drow more">+' + (enc.n - enc.v.length) +
+        " more</div>";
+    return '<span class="cont dict"' + titleAttr(enc) + ">" + rows +
+      "</span>";
+  }
+  return "";
+}
+
+/* ---------- alternate views: grid (list-of-lists) and bars (numbers).
+   Pure projections of the same data — never an interpretation. The
+   per-variable selector offers them only when the shape fits. ---------- */
+const VIEW_KEY = "pyreplay-view:" + DATA.script + ":";
+function getPref(key, def) {
+  try { return localStorage.getItem(VIEW_KEY + key) || def; }
+  catch (e) { return def; }
+}
+function getViewPref(name) { return getPref(name, "cells"); }
+function setViewPref(name, view) {
+  try { localStorage.setItem(VIEW_KEY + name, view); } catch (e) {}
+}
+function parseNum(s) {
+  if (s === "inf") return Infinity;
+  if (s === "-inf") return -Infinity;
+  if (s === "nan") return NaN;
+  return Number(s);   // NaN on garbled reprs (unlike parseFloat)
+}
+function viewOptions(enc) {
+  const opts = ["cells"];
+  if ((enc.t === "list" || enc.t === "tuple") && enc.v && enc.v.length) {
+    if (enc.v.every(x => x && (x.t === "list" || x.t === "tuple")))
+      opts.push("grid");
+    if (enc.n >= 2 &&
+        enc.v.every(x => x && x.t === "p" &&
+          (x.c === "int" || x.c === "float") &&
+          (x.v === "nan" || !Number.isNaN(parseNum(x.v)))))
+      opts.push("bars");
+  }
+  opts.push(...graphEligibility(enc));
+  return opts;
+}
+
+/* ---------- graph view (Tier 2): heuristics OFFER, the user decides.
+   Handles four generic encodings with no algorithm knowledge:
+   dict-of-sequences (adjacency by key), dict-of-dicts (weighted
+   adjacency), list-of-int-sequences (adjacency by index), and
+   list-of-pairs (edge list — offered as a separate "edges" option
+   since the shape is ambiguous; the oracle picks). ---------- */
+let _gvid = 0;   // unique SVG marker ids when several graphs are on screen
+
+function nodeLabel(enc) {
+  // a node id must be a primitive; containers can't name a node
+  if (!enc || typeof enc !== "object") return null;
+  if (enc.t === "s") return "'" + enc.v + "'";   // match dict-key reprs
+  if (enc.t === "p") return String(enc.v);
+  return null;
+}
+
+function resolveLabel(enc, keySet) {
+  // dict keys arrive as Python reprs, elements as raw values; bridge
+  // the two spaces so string nodes match their keys
+  const l = nodeLabel(enc);
+  if (l === null) return null;
+  if (enc.t !== "s") return l;
+  if (enc.v.endsWith("…")) return null;   // truncated: identity unknowable
+  if (!keySet || keySet.has(l)) return l;
+  const dq = '"' + enc.v + '"';           // repr switches to double quotes
+  return keySet.has(dq) ? dq : l;         // when the raw string contains '
+}
+
+function graphEligibility(enc) {
+  const out = [];
+  try {
+    if (enc.t === "dict" && enc.n >= 2 && enc.n <= 60 && enc.v.length) {
+      const vals = enc.v.map(p => p[1]);
+      if (vals.every(x => x &&
+          (x.t === "list" || x.t === "tuple" || x.t === "set"))) {
+        // adjacency dict: enough elements must point back at keys
+        const keys = new Set(enc.v.map(p => p[0]));
+        let total = 0, hits = 0;
+        vals.forEach(c => (c.v || []).forEach(e => {
+          total++;
+          const l = resolveLabel(e, keys);
+          if (l !== null && keys.has(l)) hits++;
+        }));
+        if (total === 0 || hits >= Math.max(1, total * 0.25))
+          out.push("graph");
+      } else if (vals.every(x => x && x.t === "dict")) {
+        out.push("graph");   // weighted adjacency {u: {v: weight}}
+      }
+    }
+    if ((enc.t === "list" || enc.t === "tuple") && enc.n >= 2 &&
+        enc.n <= 60 && enc.v.length &&
+        enc.v.every(x => x && (x.t === "list" || x.t === "tuple"))) {
+      if (adjOrientation(enc) !== null) out.push("graph");
+      // edge list: rows of exactly two node ids (ambiguous with the
+      // above — offer both, the user knows which one their data is)
+      if (enc.v.every(r => r.n === 2 &&
+          (r.v || []).every(e => nodeLabel(e) !== null)))
+        out.push("edges");
+    }
+  } catch (err) { /* eligibility must never break rendering */ }
+  return out;
+}
+
+/* Index-based adjacency comes in two generic shapes: rows of plain ints
+   (unweighted) or rows of 2-tuples with the neighbor in a consistent
+   position (weighted, e.g. (nbr, w) or (w, nbr)). Detect which — the
+   neighbor position is the one that is ALWAYS an int in [0, n). */
+function adjOrientation(enc) {
+  const inRange = e => {
+    if (!e || e.t !== "p" || e.c !== "int") return false;
+    const v = Number(e.v);
+    return Number.isInteger(v) && v >= 0 && v < enc.n;
+  };
+  const isPair = e => e && (e.t === "list" || e.t === "tuple") &&
+    e.n === 2 && (e.v || []).length === 2;
+  let allInt = true, allPair = true, any = false;
+  enc.v.forEach(row => (row.v || []).forEach(e => {
+    any = true;
+    if (!inRange(e)) allInt = false;
+    if (!isPair(e)) allPair = false;
+  }));
+  if (!any) return { nb: -1 };            // empty rows: being built
+  if (allInt) return { nb: -1 };          // plain ints, no weights
+  if (allPair) {
+    let aOk = true, bOk = true;
+    enc.v.forEach(row => (row.v || []).forEach(e => {
+      if (!inRange(e.v[0])) aOk = false;
+      if (!inRange(e.v[1])) bOk = false;
+    }));
+    if (aOk) return { nb: 0 };            // (neighbor, weight)
+    if (bOk) return { nb: 1 };            // (weight, neighbor)
+  }
+  return null;
+}
+
+function graphModel(enc) {
+  // normalize any adjacency encoding to {nodes, edges}. "partial" is
+  // RECURSIVE: a truncated inner container also means we can't know the
+  // full topology (edges hidden beyond an inner head).
+  const nodes = [], edges = [], seen = new Set();
+  let partial = enc.n > enc.v.length;
+  const addNode = l => { if (!seen.has(l)) { seen.add(l); nodes.push(l); } };
+  if (enc.t === "dict") {
+    const keySet = new Set(enc.v.map(p => p[0]));
+    enc.v.forEach(p => addNode(p[0]));
+    enc.v.forEach(([k, val]) => {
+      if (val && val.n > (val.v ? val.v.length : 0)) partial = true;
+      if (val.t === "dict") {
+        (val.v || []).forEach(([ik, iv]) => {
+          addNode(ik);
+          // w = diff identity (sig for containers, so weight changes
+          // flash); label = display text (only for scalar weights)
+          const scalar = iv && (iv.t === "p" || iv.t === "s");
+          edges.push({ a: k, b: ik,
+                       w: scalar ? String(iv.v) : (iv ? sig(iv) : ""),
+                       label: scalar ? String(iv.v) : "" });
+        });
+      } else {
+        (val.v || []).forEach(e => {
+          const l = resolveLabel(e, keySet);
+          if (l === null) return;
+          addNode(l);
+          edges.push({ a: k, b: l, w: "", label: "" });
+        });
+      }
+    });
+  } else {
+    const off = enc.off || 0;
+    const orient = adjOrientation(enc) || { nb: -1 };
+    for (let i = 0; i < enc.n; i++) addNode(String(i));
+    enc.v.forEach((row, i) => {
+      if (row && row.n > (row.v ? row.v.length : 0)) partial = true;
+      const a = String(off + i);
+      (row.v || []).forEach(e => {
+        let nbEnc = e, wEnc = null;
+        if (orient.nb >= 0 && e && (e.t === "list" || e.t === "tuple") &&
+            (e.v || []).length === 2) {
+          nbEnc = e.v[orient.nb];
+          wEnc = e.v[1 - orient.nb];
+        }
+        const l = resolveLabel(nbEnc, null);
+        if (l === null) return;
+        addNode(l);
+        const scalar = wEnc && (wEnc.t === "p" || wEnc.t === "s");
+        edges.push({ a, b: l,
+                     w: scalar ? String(wEnc.v) : (wEnc ? sig(wEnc) : ""),
+                     label: scalar ? String(wEnc.v) : "" });
+      });
+    });
+  }
+  return { nodes, edges, partial };
+}
+
+function edgeModel(enc) {
+  // list of [u, v] (or [u, v, w]) pairs
+  const nodes = [], edges = [], seen = new Set();
+  let partial = enc.n > enc.v.length;
+  const addNode = l => { if (!seen.has(l)) { seen.add(l); nodes.push(l); } };
+  enc.v.forEach(row => {
+    if (row && row.n > (row.v ? row.v.length : 0)) partial = true;
+    const a = nodeLabel(row.v && row.v[0]);
+    const b = nodeLabel(row.v && row.v[1]);
+    if (a === null || b === null) return;
+    addNode(a); addNode(b);
+    const wEnc = row.v.length > 2 ? row.v[2] : null;
+    const scalar = wEnc && (wEnc.t === "p" || wEnc.t === "s");
+    edges.push({ a, b,
+                 w: scalar ? String(wEnc.v) : (wEnc ? sig(wEnc) : ""),
+                 label: scalar ? String(wEnc.v) : "" });
+  });
+  return { nodes, edges, partial };
+}
+
+/* ---------- traversal overlay: color the graph by ANOTHER variable.
+   Generic interpretations by shape — no algorithm knowledge:
+   set   -> membership (visited nodes green, newly added flash)
+   dict  -> membership + scalar values as badges under the nodes
+   list  -> value-array if its length equals the node count and nodes
+            are indices (badges: D[i] under node i, changed ones flash);
+            otherwise a collection of node ids (queue/path membership) */
+function overlayMaps(ov, nodeList) {
+  const enc = ov.enc, old = ov.old;
+  if (!enc || typeof enc !== "object") return null;
+  const member = new Set(), fresh = new Set();
+  const badge = new Map(), badgeNew = new Set();
+  const nodeSet = new Set(nodeList);
+  if (enc.t === "set") {
+    const oldSigs = old !== undefined && old.t === "set"
+      ? new Set((old.v || []).map(sig)) : null;
+    (enc.v || []).forEach(e => {
+      const l = resolveLabel(e, nodeSet);
+      if (l === null || !nodeSet.has(l)) return;
+      member.add(l);
+      if (oldSigs && !oldSigs.has(sig(e))) fresh.add(l);
+    });
+    return { member, fresh, badge, badgeNew };
+  }
+  if (enc.t === "dict") {
+    const oldMap = {};
+    if (old !== undefined && old.t === "dict")
+      (old.v || []).forEach(p => { oldMap[p[0]] = p[1]; });
+    (enc.v || []).forEach(([k, v]) => {
+      if (!nodeSet.has(k)) return;
+      member.add(k);
+      if (v && (v.t === "p" || v.t === "s")) badge.set(k, String(v.v));
+      if (old !== undefined && old.t === "dict") {
+        const o = oldMap[k];
+        if (o === undefined) fresh.add(k);
+        else if (sig(o) !== sig(v)) badgeNew.add(k);
+      }
+    });
+    return { member, fresh, badge, badgeNew };
+  }
+  if (enc.t === "list" || enc.t === "tuple") {
+    const off = enc.off || 0;
+    const numericNodes = nodeList.every(l => /^\d+$/.test(l));
+    if (numericNodes && enc.n === nodeList.length) {
+      // value array indexed by node: badge every node with its value
+      const oldAbs = {};
+      if (old !== undefined && old.t === enc.t) {
+        const oo = old.off || 0;
+        (old.v || []).forEach((it, i) => { oldAbs[oo + i] = it; });
+      }
+      const chi = enc.chi ? new Set(enc.chi) : null;
+      (enc.v || []).forEach((e, i) => {
+        const abs = off + i, l = String(abs);
+        if (!nodeSet.has(l)) return;
+        if (e && (e.t === "p" || e.t === "s")) badge.set(l, String(e.v));
+        if (old !== undefined) {
+          if (chi ? chi.has(abs)
+              : (oldAbs[abs] !== undefined && sig(oldAbs[abs]) !== sig(e)))
+            badgeNew.add(l);
+        }
+      });
+      return { member, fresh, badge, badgeNew };
+    }
+    // collection of node ids: queue / stack / path membership
+    const oldSigs = old !== undefined && old.t === enc.t
+      ? new Set((old.v || []).map(sig)) : null;
+    (enc.v || []).forEach(e => {
+      const l = resolveLabel(e, nodeSet);
+      if (l === null || !nodeSet.has(l)) return;
+      member.add(l);
+      if (oldSigs && !oldSigs.has(sig(e))) fresh.add(l);
+    });
+    return { member, fresh, badge, badgeNew };
+  }
+  return null;
+}
+
+function renderGraph(enc, old, mode, ov) {
+  const model = mode === "edges" ? edgeModel(enc) : graphModel(enc);
+  if (!model.nodes.length) return renderValue(enc, old);
+  if (model.nodes.length > 80)
+    return '<div class="gnote">graph too large to draw (' +
+      model.nodes.length + " nodes) — showing cells</div>" +
+      renderValue(enc, old);
+  let ovm = null;
+  if (ov) {
+    try { ovm = overlayMaps(ov, model.nodes); } catch (err) { ovm = null; }
+  }
+
+  // diff: an edge/node is "changed" if absent from the previous model.
+  // Only sound when BOTH models are complete (recursively) — a partial
+  // encoding on either side = unknown = no marks. Duplicate edges are
+  // diffed as a multiset so an appended parallel edge still flashes.
+  let oldEdges = null, oldNodes = null;
+  let markAll = false;
+  if (old !== undefined) {
+    if (old.t !== enc.t) markAll = true;
+    else {
+      try {
+        const om = mode === "edges" ? edgeModel(old) : graphModel(old);
+        if (!om.partial && !model.partial) {
+          const seenOld = {};
+          oldEdges = new Set(om.edges.map(e => {
+            const k = e.a + "→" + e.b + "|" + e.w;
+            const c = seenOld[k] = (seenOld[k] || 0) + 1;
+            return k + "#" + c;
+          }));
+          oldNodes = new Set(om.nodes);
+        }
+      } catch (err) { /* unknown → unmarked */ }
+    }
+  }
+
+  const N = model.nodes.length;
+  const R = Math.min(240, Math.max(46, N * 10));
+  const nr = Math.max(7, Math.min(13,
+    Math.floor((2 * Math.PI * R) / (N * 3.4))));
+  const pad = nr + (ovm && ovm.badge.size ? 34 : 22);
+  const cx = R + pad, cy = R + pad, S = 2 * (R + pad);
+  const pos = {};
+  model.nodes.forEach((l, i) => {
+    const ang = -Math.PI / 2 + (2 * Math.PI * i) / N;
+    pos[l] = [cx + R * Math.cos(ang), cy + R * Math.sin(ang)];
+  });
+
+  const id = "gv" + (++_gvid);
+  const arrow = c =>
+    '<marker id="' + id + c + '" viewBox="0 0 10 10" refX="9" refY="5" ' +
+    'markerWidth="7" markerHeight="7" orient="auto-start-reverse">' +
+    '<path d="M0,0 L10,5 L0,10 z" fill="' +
+    (c === "c" ? "#ffd479" : "#93a1c0") + '"/></marker>';
+  let svg = '<svg class="graphview" width="' + S + '" height="' + S +
+    '"><defs>' + arrow("a") + arrow("c") + "</defs>";
+
+  const ekeys = new Set(model.edges.map(e => e.a + "→" + e.b));
+  const occDiff = {};   // multiset occurrence counter for diffing
+  const occGeom = {};   // parallel-edge counter for drawing offsets
+  model.edges.forEach(e => {
+    const dk = e.a + "→" + e.b + "|" + e.w;
+    const c = occDiff[dk] = (occDiff[dk] || 0) + 1;
+    const ch = markAll ||
+      (oldEdges !== null && !oldEdges.has(dk + "#" + c));
+    const cls = "gedge" + (ch ? " changed" : "");
+    const mk = ' marker-end="url(#' + id + (ch ? "c" : "a") + ')"';
+    const tip = "<title>" + escapeHtml(e.a + " → " + e.b +
+      (e.label ? "  (" + e.label + ")" : "")) + "</title>";
+    const [xa, ya] = pos[e.a], [xb, yb] = pos[e.b];
+    if (e.a === e.b) {   // self-loop: small arc above the node
+      svg += '<path class="' + cls + '" fill="none" d="M ' +
+        (xa - nr * 0.6) + " " + (ya - nr * 0.8) + " a " + nr * 0.8 + " " +
+        nr * 0.8 + " 0 1 1 " + nr * 1.2 + ' 0"' + mk + ">" + tip + "</path>";
+      return;
+    }
+    let dx = xb - xa, dy = yb - ya;
+    const d = Math.hypot(dx, dy) || 1;
+    dx /= d; dy /= d;
+    // reciprocal edges offset perpendicular; parallel duplicates fan out
+    const gi = (occGeom[e.a + "→" + e.b] =
+      (occGeom[e.a + "→" + e.b] || 0) + 1) - 1;
+    const offp = (ekeys.has(e.b + "→" + e.a) ? 3.5 : 0) + gi * 5;
+    const px = -dy * offp, py = dx * offp;
+    // clamp trims so short chords never produce a reversed segment
+    const trimA = nr, trimB = nr + 5;
+    const sc = Math.min(1, Math.max(0, (d - 1) / (trimA + trimB)));
+    const x1 = xa + dx * trimA * sc + px, y1 = ya + dy * trimA * sc + py;
+    const x2 = xb - dx * trimB * sc + px, y2 = yb - dy * trimB * sc + py;
+    svg += '<line class="' + cls + '" x1="' + x1 + '" y1="' + y1 +
+      '" x2="' + x2 + '" y2="' + y2 + '"' + mk + ">" + tip + "</line>";
+    if (e.label)
+      svg += '<text class="gw" x="' + ((x1 + x2) / 2 - dy * 8) + '" y="' +
+        ((y1 + y2) / 2 + dx * 8) + '">' + escapeHtml(e.label) + "</text>";
+  });
+
+  model.nodes.forEach(l => {
+    const ch = markAll || (oldNodes !== null && !oldNodes.has(l));
+    const vis = ovm && ovm.member.has(l);
+    const fresh = ovm && ovm.fresh.has(l);
+    const [x, y] = pos[l];
+    const disp = l.replace(/^'(.*)'$/, "$1");
+    const short = disp.length > 6 ? disp.slice(0, 5) + "…" : disp;
+    svg += '<g class="gnodeg' + (ch ? " changed" : "") +
+      (vis ? " vis" : "") + (fresh ? " fresh" : "") + '"><circle cx="' +
+      x + '" cy="' + y + '" r="' + nr + '"/><text x="' + x + '" y="' +
+      (y + 3) + '">' + escapeHtml(short) + "</text><title>" +
+      escapeHtml(disp) + "</title></g>";
+    if (ovm && ovm.badge.has(l))
+      svg += '<text class="gbadge' +
+        (ovm.badgeNew.has(l) ? " bnew" : "") + '" x="' + x + '" y="' +
+        (y + nr + 13) + '">' + escapeHtml(ovm.badge.get(l)) + "</text>";
+  });
+  svg += "</svg>";
+  return svg + (model.partial
+    ? '<div class="gnote">⚠ container truncated — some nodes/edges ' +
+      "may be missing</div>" : "");
+}
+
+/* Shared helper: change state of element at absolute index, honoring
+   authoritative chi markers and window alignment (same rules as cells). */
+function elemChange(item, abs, old, oldAbs, sameType, chi) {
+  if (old === undefined) return { ch: false, oldItem: undefined };
+  if (chi) return { ch: chi.has(abs), oldItem: oldAbs[abs] };
+  if (!sameType) return { ch: true, oldItem: undefined };
+  const oldItem = oldAbs[abs];
+  if (oldItem === undefined)
+    return { ch: abs >= old.n, oldItem: undefined };
+  return { ch: sig(oldItem) !== sig(item), oldItem };
+}
+
+function renderGrid(enc, old) {
+  const off = enc.off || 0;
+  const sameType = old !== undefined && old.t === enc.t;
+  const oldAbs = {};
+  if (sameType) {
+    const oldOff = old.off || 0;
+    old.v.forEach((it, i) => { oldAbs[oldOff + i] = it; });
+  }
+  const chi = enc.chi ? new Set(enc.chi) : null;
+  const ncols = Math.max(0, ...enc.v.map(r => (r.v ? r.v.length : 0)));
+  let html = '<table class="grid"' + titleAttr(enc) + "><tr><th></th>";
+  for (let c = 0; c < ncols; c++) html += "<th>" + c + "</th>";
+  html += "</tr>";
+  if (off > 0)
+    html += '<tr><th>…</th><td class="gmore" colspan="' + (ncols || 1) +
+      '">' + off + " rows before</td></tr>";
+  enc.v.forEach((row, i) => {
+    const abs = off + i;
+    const st = elemChange(row, abs, old, oldAbs, sameType, chi);
+    let rowHtml = "";
+    let anyMarked = false;
+    if ((row.t === "list" || row.t === "tuple") && row.v.length) {
+      // positional inner diff only against an old row of the SAME type;
+      // a retyped row falls back to the row-level verdict on every cell
+      const oldCells = st.oldItem && st.oldItem.t === row.t
+        ? st.oldItem.v : null;
+      row.v.forEach((cell, c) => {
+        let ch = false;
+        if (old !== undefined) {
+          if (oldCells)
+            ch = c >= oldCells.length || sig(oldCells[c]) !== sig(cell);
+          else ch = st.ch;
+        }
+        anyMarked = anyMarked || ch;
+        rowHtml += '<td class="gcell' + (ch ? " changed" : "") + '"' +
+          titleAttr(cell) + ">" + renderValue(cell) + "</td>";
+      });
+      const hidden = row.n - row.v.length;
+      if (hidden > 0) {
+        // authoritative row change with all visible cells equal: the
+        // change lives beyond the head — mark the "+N" cell
+        const hiddenCh = st.ch && !anyMarked;
+        anyMarked = anyMarked || hiddenCh;
+        rowHtml += '<td class="gmore' + (hiddenCh ? " changed" : "") +
+          '">+' + hidden + "</td>";
+      }
+    } else {
+      // empty containers and mixed rows: one spanning cell ("[]" etc.)
+      anyMarked = st.ch;
+      rowHtml += "<td" + (st.ch ? ' class="gcell changed"' : "") +
+        ' colspan="' + (ncols || 1) + '">' +
+        renderValue(row, st.oldItem) + "</td>";
+    }
+    const thCh = st.ch && !anyMarked;   // last resort: mark the row header
+    html += "<tr><th" + (thCh ? ' class="changed"' : "") + ">" + abs +
+      "</th>" + rowHtml + "</tr>";
+  });
+  const after = enc.n - off - enc.v.length;
+  if (after > 0)
+    html += '<tr><th>…</th><td class="gmore" colspan="' + (ncols || 1) +
+      '">' + after + " rows after</td></tr>";
+  return html + "</table>";
+}
+
+function renderBars(enc, old) {
+  const off = enc.off || 0;
+  const sameType = old !== undefined && old.t === enc.t;
+  const oldAbs = {};
+  if (sameType) {
+    const oldOff = old.off || 0;
+    old.v.forEach((it, i) => { oldAbs[oldOff + i] = it; });
+  }
+  const chi = enc.chi ? new Set(enc.chi) : null;
+  const nums = enc.v.map(x => parseNum(x.v));
+  let maxAbs = 0;
+  nums.forEach(v => { if (isFinite(v)) maxAbs = Math.max(maxAbs, Math.abs(v)); });
+  const displayMax = maxAbs;      // true scale, shown in the label
+  if (!maxAbs) maxAbs = 1;        // divisor only: avoid 0/0 heights
+  let html = '<span class="barbox"' + titleAttr(enc) + ">";
+  if (off > 0) html += '<span class="gmore">…' + off + "</span>";
+  enc.v.forEach((item, i) => {
+    const abs = off + i;
+    const st = elemChange(item, abs, old, oldAbs, sameType, chi);
+    const v = nums[i];
+    let h, extra = "";
+    if (v === Infinity || v === -Infinity) { h = 56; extra = " inf"; }
+    else if (Number.isNaN(v)) { h = 8; extra = " nan"; }
+    else h = Math.max(2, Math.round(Math.abs(v) / maxAbs * 56));
+    html += '<span class="bar' + (st.ch ? " changed" : "") +
+      (v < 0 ? " neg" : "") + extra + '" style="height:' + h +
+      'px" title="[' + abs + "] = " + escapeHtml(String(item.v)) +
+      '"></span>';
+  });
+  const after = enc.n - off - enc.v.length;
+  if (after > 0) html += '<span class="gmore">+' + after + "</span>";
+  // bars are normalized per event; the scale label makes growth visible
+  // (for a monotone accumulator the tallest bar is ALWAYS full height —
+  // without the label, growth would be invisible)
+  html += '<span class="bscale" title="current bar scale (tallest value)">⤒' +
+    escapeHtml(String(displayMax)) + "</span>";
+  return html + "</span>";
+}
+
+/* Sets have no positions: diff by MEMBERSHIP. Only elements that were
+   not in the set before get marked — never elements that merely moved. */
+function renderSet(enc, old) {
+  const oldSigs = old !== undefined && old.t === "set"
+    ? new Set(old.v.map(sig)) : null;
+  // membership diffing is only sound against a COMPLETE old sample
+  const oldComplete = old !== undefined && old.t === "set" &&
+    old.n <= old.v.length;
+  let cells = enc.v.map((item, i) => {
+    let ch = "";
+    if (old !== undefined) {
+      if (enc.na !== undefined) ch = i < enc.na ? " changed" : "";
+      else if (oldComplete) {
+        ch = oldSigs.has(sig(item)) ? "" : " changed";
+      }
+      // partial old sample without na: unknown, leave unmarked
+    }
+    return '<span class="cell' + ch + '"' + titleAttr(item) + ">" +
+      renderValue(item) + "</span>";
+  }).join("");
+  if (enc.n > enc.v.length)
+    cells += '<span class="cell more">+' + (enc.n - enc.v.length) +
+      "</span>";
+  return '<span class="cont set"' + titleAttr(enc) + ">" + cells + "</span>";
+}
+
+/* ---------- variable life index ----------
+   One pass assigns every event a FRAME IDENTITY (so recursion doesn't
+   mix invocations) and records, per frame+variable, every event where
+   it changed. Powers the ‹ prev / next › jumps and the life strip. */
+const eventFrame = new Array(events.length);
+/* caller of the CURRENT slice, per event — a resumed generator frame
+   keeps one fid but may be driven by different callers on different
+   slices, so a single fid->parent map would lie to step-out */
+const eventParent = new Array(events.length);
+const changeIndex = new Map();   // "fid|name" -> [event indices]
+
+/* An asyncio task is a PSEUDO-THREAD (#14): every event carries its
+   thread (t) and, when a task drove it, the task name (tk). A lane is
+   the pair — each lane gets its own call stack, so interleaving tasks
+   replay as alternating stacks instead of one tangled timeline. */
+const laneOf = ev => (ev.t || "main") + (ev.tk ? " · " + ev.tk : "");
+
+(function () {
+  // null prototypes: lane names come from USER thread/task names — a
+  // thread named "constructor" must not collide with Object.prototype
+  const stacks = Object.create(null);
+  const genFid = Object.create(null); // gen instance -> ONE frame id
+  let nextFid = 0;
+  events.forEach((ev, i) => {
+    const t = laneOf(ev);
+    const st = stacks[t] || (stacks[t] = []);
+    if (ev.e === "call") {
+      let fid;
+      if (ev.g && ev.g.s === "r" && genFid[ev.g.i] !== undefined) {
+        fid = genFid[ev.g.i];   // a RESUME re-enters the sleeping frame
+      } else {
+        fid = ++nextFid;
+        if (ev.g) genFid[ev.g.i] = fid;
+      }
+      eventParent[i] = st.length ? st[st.length - 1] : 0;
+      st.push(fid);
+      eventFrame[i] = fid;
+    } else {
+      eventFrame[i] = st.length ? st[st.length - 1] : 0;
+      eventParent[i] = st.length > 1 ? st[st.length - 2] : 0;
+      if (ev.e === "return") st.pop();
+    }
+    // a RESUME re-emits the frame's whole live state — that is fresh
+    // info, not a change, so it must not enter the change index (the
+    // ‹ › jumps, ordinals and life strip would stop at non-changes)
+    if (ev.ch && !(ev.e === "call" && ev.g && ev.g.s === "r")) {
+      const fid = eventFrame[i];
+      for (const k of Object.keys(ev.ch)) {
+        const key = fid + "|" + k;
+        let arr = changeIndex.get(key);
+        if (!arr) changeIndex.set(key, arr = []);
+        arr.push(i);
+      }
+    }
+  });
+})();
+
+function changesFor(label, fid) {
+  // promoted attr rows (self.adj_list) navigate on their parent object
+  const base = label.split(".")[0];
+  return changeIndex.get(fid + "|" + base) || [];
+}
+
+/* fn-granularity traces carry µs timestamps (delta-encoded): rebuild
+   absolute times once, and each frame's birth time, so return events
+   can show real durations. Line traces have no ts — times under line
+   tracing would be fiction, so none are shown. */
+let absTs = null;
+const sliceBirth = new Array(events.length); // birth of the CURRENT slice
+const frameActive = {};   // fid -> total active µs (all slices summed)
+const frameSlices = {};   // fid -> slice count (1 = plain frame)
+if (DATA.granularity === "fn") {
+  absTs = new Array(events.length);
+  const curBirth = {};
+  let acc = 0;
+  events.forEach((e, i) => {
+    acc += e.ts || 0;
+    absTs[i] = acc;
+    const fid = eventFrame[i];
+    if (e.e === "call") {
+      curBirth[fid] = acc;   // per slice: a resume starts a NEW slice
+      frameSlices[fid] = (frameSlices[fid] || 0) + 1;
+    }
+    sliceBirth[i] = curBirth[fid];
+    if (e.e === "return" && curBirth[fid] !== undefined)
+      frameActive[fid] = (frameActive[fid] || 0) + (acc - curBirth[fid]);
+  });
+}
+function fmtDur(us) {
+  if (us < 1000) return us + " µs";
+  if (us < 1e6) return (us / 1000).toFixed(2) + " ms";
+  return (us / 1e6).toFixed(3) + " s";
+}
+
+/* ---------- state reconstruction: replay events 0..idx ----------
+   One call stack per thread; the panel shows the stack of the thread
+   the current event belongs to. */
+let stateCache = null;   // { lastIdx, stacks, curT } — makes stepping O(1)
+
+function computeStacks(idx) {
+  let stacks, start, curT;
+  if (stateCache && idx === stateCache.lastIdx + 1) {
+    // incremental: apply only the new event (playback stays fast at any
+    // trace size); first do the pop deferred from the previous event
+    stacks = stateCache.stacks;
+    curT = stateCache.curT;
+    const prev = events[stateCache.lastIdx];
+    if (prev && prev.e === "return") {
+      const pt = laneOf(prev);
+      (stacks[pt] || []).pop();
+    }
+    start = idx;
+  } else {
+    // backward step or jump: rebuild from the beginning (null proto —
+    // lane names are user thread/task names, "constructor" included)
+    stacks = Object.create(null);
+    curT = "main";
+    start = 0;
+  }
+  for (let i = start; i <= idx; i++) {
+    const ev = events[i];
+    const t = laneOf(ev);
+    curT = t;
+    const stack = stacks[t] || (stacks[t] = []);
+    if (ev.e === "call") {
+      stack.push({ fn: ev.fn, f: ev.f, l: ev.l,
+                   vars: Object.assign({}, ev.ch),
+                   changed: Object.keys(ev.ch), prevVals: {},
+                   cl: ev.cl || null, da: ev.da || null,
+                   mut: ev.mut || [], ali: ev.ali || null,
+                   ret: undefined });
+    } else if (stack.length) {
+      const top = stack[stack.length - 1];
+      top.l = ev.l;
+      top.prevVals = {};   // value-before-this-event, for element diffing
+      for (const k of Object.keys(ev.ch)) top.prevVals[k] = top.vars[k];
+      Object.assign(top.vars, ev.ch);
+      top.changed = Object.keys(ev.ch);
+      top.mut = ev.mut || [];
+      top.ali = ev.ali || null;
+      if (ev.e === "return") top.ret = ev.ret;
+    }
+    // pop returned frames, except when the return IS the current event,
+    // so its frame stays visible with the return value shown
+    if (ev.e === "return" && i < idx) stack.pop();
+  }
+  stateCache = { lastIdx: idx, stacks, curT };
+  return { stack: stacks[curT] || [], thread: curT };
+}
+
+/* ---------- rendering ---------- */
+let idx = 0;
+let highlighted = null;
+let collapsed = false;   // variables panel: show only changing vars
+let historyVar = null;   // label whose life strip is unfolded
+
+function render() {
+  const ev = events[idx];
+  if (!ev) return;
+  const { stack } = computeStacks(idx);
+  const top = stack[stack.length - 1];
+
+  activateFile(ev.f);
+  if (highlighted) highlighted.classList.remove("current", "excl");
+  const pane = panes[ev.f];
+  const lineEl = pane && pane.lineEls[ev.l - 1];
+  if (lineEl) {
+    lineEl.classList.add("current");
+    if (ev.e === "exc") lineEl.classList.add("excl");
+    highlighted = lineEl;
+    const box = $("code");
+    const y = lineEl.offsetTop;
+    if (y < box.scrollTop + 30 || y > box.scrollTop + box.clientHeight - 50) {
+      box.scrollTop = y - box.clientHeight / 2;
+    }
+  }
+
+  const badge = $("badge");
+  const GK = { g: "generator", c: "coroutine", a: "async generator" };
+  if (ev.e === "exc") {
+    const soft = ev.x && ev.x.soft;
+    badge.className = "badge " + (soft ? "excsoft" : "exc");
+    badge.textContent = soft ? "EXCEPTION (control-flow)" : "EXCEPTION";
+  } else if (ev.e === "return" && ev.g && ev.g.s === "y") {
+    badge.className = "badge yield";
+    badge.textContent = "YIELD";
+  } else if (ev.e === "call" && ev.g && ev.g.s === "r") {
+    badge.className = "badge resume";
+    badge.textContent = "RESUME";
+  } else if (ev.e === "call" && ev.g && ev.g.s === "c") {
+    badge.className = "badge call";
+    badge.textContent = "CALL (" + (GK[ev.g.k] || "generator") + ")";
+  } else {
+    badge.className = "badge " + ev.e;
+    badge.textContent = ev.e.toUpperCase();
+  }
+  const evTh = ev.t || "main";
+  $("thread").textContent = ev.tk
+    ? "in task " + ev.tk + (evTh === "main" ? "" : " · thread " + evTh)
+    : (evTh === "main" ? "" : "in thread " + evTh);
+  // the interpreter's two lives: a <module> frame anywhere ABOVE the
+  // lane's base frame = an import is executing. (The main lane's base
+  // is the script's own <module>; a thread's is its target function; a
+  // task's is its coroutine — so "≥2 modules" would miss non-main lanes.)
+  $("ctx").textContent =
+    stack.some((fr, i) => i > 0 && fr.fn === "<module>")
+      ? "⚙ import time" : "";
+  // implicit dunder invocation hint
+  const DUNDER = { __lt__: "<", __le__: "<=", __gt__: ">", __ge__: ">=",
+    __eq__: "==", __ne__: "!=", __add__: "+", __sub__: "-", __mul__: "*",
+    __truediv__: "/", __floordiv__: "//", __mod__: "%", __pow__: "**",
+    __neg__: "unary -", __getitem__: "x[i]", __setitem__: "x[i] = …",
+    __delitem__: "del x[i]", __contains__: "in", __len__: "len()",
+    __iter__: "iter() / for", __next__: "next() / for",
+    __hash__: "hash()", __bool__: "truth test", __str__: "str()",
+    __repr__: "repr()", __enter__: "with (enter)",
+    __exit__: "with (exit)", __call__: "obj(…)" };
+  $("hint").textContent =
+    ev.e === "call" && DUNDER[ev.fn]
+      ? "invoked implicitly by Python — " + DUNDER[ev.fn] : "";
+  $("where").textContent = ev.f + ":" + ev.l + "  in  " + ev.fn + "()";
+  let retHtml = "";
+  if (ev.e === "return") {
+    const isYield = ev.g && ev.g.s === "y";
+    retHtml = (isYield ? "⇢ yields " : "→ returns ") +
+      renderValue(ev.ret);
+    if (ev.g && ev.g.s === "e") retHtml += ' · <span class="dur">' +
+      (ev.g.k === "c" ? "coroutine" : "generator") + " exhausted</span>";
+    // durations are per-SLICE for suspendable frames: "took X" on a
+    // final return after resumes would silently mean "last slice only",
+    // so say exactly which time is which
+    if (absTs && sliceBirth[idx] !== undefined) {
+      const fid = eventFrame[idx];
+      const slice = absTs[idx] - sliceBirth[idx];
+      if (isYield)
+        retHtml += ' · <span class="dur">slice took ' + fmtDur(slice) +
+          "</span>";
+      else if ((frameSlices[fid] || 1) > 1)
+        retHtml += ' · <span class="dur">last slice ' + fmtDur(slice) +
+          " · active " + fmtDur(frameActive[fid]) + " across " +
+          frameSlices[fid] + " slices</span>";
+      else
+        retHtml += ' · <span class="dur">took ' + fmtDur(slice) +
+          "</span>";
+    }
+  } else if (ev.e === "exc" && ev.x) {
+    retHtml = '<span class="exmsg' + (ev.x.soft ? " soft" : "") + '">⚠ ' +
+      escapeHtml(ev.x.t) + ": " + escapeHtml(ev.x.m) + "</span>";
+  }
+  $("retval").innerHTML = retHtml;
+
+  // method resolution: which class SUPPLIED the executing method
+  if (ev.e === "call" && ev.mro) {
+    let searching = true;
+    $("mro").innerHTML = '<span class="mrolabel">method found on:</span> ' +
+      ev.mro.c.map(c => {
+        let cls = "mroc";
+        if (c === ev.mro.s) { cls += " sup"; searching = false; }
+        else if (searching) cls += " passed";
+        return '<span class="' + cls + '">' + escapeHtml(c) + "</span>";
+      }).join('<span class="mroarrow">→</span>');
+  } else {
+    $("mro").innerHTML = "";
+  }
+
+  // "what this line works with": variables mentioned on the current
+  // line (from the static AST pass), shown with their values BEFORE the
+  // line executes; conditionals additionally get expression + verdict
+  let panel = "";
+  if (ev.e === "line") {
+    const names = ((DATA.linevars || {})[ev.f] || {})[ev.l] || [];
+    const vals = names.filter(n => top && n in top.vars)
+      .map(n => '<div class="cvar"><span class="vn">' + escapeHtml(n) +
+        "</span> = " + renderValue(top.vars[n]) + "</div>")
+      .join("");
+    if (ev.cond) {
+      const k = ev.cond.k || "if";
+      let verdict, cls;
+      if (k === "for") {
+        if (ev.cond.r) { verdict = "item #" + (ev.cond.i || "?"); cls = "true"; }
+        else {
+          verdict = ev.cond.i
+            ? "exhausted after " + ev.cond.i +
+              (ev.cond.i === 1 ? " iteration" : " iterations")
+            : "exhausted — 0 iterations";
+          cls = ev.cond.i ? "done" : "false";
+        }
+      } else if (k === "except") {
+        verdict = ev.cond.r ? "caught here" : "not this handler";
+        cls = ev.cond.r ? "true" : "done";
+      } else if (k === "case") {
+        verdict = ev.cond.r ? "matched" : "no match";
+        cls = ev.cond.r ? "true" : "done";
+      } else {
+        verdict = ev.cond.r ? "True" : "False";
+        cls = ev.cond.r ? "true" : "false";
+      }
+      panel = '<span class="cexpr">' + escapeHtml(ev.cond.x) + "</span>" +
+        (vals ? '<div class="cvars">' + vals + "</div>" : "") +
+        '<div>→ <span class="cres ' + cls + '">' + verdict +
+        "</span></div>";
+    } else if (vals) {
+      panel = '<div class="cvars">' + vals + "</div>";
+    }
+  }
+  $("cond").innerHTML = panel;
+
+  $("stack").innerHTML = stack.slice().reverse().map((fr, i) =>
+    '<div class="' + (i === 0 ? "top" : "") + '"><span class="fn">'
+    + escapeHtml(fr.fn) + "</span> — " + escapeHtml(fr.f) + ":" + fr.l
+    + "</div>"
+  ).join("") || '<div class="empty">(empty)</div>';
+
+  if (top) {
+    const changed = new Set(top.changed);
+    const fnq = (top.fn || "?") + "/";
+    // build display rows; object variables get their attributes
+    // PROMOTED to first-class rows (g.adj_list …), each with its own
+    // view selector — that's where OOP code keeps its data
+    const displayRows = [];
+    for (const [k, v] of Object.entries(top.vars)) {
+      const isCh = changed.has(k);
+      const old = isCh && top.prevVals ? top.prevVals[k] : undefined;
+      if (v && v.t === "obj") {
+        displayRows.push({ label: k, isCh,
+          enc: { t: "o", c: v.c, v: "<" + (v.c || "object") + " instance>" },
+          old: undefined });
+        const oldMap = {};
+        if (old !== undefined && old.t === "obj")
+          old.v.forEach(p => { oldMap[p[0]] = p[1]; });
+        // "cha" = tracer-stamped names of attrs whose DEEP contents
+        // changed (beyond the encoded head) — authoritative
+        const chaSet = new Set(v.cha || []);
+        v.v.forEach(([ak, av]) => {
+          const aOld = oldMap[ak];
+          const aCh = isCh && (chaSet.has(ak) ||
+                               old === undefined || old.t !== "obj" ||
+                               aOld === undefined || sig(aOld) !== sig(av));
+          displayRows.push({ label: k + "." + ak, enc: av,
+                             old: aCh ? aOld : undefined, isCh: aCh });
+        });
+      } else {
+        displayRows.push({ label: k, enc: v, old, isCh });
+      }
+    }
+    // collapse mode: keep changing rows and "pinned" rows (a chosen
+    // view = you're watching it). Ineligible shapes degrade to cells —
+    // better one plain row than silently hiding a watched variable.
+    let visibleRows = displayRows;
+    if (collapsed)
+      visibleRows = displayRows.filter(r =>
+        r.isCh || getViewPref(fnq + r.label) !== "cells");
+    // lookup for overlay data: any row (incl. promoted attrs) by label
+    const rowByLabel = {};
+    displayRows.forEach(r => { rowByLabel[r.label] = r; });
+    const ovCandidates = displayRows
+      .filter(r => r.enc && ["set", "dict", "list", "tuple"].includes(r.enc.t))
+      .map(r => r.label);
+    // a RESUME re-emits the frame's whole live state against an empty
+    // snapshot: "changed" there means "fresh info", not a change — no
+    // changed highlight, no ↦ rebound glyph (unknown = unmarked)
+    const resumed = ev.e === "call" && ev.g && ev.g.s === "r";
+    const rows = visibleRows.map(r => {
+      const opts = viewOptions(r.enc);
+      // pref keyed by function/variable: same-named vars in different
+      // functions keep independent view choices
+      const prefKey = fnq + r.label;
+      let view = getViewPref(prefKey);
+      if (!opts.includes(view)) view = "cells";
+      // overlay: color the graph by another variable (user-chosen)
+      let ov = null, ovsel = "";
+      if (view === "graph" || view === "edges") {
+        const ovName = getPref(prefKey + ":overlay", "");
+        const ovRow = ovName && rowByLabel[ovName];
+        if (ovRow) ov = { enc: ovRow.enc, old: ovRow.old };
+        const cands = ovCandidates.filter(c => c !== r.label);
+        if (cands.length)
+          ovsel = '<select class="ovsel" data-key="' +
+            escapeHtml(prefKey + ":overlay") +
+            '"><option value="">no overlay</option>' +
+            cands.map(c => '<option value="' + escapeHtml(c) + '"' +
+              (c === ovName ? " selected" : "") + ">tint: " +
+              escapeHtml(c) + "</option>").join("") + "</select>";
+      }
+      let body;
+      try {
+        body = view === "grid" ? renderGrid(r.enc, r.old)
+             : view === "bars" ? renderBars(r.enc, r.old)
+             : view === "graph" ? renderGraph(r.enc, r.old, "graph", ov)
+             : view === "edges" ? renderGraph(r.enc, r.old, "edges", ov)
+             : renderValue(r.enc, r.old);
+      } catch (err) {
+        body = renderValue(r.enc, r.old);   // renderer bug ≠ dead panel
+      }
+      const sel = opts.length > 1
+        ? '<select class="viewsel" data-key="' + escapeHtml(prefKey) + '">' +
+          opts.map(o => '<option value="' + o + '"' +
+            (o === view ? " selected" : "") + ">" + o + "</option>").join("") +
+          "</select>"
+        : "";
+      // life navigation: ‹ prev-change | ordinal/total | next-change ›
+      const fid = eventFrame[idx];
+      const chList = changesFor(r.label, fid);
+      let ordinal = 0;
+      for (const j of chList) { if (j <= idx) ordinal++; else break; }
+      const dv = ' data-var="' + escapeHtml(r.label) + '"';
+      const base = r.label.split(".")[0];
+      const nav = chList.length
+        ? '<span class="vnav"><button class="vprev"' + dv +
+          ' title="jump to previous change of ' + escapeHtml(base) +
+          '">‹</button><span class="vcount"' + dv +
+          ' title="changes of ' + escapeHtml(base) +
+          ' in this frame — click for its life strip">' + ordinal + "/" +
+          chList.length + '</span><button class="vnext"' + dv +
+          ' title="jump to next change of ' + escapeHtml(base) +
+          '">›</button></span>'
+        : "";
+      // life strip: every change as a clickable tick on the trace axis
+      let strip = "";
+      if (historyVar === r.label && chList.length && chList.length <= 1000) {
+        const total = Math.max(1, events.length - 1);
+        strip = '<div class="vstrip">' + chList.map((j, q) =>
+          '<span class="vtick' + (j === idx ? " cur" : "") +
+          (q === 0 ? " birth" : "") + '" style="left:' +
+          (j / total * 100) + '%" data-goto="' + j + '" title="change ' +
+          (q + 1) + "/" + chList.length + " — event " + (j + 1) +
+          '"></span>').join("") + "</div>";
+      } else if (historyVar === r.label && chList.length > 1000) {
+        strip = '<div class="gnote">' + chList.length +
+          " changes — too many to draw; use ‹ › to walk them</div>";
+      }
+      // the interpreter's hidden machinery, as glyphs on the name:
+      // ↺ mutated in place (all aliases changed) · ↦ rebound ·
+      // 🔗 alias group · ⛓ closure cell · ⚠ shared mutable default
+      let gly = "";
+      if (top.mut && top.mut.includes(base))
+        gly += '<span class="gly mut" title="object mutated IN PLACE — ' +
+          'every name pointing at it changed too">↺</span>';
+      else if (r.isCh && !r.label.includes(".") && !resumed)
+        gly += '<span class="gly reb" title="name rebound — it now ' +
+          'points at a different object">↦</span>';
+      if (top.ali) {
+        const gi = top.ali.findIndex(gr => gr.includes(base));
+        if (gi >= 0)
+          gly += '<span class="gly ali" style="color:hsl(' +
+            ((gi * 137.5 + 190) % 360).toFixed(0) + ' 70% 65%)" ' +
+            'title="same object as: ' +
+            esc2(top.ali[gi].filter(n => n !== base).join(", ")) +
+            '">🔗</span>';
+      }
+      if (top.cl) {
+        if (top.cl.f && top.cl.f.includes(base))
+          gly += '<span class="gly cell" title="closure cell — this ' +
+            'variable lives in the ENCLOSING frame">⛓↑</span>';
+        else if (top.cl.c && top.cl.c.includes(base))
+          gly += '<span class="gly cell" title="closure cell — shared ' +
+            'with inner functions defined here">⛓↓</span>';
+      }
+      if (top.da && top.da.includes(base))
+        gly += '<span class="gly def" title="⚠ this argument IS the ' +
+          'function’s shared mutable default — it persists ' +
+          'across calls">⚠def</span>';
+      // provenance: what produced this variable's new value — each source
+      // operand from the static data-flow, linked to where IT was last set
+      // (the change index). Static names + dynamic "when" = "why this value".
+      let prov = "";
+      if (r.isCh && !r.label.includes(".") && !resumed) {
+        // settrace reports a change on the line AFTER the statement that
+        // caused it, so the assignment's data-flow lives on the previous
+        // executed line IN THIS FRAME — walk back to it.
+        let pj = idx - 1;
+        while (pj >= 0 && eventFrame[pj] !== eventFrame[idx]) pj--;
+        const srcs = pj >= 0
+          ? (((DATA.dataflow || {})[events[pj].f] || {})[events[pj].l]
+             || {})[r.label]
+          : null;
+        if (srcs && srcs.length) {
+          const links = srcs.map(s => {
+            const cl = changesFor(s, eventFrame[idx]);
+            let last = -1;
+            for (const j of cl) { if (j < idx) last = j; else break; }
+            return last >= 0
+              ? '<button class="provlink" data-goto="' + last +
+                '" title="' + escapeHtml(s) + ' was last set at event ' +
+                (last + 1) + ' — click to jump">' + escapeHtml(s) + "</button>"
+              : '<span class="provarg" title="' + escapeHtml(s) +
+                ' — a parameter, literal input, or set before this frame">' +
+                escapeHtml(s) + "</span>";
+          });
+          prov = '<div class="prov" title="what produced ' +
+            escapeHtml(r.label) + '">← from ' + links.join(", ") + "</div>";
+        }
+      }
+      return '<div class="vrow' + (r.isCh && !resumed ? " changed" : "") +
+        '"><div class="vname">' + escapeHtml(r.label) + gly + sel +
+        ovsel + nav + "</div>" + prov + strip +
+        '<div class="vval">' + body + "</div></div>";
+    });
+    $("vars").innerHTML = rows.length
+      ? rows.join("")
+      : '<div class="empty">' + (collapsed
+          ? "(nothing changes at this event)"
+          : "(no variables yet)") + "</div>";
+  } else {
+    $("vars").innerHTML = '<div class="empty">(no frame)</div>';
+  }
+
+  $("counter").textContent = (idx + 1) + " / " + events.length;
+  $("scrub").value = idx;
+}
+
+/* ---------- transport controls ---------- */
+function goto(i) {
+  idx = Math.max(0, Math.min(events.length - 1, i));
+  render();
+}
+let timer = null;
+function stop() {
+  if (timer) { clearInterval(timer); timer = null; }
+  $("btn-play").textContent = "▶ Play";
+}
+function play() {
+  if (timer) { stop(); return; }
+  if (!events.length) return;
+  if (idx >= events.length - 1) idx = 0;
+  $("btn-play").textContent = "⏸ Pause";
+  timer = setInterval(() => {
+    if (idx >= events.length - 1) { stop(); return; }
+    goto(idx + 1);
+  }, parseInt($("speed").value, 10));
+}
+/* blur after click so Space/arrows drive the replay, never a focused button */
+function ctl(id, fn) {
+  $(id).onclick = e => { fn(); e.currentTarget.blur(); };
+}
+/* step-over: next event in THIS frame (skips everything nested);
+   if the frame never runs again (we're at its return), plain step.
+   step-out: next event in the CALLER's frame. Both O(distance) scans
+   over the precomputed frame ids. */
+function stepOver() {
+  const fid = eventFrame[idx];
+  for (let j = idx + 1; j < events.length; j++)
+    if (eventFrame[j] === fid) { goto(j); return; }
+  goto(idx + 1);
+}
+function stepOut() {
+  const par = eventParent[idx];   // caller of the CURRENT slice
+  if (!par) return;   // module frame or task root: no caller
+  for (let j = idx + 1; j < events.length; j++)
+    if (eventFrame[j] === par) { goto(j); return; }
+}
+ctl("btn-first", () => { stop(); goto(0); });
+ctl("btn-prev",  () => { stop(); goto(idx - 1); });
+ctl("btn-next",  () => { stop(); goto(idx + 1); });
+ctl("btn-over",  () => { stop(); stepOver(); });
+ctl("btn-out",   () => { stop(); stepOut(); });
+ctl("btn-last",  () => { stop(); goto(events.length - 1); });
+ctl("btn-play",  play);
+
+/* bookmarks: B toggles at the current event, persisted per trace;
+   cyan marks above the scrubber, [ and ] jump between them */
+const BM_KEY = "pyreplay-bm:" + DATA.script + ":" + events.length;
+let bookmarks = [];
+try { bookmarks = JSON.parse(localStorage.getItem(BM_KEY) || "[]"); }
+catch (e) {}
+function toggleBookmark() {
+  const p = bookmarks.indexOf(idx);
+  if (p >= 0) bookmarks.splice(p, 1);
+  else { bookmarks.push(idx); bookmarks.sort((a, b) => a - b); }
+  try { localStorage.setItem(BM_KEY, JSON.stringify(bookmarks)); }
+  catch (e) {}
+  renderBmarks();
+}
+function renderBmarks() {
+  let box = document.getElementById("bmarks");
+  if (!box) {
+    box = document.createElement("div");
+    box.id = "bmarks";
+    const footer = document.querySelector("footer");
+    footer.insertBefore(box, footer.firstChild);
+  }
+  const total = Math.max(1, events.length - 1);
+  box.innerHTML = "";
+  bookmarks.forEach(j => {
+    const m = document.createElement("span");
+    m.className = "bmark";
+    m.style.left = (j / total * 100) + "%";
+    m.title = "bookmark — event " + (j + 1) + " (B removes)";
+    m.onclick = () => { stop(); goto(j); };
+    box.appendChild(m);
+  });
+  box.style.display = bookmarks.length ? "" : "none";
+}
+function jumpBookmark(dir) {
+  if (!bookmarks.length) return;
+  if (dir > 0) {
+    const t = bookmarks.find(j => j > idx);
+    if (t !== undefined) { stop(); goto(t); }
+  } else {
+    const arr = bookmarks.filter(j => j < idx);
+    if (arr.length) { stop(); goto(arr[arr.length - 1]); }
+  }
+}
+renderBmarks();
+
+/* density strip: the trace's shape before you scrub it — colored by
+   which FILE each region of the run lived in (hue per file) */
+(function () {
+  if (events.length < 50) return;
+  const files = Object.keys(DATA.sources);
+  if (!files.length) return;
+  const fileHue = {};
+  files.forEach((f, i) => { fileHue[f] = (i * 137.5) % 360; });
+  const BUCKETS = Math.min(240, events.length);
+  const per = events.length / BUCKETS;
+  const box = document.createElement("div");
+  box.id = "density";
+  for (let b = 0; b < BUCKETS; b++) {
+    const lo = Math.floor(b * per);
+    const hi = Math.min(events.length, Math.floor((b + 1) * per));
+    const byFile = {};
+    for (let i = lo; i < hi; i++) {
+      const f = events[i].f;
+      byFile[f] = (byFile[f] || 0) + 1;
+    }
+    let top = null, n = 0;
+    for (const f in byFile)
+      if (byFile[f] > n) { n = byFile[f]; top = f; }
+    const s = document.createElement("span");
+    s.className = "dbucket";
+    if (top !== null) {
+      s.style.background =
+        "hsl(" + fileHue[top].toFixed(0) + " 55% 45% / .85)";
+      s.title = top + " (events " + (lo + 1) + "–" + hi +
+        " — click to jump)";
+    }
+    s.onclick = () => { stop(); goto(lo); };
+    box.appendChild(s);
+  }
+  const footer = document.querySelector("footer");
+  footer.insertBefore(box, footer.firstChild);
+})();
+
+let stackVisible = true;
+function setStack(v) {
+  stackVisible = v;
+  $("stack").style.display = v ? "" : "none";
+  $("btn-stack").textContent = v ? "hide" : "show";
+}
+$("btn-stack").onclick = e => { setStack(!stackVisible); e.currentTarget.blur(); };
+
+function toggleCollapse() {
+  collapsed = !collapsed;
+  $("btn-collapse").textContent = collapsed ? "expand" : "collapse";
+  setStack(!collapsed);   // collapse mode hides the stack too
+  render();
+}
+ctl("btn-collapse", toggleCollapse);
+
+/* draggable divider between code pane and sidebar */
+(() => {
+  const divider = $("divider"), side = $("side");
+  let dragging = false;
+  divider.onmousedown = e => {
+    dragging = true;
+    divider.classList.add("dragging");
+    e.preventDefault();
+  };
+  document.addEventListener("mousemove", e => {
+    if (!dragging) return;
+    const w = Math.min(Math.max(window.innerWidth - e.clientX, 220),
+                       window.innerWidth - 260);
+    side.style.width = w + "px";
+  });
+  document.addEventListener("mouseup", () => {
+    dragging = false;
+    divider.classList.remove("dragging");
+  });
+  divider.ondblclick = () => { side.style.width = "340px"; };
+})();
+$("speed").onchange    = e => {
+  if (timer) { stop(); play(); }
+  e.target.blur();   // give the keyboard back to the transport
+};
+$("scrub").max = Math.max(0, events.length - 1);
+/* crash markers: every hard exception, clickable, above the scrubber */
+(function () {
+  const box = document.createElement("div");
+  box.id = "excmarks";
+  const total = Math.max(1, events.length - 1);
+  events.forEach((e, i) => {
+    if (e.e !== "exc" || !e.x || e.x.soft) return;
+    const m = document.createElement("span");
+    m.className = "xmark";
+    m.style.left = (i / total * 100) + "%";
+    m.title = e.x.t + " — " + e.f + ":" + e.l + " (event " + (i + 1) + ")";
+    m.onclick = () => { stop(); goto(i); };
+    box.appendChild(m);
+  });
+  if (box.children.length) {
+    const footer = document.querySelector("footer");
+    footer.insertBefore(box, footer.firstChild);
+  }
+})();
+$("scrub").oninput = e => { stop(); goto(parseInt(e.target.value, 10)); };
+$("scrub").onchange = e => e.target.blur();   // drag ended: release focus
+/* view selector: delegated, since #vars is rebuilt on every render */
+$("vars").onchange = e => {
+  const sel = e.target;
+  if (!sel.classList || !(sel.classList.contains("viewsel") ||
+                          sel.classList.contains("ovsel"))) return;
+  setViewPref(sel.dataset.key, sel.value);
+  sel.blur();
+  render();
+};
+/* playback rebuilds #vars every tick, which would close an open
+   dropdown mid-interaction — pause when the user grabs a selector */
+$("vars").addEventListener("mousedown", e => {
+  if (e.target.classList && (e.target.classList.contains("viewsel") ||
+                             e.target.classList.contains("ovsel"))) stop();
+});
+/* life navigation: delegated (rows are rebuilt every render) */
+$("vars").addEventListener("click", e => {
+  const t = e.target;
+  if (!t.classList) return;
+  if (t.classList.contains("vprev") || t.classList.contains("vnext")) {
+    const list = changesFor(t.dataset.var, eventFrame[idx]);
+    let target = null;
+    if (t.classList.contains("vprev")) {
+      for (let k = list.length - 1; k >= 0; k--)
+        if (list[k] < idx) { target = list[k]; break; }
+    } else {
+      for (let k = 0; k < list.length; k++)
+        if (list[k] > idx) { target = list[k]; break; }
+    }
+    if (target !== null) { stop(); goto(target); }
+  } else if (t.classList.contains("vcount")) {
+    historyVar = historyVar === t.dataset.var ? null : t.dataset.var;
+    render();
+  } else if (t.classList.contains("vtick")
+             || t.classList.contains("provlink")) {
+    stop();
+    goto(parseInt(t.dataset.goto, 10));
+  }
+});
+
+document.addEventListener("keydown", e => {
+  if (e.target.tagName === "SELECT" || e.target.tagName === "INPUT") {
+    if (e.key === "Escape") e.target.blur();   // recover the transport
+    return;
+  }
+  if (e.key === "ArrowRight") { stop(); goto(idx + 1); }
+  else if (e.key === "ArrowLeft") { stop(); goto(idx - 1); }
+  else if (e.key === "Home") { stop(); goto(0); }
+  else if (e.key === "End") { stop(); goto(events.length - 1); }
+  else if (e.key === " ") { e.preventDefault(); play(); }
+  else if (e.key === "c" || e.key === "C") toggleCollapse();
+  else if (e.key === "o" || e.key === "O") { stop(); stepOver(); }
+  else if (e.key === "u" || e.key === "U") { stop(); stepOut(); }
+  else if (e.key === "b" || e.key === "B") toggleBookmark();
+  else if (e.key === "[") jumpBookmark(-1);
+  else if (e.key === "]") jumpBookmark(1);
+});
+
+if (events.length) render();
+else $("code").innerHTML = '<div class="empty" style="padding:20px">No events recorded.</div>';
+</script>
+</body>
+</html>

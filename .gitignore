@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# Generated output — traces and maps regenerate; don't commit them.
+# (The two TEMPLATES are the source and are kept.)
+trace_*.html
+map_*.html
+!map_template.html
+
+# Perfetto exports and other run artifacts
+perfetto_*.json
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

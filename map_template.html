@@ -1,0 +1,1528 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>pyreplay — static map</title>
+<style>
+  :root {
+    --bg: #14161c; --panel: #1c1f28; --border: #2a2e3b;
+    --text: #d6d9e0; --dim: #7d8493; --accent: #5eb1ff;
+    --call: #7ee08a; --warn: #ffd479; --err: #ff6b6b;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 13px/1.5 "SF Mono", "Fira Code", Consolas, Menlo, monospace;
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  header {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    padding: 8px 14px; background: var(--panel);
+    border-bottom: 1px solid var(--border);
+  }
+  header h1 { font-size: 14px; font-weight: 600; color: var(--accent); }
+  header h1 span { color: var(--dim); font-weight: 400; }
+  #stats { color: var(--dim); font-size: 12px; }
+  #search {
+    background: #262b38; color: var(--text); font: inherit;
+    border: 1px solid var(--border); border-radius: 5px; padding: 3px 9px;
+    width: 220px;
+  }
+  #search:focus { outline: none; border-color: var(--accent); }
+  label.toggle { color: var(--dim); font-size: 12px; cursor: pointer;
+                 user-select: none; }
+  button {
+    background: #262b38; color: var(--text); border: 1px solid var(--border);
+    border-radius: 5px; padding: 3px 10px; font: inherit; cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  #hint { color: var(--dim); font-size: 11px; margin-left: auto; }
+  #canvas { flex: 1; cursor: grab; }
+  #canvas.panning { cursor: grabbing; }
+  .mod rect {
+    fill: #232838; stroke: #4a5468; stroke-width: 1.4; rx: 6;
+  }
+  .mod.err rect { stroke: var(--err); stroke-dasharray: 4 3; }
+  .mod:hover rect { stroke: var(--accent); }
+  .mod.hit rect { stroke: var(--warn); stroke-width: 2.2; }
+  .mod.dimmed { opacity: .22; }
+  .mod text, .chip text, .obadge, .oexc, .fheat {
+    paint-order: stroke; stroke: rgba(10, 12, 18, .65);
+    stroke-width: 2.6px;
+  }
+  .mod .mname { fill: #eef1f8; font-size: 12px; font-weight: 600; }
+  .mod .mloc { fill: #c7cedd; font-size: 10px; }
+  .mod .defrow { fill: #e6eaf2; font-size: 10px; cursor: default; }
+  .mod .defrow.hit { fill: var(--warn); font-weight: 700; }
+  /* intra-file call graph: focused function + its neighbours */
+  .mod .fnname.caller { fill: var(--warn); font-weight: 700; }
+  .mod .fnname.callee { fill: var(--call); font-weight: 700; }
+  .mod .fnname.fnsel  { fill: #fff; font-weight: 700; }
+  .callarrow   { stroke: var(--call); stroke-width: 1.8; fill: none;
+                 opacity: .92; }
+  .callerarrow { stroke: var(--warn); stroke-width: 1.5; fill: none;
+                 stroke-dasharray: 4 3; opacity: .85; }
+  .fnentry { fill: var(--call); font-size: 10px; font-weight: 700;
+             pointer-events: none; }
+  .fnrec   { fill: var(--dim); font-size: 9px; }
+  .mod .defloc { fill: #b6bfd2; font-size: 9px; }
+  .chip rect { fill: #2a3147; stroke: #56618a; stroke-width: 1.2; rx: 5; }
+  .chip:hover rect { stroke: var(--accent); }
+  .chip.sel rect { stroke: var(--warn); stroke-width: 2; fill: #3a3423; }
+  .chip.anc rect { stroke: var(--call); stroke-width: 2; fill: #1d3527; }
+  .chip.hit rect { stroke: var(--warn); stroke-width: 2; }
+  .chip text { fill: #d9c7f2; font-size: 10px; font-weight: 600; }
+  .chip .mcount { fill: var(--dim); font-weight: 400; }
+  .hedge { stroke: var(--call); stroke-width: 1.6; fill: none; }
+  .panelrow { fill: #e6eaf2; font-size: 10px; }
+  .panelhead { fill: var(--warn); font-size: 10px; font-weight: 700; }
+  .panelbase { fill: var(--call); font-size: 10px; }
+  marker#mh path { fill: #7ee08a; }
+  .mod.cold { opacity: .38; }
+  .obadge { fill: var(--warn); font-size: 10px; font-weight: 700;
+            text-anchor: end; }
+  .oexc { fill: var(--err); font-size: 10px; font-weight: 700;
+          text-anchor: end; }
+  .fheat { fill: #ffd479; font-weight: 700; }
+  .iedge { stroke: #5b81b8; stroke-width: 1.4; fill: none; opacity: .75; }
+  .iedge.dimmed { opacity: .08; }
+  .iedge.cyc { stroke: var(--err); opacity: .92; }
+  .iedge.cyc.dimmed { opacity: .08; }
+  /* an expanded module SELECTS its edges: related pop, the rest fade.
+     Selected edges are drawn ON TOP of the boxes (their own layer), a
+     dot marks the tail, the arrowhead the target, and the boxes at
+     both ends get a matching outline (.rel) — the relationship must be
+     readable without tracing the line. */
+  .iedge.sel { stroke: var(--accent); opacity: 1; }
+  .iedge.cyc.sel { stroke: var(--err); opacity: 1; }
+  .iedge.fade { opacity: .1; }
+  .cedge.sel { opacity: 1; }
+  .cedge.fade { opacity: .06; }
+  .mod.rel rect { stroke: var(--accent); stroke-width: 2.2; }
+  .pkg.rel rect { stroke: var(--accent); stroke-width: 2.2; }
+  /* HOVER any box and its arrows light up transiently (no click) */
+  .iedge.hov { stroke: var(--accent); opacity: 1; }
+  .iedge.cyc.hov { stroke: var(--err); opacity: 1; }
+  .cedge.hov { opacity: 1; }
+  .iedge.hovoff, .cedge.hovoff { opacity: .09; }
+  .clabel.hovoff { opacity: .1; }
+  .pkg rect { fill: #191d29; stroke: #3a4358; stroke-width: 1.6;
+              stroke-dasharray: 7 4; rx: 9; }
+  .pkg.folded rect { fill: #222a40; stroke: #56618a;
+                     stroke-dasharray: none; }
+  .pkg:hover rect { stroke: var(--accent); }
+  .pkg.hit rect { stroke: var(--warn); stroke-width: 2.4; }
+  .pkg.dimmed { opacity: .22; }
+  .pkg text { paint-order: stroke; stroke: rgba(10, 12, 18, .65);
+              stroke-width: 2.6px; }
+  .pkg .pname { fill: #d9c7f2; font-size: 12px; font-weight: 700; }
+  .pkg .pinfo { fill: #b6bfd2; font-size: 10px; }
+  .cycpip { fill: var(--err); font-size: 10px; font-weight: 700;
+            text-anchor: end; paint-order: stroke;
+            stroke: rgba(10, 12, 18, .65); stroke-width: 2.6px; }
+  .cyclink { color: var(--err); cursor: pointer;
+             text-decoration: underline dotted; }
+  .cyclink:hover, .cyclink.on { color: #ff9d9d; }
+  #wallsbox {
+    display: none; position: absolute; top: 52px; right: 12px;
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px 14px; max-height: 65%;
+    overflow: auto; min-width: 280px;
+  }
+  #wallsbox h3 { color: var(--accent); font-size: 12px;
+                 margin-bottom: 7px; }
+  #wallsbox .wallnote { color: var(--dim); font-size: 10px;
+                        margin-top: 7px; }
+  .wallrow { cursor: pointer; padding: 2px 0; font-size: 12px;
+             white-space: nowrap; }
+  .wallrow:hover { color: var(--warn); }
+  .wallrow .win { color: var(--call); margin-right: 7px; }
+  .wallrow .wout { color: var(--dim); margin-right: 9px; }
+  .cedge { stroke: var(--warn); stroke-width: 1.2; fill: none;
+           stroke-dasharray: 5 4; opacity: .8; }
+  .cedge.dimmed { opacity: .06; }
+  .clabel { fill: var(--warn); font-size: 9px; font-weight: 600;
+            text-anchor: middle; paint-order: stroke; stroke: #14161c;
+            stroke-width: 3px; }
+  #note {
+    position: absolute; bottom: 10px; left: 12px; color: var(--dim);
+    font-size: 11px; max-width: 60%;
+  }
+  #note .err { color: var(--err); }
+  .cmdbtn { cursor: pointer; }
+  .cmdbtn-disc { fill: #fff; stroke: var(--border); stroke-width: 1; }
+  .mod .cmdbtn-glyph { fill: #14161c; font-size: 10px; font-weight: 700;
+    stroke: none; pointer-events: none; }
+  .cmdbtn:hover .cmdbtn-disc { fill: var(--accent); }
+  .mod .defrow { cursor: pointer; }
+  #cmdbox {
+    display: none; position: absolute; bottom: 10px; right: 12px;
+    align-items: center; gap: 10px; background: var(--panel);
+    border: 1px solid var(--accent); border-radius: 8px;
+    padding: 8px 12px; max-width: 70%; flex-wrap: wrap;
+  }
+  #cmdbox .cmdlabel { color: var(--accent); font-size: 11px;
+                      white-space: nowrap; }
+  #cmdbox code { color: var(--warn); font-size: 12px;
+                 word-break: break-all; user-select: all; }
+  #cmdnote { flex-basis: 100%; color: var(--dim); font-size: 11px; }
+  #cmdnote b { color: var(--warn); font-weight: 600; }
+  .hlegend {
+    display: inline-block; width: 120px; height: 9px; border-radius: 4px;
+    vertical-align: middle; border: 1px solid var(--border);
+    background: linear-gradient(90deg, rgba(74, 116, 168, .25),
+      #2e7d67 20%, #4e8a3c 32%, #d9c53a 52%, #e8842e 75%, #d9372a 100%);
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>pyreplay map <span id="rootname"></span></h1>
+  <span id="stats"></span>
+  <input id="search" type="search" placeholder="search modules / functions…">
+  <label class="toggle"><input type="checkbox" id="showcalls"> call routes</label>
+  <label class="toggle" id="cyclbl" style="display:none"
+    title="Paint every import-cycle edge red (clicking a cycle in the
+bottom bar spotlights it even with this off)">
+    <input type="checkbox" id="showcyc"> cycles</label>
+  <label class="toggle" id="heatlbl" style="display:none">
+    <input type="checkbox" id="showheat" checked> heat</label>
+  <button id="foldall" style="display:none"
+    title="Collapse every package into one box">fold pkgs</button>
+  <button id="unfoldall" style="display:none"
+    title="Open every package box">unfold</button>
+  <button id="walls" title="Top modules by importers — the load-bearing walls">walls</button>
+  <button id="fit" title="Fit the whole map in view">fit</button>
+  <span id="hint">drag to pan · wheel to zoom · click a package to
+    fold/unfold · click a module to expand</span>
+</header>
+<svg id="canvas">
+  <defs>
+    <!-- markerUnits=userSpaceOnUse: arrowheads keep ONE size no matter
+         how thick the edge is — a bundled import must not grow a
+         monster triangle, and hover-fattened clones must not either -->
+    <marker id="mi" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="11"
+      markerHeight="11" markerUnits="userSpaceOnUse"
+      orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#5b81b8"/>
+    </marker>
+    <marker id="mc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9"
+      markerHeight="9" markerUnits="userSpaceOnUse"
+      orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#ffd479"/>
+    </marker>
+    <marker id="mh" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9"
+      markerHeight="9" markerUnits="userSpaceOnUse"
+      orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#7ee08a"/>
+    </marker>
+    <marker id="mx" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="11"
+      markerHeight="11" markerUnits="userSpaceOnUse"
+      orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#ff6b6b"/>
+    </marker>
+    <marker id="ms" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="13"
+      markerHeight="13" markerUnits="userSpaceOnUse"
+      orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#5eb1ff"/>
+    </marker>
+    <marker id="md" viewBox="0 0 8 8" refX="4" refY="4" markerWidth="9"
+      markerHeight="9" markerUnits="userSpaceOnUse">
+      <circle cx="4" cy="4" r="3" fill="#5eb1ff"/>
+    </marker>
+  </defs>
+  <g id="world"></g>
+</svg>
+<div id="note"></div>
+<div id="cmdbox">
+  <span class="cmdlabel">microscope ⌖</span>
+  <code id="cmdtext"></code>
+  <button id="cmdcopy">copy</button>
+  <button id="cmdclose" title="close">×</button>
+  <div id="cmdnote"></div>
+</div>
+<div id="wallsbox">
+  <h3>load-bearing walls — top 10 by importers</h3>
+  <div id="wallsbody"></div>
+  <div class="wallnote">←N imported by N modules · →M imports M ·
+    click to highlight</div>
+</div>
+
+<script id="map-data" type="application/json">__MAP_DATA__</script>
+<script>
+const $ = id => document.getElementById(id);
+const raw = $("map-data").textContent.trim();
+if (raw.indexOf("__MAP" + "_DATA__") === 0) {
+  document.body.innerHTML = '<div style="padding:40px;font-family:monospace">' +
+    "⚠ This is the empty template — run <code>python3 mapper.py " +
+    "&lt;codebase&gt;</code> and open the generated map_*.html</div>";
+  throw new Error("template opened directly");
+}
+const DATA = JSON.parse(raw);
+const esc = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;")
+  .replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+/* Module/def ids come from user code and can be ANYTHING — including
+   "constructor" (PyYAML ships constructor.py). Lookups into JSON-parsed
+   objects must never hit Object.prototype, and our own id-keyed maps
+   are created with a null prototype for the same reason. */
+const own = (o, k) =>
+  o && Object.prototype.hasOwnProperty.call(o, k) ? o[k] : undefined;
+
+$("rootname").textContent = "· " + DATA.root;
+const NPKG = new Set((DATA.modules || [])
+  .map(m => m.pkg).filter(p => p)).size;
+$("stats").textContent = DATA.modules.length + " modules · " +
+  (NPKG ? NPKG + " packages · " : "") +
+  DATA.modules.reduce((a, m) => a + m.defs.length, 0) + " defs · " +
+  DATA.modules.reduce((a, m) => a + m.loc, 0).toLocaleString() + " loc · " +
+  DATA.imports.length + " imports" +
+  (DATA.cycles && DATA.cycles.length
+    ? " · ⚠ " + DATA.cycles.length + " cycles" : "");
+
+function buildNote(allCycles) {
+  const bits = [];
+  const ext = Object.keys(DATA.external || {});
+  if (ext.length) bits.push("external deps: " + ext.slice(0, 8).join(", ") +
+    (ext.length > 8 ? "…" : ""));
+  if (DATA.extMissing && DATA.extMissing.length)
+    bits.push('<span class="err">⚠ not importable here: ' +
+      esc(DATA.extMissing.slice(0, 8).join(", ")) +
+      (DATA.extMissing.length > 8
+        ? " +" + (DATA.extMissing.length - 8) + " more" : "") +
+      "</span> — a traced run will crash at their import");
+  if (DATA.unresolvedCalls)
+    bits.push(DATA.unresolvedCalls + " calls not statically resolvable " +
+      "(methods on objects — that's what the tracer is for)");
+  if (DATA.errors && DATA.errors.length)
+    bits.push('<span class="err">' + DATA.errors.length +
+      " file(s) failed to parse</span>");
+  if (DATA.cycles && DATA.cycles.length) {
+    const shortId = id => id.includes(".")
+      ? id.slice(id.lastIndexOf(".") + 1) : id;
+    // an SCC is a SET of mutually-reachable modules, not a path —
+    // only 2-cycles are honestly drawable as "a ⇄ b"
+    const shown = allCycles ? DATA.cycles : DATA.cycles.slice(0, 6);
+    bits.push('<span class="err">⚠ ' + DATA.cycles.length +
+      " import cycle" + (DATA.cycles.length > 1 ? "s" : "") + "</span> " +
+      shown.map((c, i) =>
+        '<span class="cyclink" data-i="' + i + '" title="' +
+        esc((c.length === 2
+          ? c[0] + " ⇄ " + c[1]
+          : "members: " + c.slice(0, 20).join(", ") +
+            (c.length > 20 ? " +" + (c.length - 20) + " more" : "")) +
+          " — click to highlight") + '">' +
+        esc(c.length === 2 ? shortId(c[0]) + " ⇄ " + shortId(c[1])
+            : c.length + " modules ⭯") + "</span>").join(" · ") +
+      (DATA.cycles.length > shown.length
+        ? ' · <span class="cyclink cycmore">+' +
+          (DATA.cycles.length - shown.length) + " more…</span>" : ""));
+  }
+  if (DATA.heat) {
+    const h = DATA.heat;
+    bits.unshift('heat: <span style="color:var(--warn)">' +
+      (h.kind === "time" ? "TIME (self)" : "EVENT COUNTS") + "</span> from " +
+      esc(h.trace) + " — " + h.events.toLocaleString() + " events, " +
+      Object.keys(h.mods).length + " modules touched" +
+      (h.unmatched ? ", " + h.unmatched.toLocaleString() +
+        " events outside this map" : "") +
+      ' · <span class="hlegend"></span> 0→100% of run');
+  }
+  $("note").innerHTML = bits.join(" · ");
+}
+buildNote(false);
+if (DATA.heat) $("heatlbl").style.display = "";
+
+/* ---------- grouping: modules fold into package boxes ----------
+   The unit of layout is the GROUP: a real package (its __init__ plus
+   its direct members) or a singleton pseudo-group for each top-level
+   module. Folding a package hides its members and re-anchors their
+   edges to the box — semantic zoom v2. */
+const mods = DATA.modules;
+const byId = Object.create(null);
+const byPath = Object.create(null);
+mods.forEach(m => { byId[m.id] = m; byPath[m.path] = m; });
+const pkgOf = Object.create(null);  // module id -> package id ("" = top)
+mods.forEach(m => {
+  pkgOf[m.id] = m.pkg !== undefined ? m.pkg
+    : (m.path && m.path.endsWith("__init__.py") ? m.id
+       : (m.id.includes(".") ? m.id.slice(0, m.id.lastIndexOf(".")) : ""));
+});
+const gidOf = id => pkgOf[id] || "•" + id;
+const groups = Object.create(null);
+mods.forEach(m => {
+  const gid = gidOf(m.id);
+  (groups[gid] = groups[gid] || { id: gid, members: [] }).members.push(m);
+});
+Object.values(groups).forEach(g => {
+  g.members.sort((a, b) => a.id < b.id ? -1 : 1);
+  g.single = g.id.startsWith("•");
+});
+const realPkgs = Object.values(groups).filter(g => !g.single);
+
+/* layers by GROUP-level import depth (cycle-safe fixpoint) */
+const gdeps = Object.create(null);
+Object.keys(groups).forEach(g => { gdeps[g] = []; });
+DATA.imports.forEach(e => {
+  if (!byId[e.s] || !byId[e.d]) return;
+  const gs = gidOf(e.s), gd = gidOf(e.d);
+  if (gs !== gd) gdeps[gs].push(gd);
+});
+const gdepth = Object.create(null);
+const gids = Object.keys(groups);
+gids.forEach(g => { gdepth[g] = 0; });
+for (let pass = 0; pass < gids.length; pass++) {
+  let moved = false;
+  gids.forEach(g => {
+    gdeps[g].forEach(d => {
+      if (gdepth[g] < gdepth[d] + 1 && gdepth[d] + 1 <= gids.length) {
+        gdepth[g] = gdepth[d] + 1;
+        moved = true;
+      }
+    });
+  });
+  if (!moved) break;   // fixpoint; the pass cap keeps cycles finite
+}
+
+/* import cycles (SCCs from the mapper): index modules by cycle */
+const CYCLES = DATA.cycles || [];
+const sccIndex = Object.create(null);
+CYCLES.forEach((c, i) => c.forEach(id => { sccIndex[id] = i; }));
+const isCycEdge = (s, d) =>
+  sccIndex[s] !== undefined && sccIndex[s] === sccIndex[d];
+
+/* big maps start folded — that is what makes them readable */
+const folded = new Set();
+if (mods.length > 50) realPkgs.forEach(g => folded.add(g.id));
+if (CYCLES.length) $("cyclbl").style.display = "";
+if (realPkgs.length) {
+  $("foldall").style.display = "";
+  $("unfoldall").style.display = "";
+}
+
+const expanded = new Set();
+let sel = null;      // {mod, cls} — selected class chip
+let selFn = null;    // {mod, fn}  — focused function (call-graph view)
+let cycleSel = null; // index into CYCLES highlighted via the note bar
+let exactSel = null; // exact module id highlighted via the walls panel
+let geom = Object.create(null);  // module id -> {x,y,w,h} (visible only)
+let geomG = Object.create(null); // group id -> {x, y, w, h}
+const CHIP_H = 24, CHIP_GAP = 8, PER_COL = 12;
+// functions shown inside an expanded box. Higher than the class-era 12
+// so a single big file's whole call graph is drawable; beyond it we
+// announce "+N more" and arrows to hidden functions are dropped.
+const FN_SHOWN = 40;
+
+function fitText(s, px) {
+  const max = Math.max(4, Math.floor(px / 6.4));
+  return s.length > max ? s.slice(0, max - 1) + "…" : s;
+}
+
+/* group a module's flat def list into top-level functions, top-level
+   classes, and methods-by-class — the structure INSIDE a file */
+function moduleStruct(m) {
+  if (m._struct) return m._struct;
+  const classes = [], funcs = [], methods = Object.create(null);
+  const classNames = new Set(m.defs
+    .filter(d => d.k === "class" && !d.n.includes("."))
+    .map(d => d.n));
+  m.defs.forEach(d => {
+    if (d.n.includes(".")) {
+      const parts = d.n.split(".");
+      if (classNames.has(parts[0]) && parts.length === 2)
+        (methods[parts[0]] = methods[parts[0]] || []).push(d);
+    } else if (d.k === "class") classes.push(d);
+    else funcs.push(d);
+  });
+  return (m._struct = { classes, funcs, methods, classNames });
+}
+
+function sizeModule(m) {
+  const st = moduleStruct(m);
+  let w = Math.max(120, m.id.length * 7.4 + 46);
+  let h = 40;
+  if (expanded.has(m.id)) {
+    const fShown = Math.min(st.funcs.length, FN_SHOWN);
+    if (fShown) {
+      const fw = Math.max(...st.funcs.slice(0, fShown)
+        .map(d => d.n.length)) * 6.4 + 90;
+      w = Math.max(w, Math.min(fw, 460));
+      h += fShown * 15 + (st.funcs.length > fShown ? 14 : 0) + 6;
+      // a focused function may add a "hidden neighbours" note below the
+      // rows — reserve a line so it can't collide with the class grid
+      if (selFn && selFn.mod === m.id) h += 14;
+    }
+    if (st.classes.length) {
+      m._chipW = Math.min(240, Math.max(120,
+        Math.max(...st.classes.map(cc => cc.n.length)) * 6.8 + 40));
+      m._ncols = Math.max(1, Math.ceil(st.classes.length / PER_COL));
+      const rows = Math.ceil(st.classes.length / m._ncols);
+      w = Math.max(w, m._ncols * (m._chipW + CHIP_GAP) + 16);
+      m._gridY = h + 4;
+      h += rows * (CHIP_H + CHIP_GAP) + 12;
+    }
+    if (sel && sel.mod === m.id) {
+      const meths = st.methods[sel.cls] || [];
+      const shown = Math.min(meths.length, 20);
+      m._panelY = h;
+      h += 34 + shown * 13 + (meths.length > shown ? 13 : 0) + 8;
+      const pw = Math.max(0, ...meths.slice(0, shown)
+        .map(d => d.n.length)) * 6.4 + 60;
+      w = Math.max(w, Math.min(pw, 460));
+    }
+    h += 6;
+  }
+  m._w = w; m._h = h;
+}
+
+function layout() {
+  geom = Object.create(null);
+  geomG = Object.create(null);
+  const cols = {};
+  Object.values(groups).forEach(g => {
+    (cols[gdepth[g.id]] = cols[gdepth[g.id]] || []).push(g);
+  });
+  const order = Object.keys(cols).map(Number).sort((a, b) => a - b);
+  let x = 40;
+  order.forEach(c => {
+    const col = cols[c].sort((a, b) => a.id < b.id ? -1 : 1);
+    let colW = 0;
+    col.forEach(g => {
+      if (g.single) {
+        const m = g.members[0];
+        sizeModule(m);
+        g._w = m._w; g._h = m._h;
+      } else if (folded.has(g.id)) {
+        g._w = Math.max(170, g.id.length * 7.4 + 70);
+        g._h = 48;
+      } else {
+        let w = Math.max(170, g.id.length * 7.4 + 70);
+        let h = 30;   // header strip
+        g.members.forEach(m => {
+          sizeModule(m);
+          w = Math.max(w, m._w + 20);
+          m._gy = h;
+          h += m._h + 12;
+        });
+        g._w = w; g._h = h + 2;
+      }
+      colW = Math.max(colW, g._w);
+    });
+    let y = 40;
+    col.forEach(g => {
+      geomG[g.id] = { x, y, w: g._w, h: g._h };
+      if (g.single) {
+        geom[g.members[0].id] = { x, y, w: g._w, h: g._h };
+      } else if (!folded.has(g.id)) {
+        g.members.forEach(m => {
+          geom[m.id] = { x: x + 10, y: y + m._gy, w: m._w, h: m._h };
+        });
+      }
+      y += g._h + 18;
+    });
+    x += colW + 110;
+  });
+}
+
+/* ---------- render ---------- */
+const world = $("world");
+let query = "";
+
+function matches(m) {
+  if (!query) return false;
+  if (m.id.toLowerCase().includes(query)) return true;
+  return m.defs.some(d => d.n.toLowerCase().includes(query));
+}
+
+function render() {
+  layout();
+  const hits = new Set();
+  if (query) mods.forEach(m => { if (matches(m)) hits.add(m.id); });
+  if (cycleSel !== null && CYCLES[cycleSel])
+    CYCLES[cycleSel].forEach(id => hits.add(id));
+  if (exactSel !== null) hits.add(exactSel);   // walls: THIS module only
+  const filtering = !!query || cycleSel !== null || exactSel !== null;
+
+  // dynamic heat drawn onto the static map (the cockpit)
+  const heatOn = DATA.heat && $("showheat").checked;
+  const H = heatOn ? DATA.heat.mods : null;
+  let maxN = 1;
+  const rank = Object.create(null);
+  if (H) {
+    Object.values(H).forEach(h => { maxN = Math.max(maxN, h.n); });
+    Object.entries(H).sort((a, b) => a[1].first - b[1].first)
+      .forEach((e, i) => { rank[e[0]] = i + 1; });
+  }
+  const totalEv = DATA.heat ? Math.max(1, DATA.heat.total) : 1;
+  const heatKind = DATA.heat ? DATA.heat.kind || "counts" : "counts";
+  const modShare = mh => heatKind === "time" ? (mh.tSelf || 0) : mh.n;
+  const fmtUs = us => us < 1000 ? Math.round(us) + " µs"
+    : us < 1e6 ? (us / 1000).toFixed(1) + " ms"
+    : (us / 1e6).toFixed(2) + " s";
+  // weather-radar palette on ABSOLUTE share of the run:
+  // 0% = no tint · ~5% = faint blue · then teal → green → yellow →
+  // orange → 100% = hard red. [share, hue, sat%, light%, alpha]
+  const HEAT_STOPS = [
+    [0.00, 210, 60, 36, 0.00],
+    [0.05, 210, 60, 38, 0.35],
+    [0.15, 180, 55, 36, 0.55],
+    [0.30, 120, 45, 36, 0.70],
+    [0.50, 50, 85, 45, 0.88],
+    [0.75, 28, 92, 48, 0.96],
+    [1.00, 8, 92, 46, 1.00],
+  ];
+  const heatFill = n => {
+    const s = Math.min(1, n / totalEv);
+    let a = HEAT_STOPS[0], b = HEAT_STOPS[HEAT_STOPS.length - 1];
+    for (let i = 1; i < HEAT_STOPS.length; i++) {
+      if (s <= HEAT_STOPS[i][0]) { a = HEAT_STOPS[i - 1]; b = HEAT_STOPS[i]; break; }
+    }
+    const t = b[0] === a[0] ? 0 : (s - a[0]) / (b[0] - a[0]);
+    const mix = j => a[j] + (b[j] - a[j]) * t;
+    return "hsl(" + mix(1).toFixed(0) + " " + mix(2).toFixed(0) + "% " +
+      mix(3).toFixed(1) + "% / " + mix(4).toFixed(2) + ")";
+  };
+
+  // selected class: its transitive local ancestors + inheritance edges
+  let ancSet = new Set(), hedges = [];
+  if (sel && byId[sel.mod]) {
+    const st = moduleStruct(byId[sel.mod]);
+    const localBases = Object.create(null);
+    st.classes.forEach(c => {
+      localBases[c.n] = (c.bases || []).filter(b => st.classNames.has(b));
+    });
+    const q = [sel.cls];
+    while (q.length) {
+      const cur = q.shift();
+      (localBases[cur] || []).forEach(p => {
+        hedges.push([cur, p]);
+        if (!ancSet.has(p)) { ancSet.add(p); q.push(p); }
+      });
+    }
+  }
+  // paint order: package boxes UNDER edges UNDER module boxes — an
+  // edge between two members of an open package must ride on top of
+  // the package rect, or intra-package cycles would be invisible.
+  // svgSel is the TOP layer: the few edges selected by an expanded
+  // module ride above everything, so their tips are never hidden.
+  let svgPkg = "", svgEdges = "", svg = "", svgSel = "";
+  let focusShown = false;   // did the focused function actually render?
+  const relKeys = new Set(); // anchors touched by a selected edge
+
+  // an edge endpoint resolves to its VISIBLE anchor: the module box,
+  // or the folded package box hiding it. Edges between the same
+  // anchors aggregate (count in the title, thicker stroke).
+  const anchorOf = id => geom[id]
+    ? { key: "m:" + id, g: geom[id] }
+    : { key: "p:" + gidOf(id), g: geomG[gidOf(id)] };
+  const cycInside = Object.create(null); // folded gid -> Set of cycles
+
+  // expanded modules SELECT their edges: every arrow touching an open
+  // box pops in accent colour, all unrelated arrows fade — otherwise a
+  // dense map keeps its full spaghetti while you study one module
+  const selAnchors = new Set();
+  expanded.forEach(id => { if (geom[id]) selAnchors.add("m:" + id); });
+  const anySel = selAnchors.size > 0;
+
+  // import edges: importer -> dependency
+  const iagg = new Map();
+  DATA.imports.forEach(e => {
+    const a = anchorOf(e.s), b = anchorOf(e.d);
+    if (!a.g || !b.g) return;
+    if (a.key === b.key) {   // internal to one folded box
+      if (isCycEdge(e.s, e.d)) {
+        const gid = gidOf(e.s);
+        (cycInside[gid] = cycInside[gid] || new Set())
+          .add(sccIndex[e.s]);
+      }
+      return;
+    }
+    const k = a.key + "→" + b.key;
+    let rec = iagg.get(k);
+    if (!rec) iagg.set(k, rec = { a: a.g, b: b.g, pairs: [],
+                                  aKey: a.key, bKey: b.key,
+                                  nCyc: 0, hit: false, gid: gidOf(e.s),
+                                  gd: gidOf(e.d),
+                                  // members of one open package: route
+                                  // around the box, not through it
+                                  intra: gidOf(e.s) === gidOf(e.d) });
+    const cyc = isCycEdge(e.s, e.d);
+    rec.pairs.push({ t: e.s + "  imports  " + e.d, c: cyc });
+    if (cyc) rec.nCyc++;
+    if (filtering && hits.has(e.s) && hits.has(e.d)) rec.hit = true;
+  });
+  // cycle-red is DETAIL ON DEMAND: the toggle paints every cyclic edge,
+  // and clicking a cycle in the note bar spotlights just that one —
+  // otherwise a codebase whose core is one big SCC turns into a red
+  // blanket where red means nothing
+  const cycOn = CYCLES.length > 0 && $("showcyc").checked;
+  // sibling edges INSIDE an open package are the map's densest noise:
+  // they hide until you expand a member (its own light up), search, or
+  // toggle cycles — the package header carries their honest count
+  const intraTotal = Object.create(null);
+  const intraRail = Object.create(null);
+  iagg.forEach(rec => {
+    const dim = filtering && !rec.hit;
+    const related = anySel &&
+      (selAnchors.has(rec.aKey) || selAnchors.has(rec.bKey));
+    const n = rec.pairs.length;
+    const red = rec.nCyc > 0 &&
+      (cycOn || (cycleSel !== null && rec.hit));
+    if (rec.intra) {
+      intraTotal[rec.gid] = (intraTotal[rec.gid] || 0) + n;
+      if (!related && !red && !(filtering && rec.hit)) return;
+    }
+    // routing by relative position — always connect the FACING sides:
+    //   target left of source  → classic S  (left edge → right edge)
+    //   target right of source → backward   (RIGHT edge → left edge)
+    //   same column            → arc around the left gutter
+    const y1 = rec.a.y + 20, y2 = rec.b.y + 20;
+    const aL = rec.a.x, aR = rec.a.x + rec.a.w;
+    const bL = rec.b.x, bR = rec.b.x + rec.b.w;
+    let tailX, endX, mx;
+    let cy1 = y1, cy2 = y2;   // control-point ys (bowed for long lanes)
+    if (rec.intra) {          // siblings: out the left, spread on rails
+      const ri = (intraRail[rec.gid] = (intraRail[rec.gid] || 0) + 1);
+      tailX = aL;
+      endX = bL - 6;
+      mx = Math.min(aL, bL) - (30 + (ri % 6) * 9);
+    } else if (bR + 6 < aL) { // classic: dependency to the left
+      tailX = aL;
+      endX = bR + 6;
+      mx = (tailX + endX) / 2;
+    } else if (bL > aR + 6) { // backward (cycles): target to the right
+      tailX = aR;
+      endX = bL - 6;
+      mx = (tailX + endX) / 2;
+    } else {                  // same column: outer-gutter arc (base 78
+      tailX = aL;             // keeps clear of the 30–75px intra rails)
+      endX = bL - 6;
+      mx = Math.min(aL, bL) -
+        (78 + Math.floor(Math.abs(y1 - y2) / 60) % 4 * 9);
+    }
+    // a nearly-horizontal LONG run would slice every box sharing its
+    // lane (all first-row boxes anchor at the same y) — bow it above
+    const span = Math.abs(endX - tailX);
+    if (!rec.intra && Math.abs(y1 - y2) < 40 && span > 300) {
+      const bow = Math.min(120, 46 + span * 0.03);
+      cy1 = y1 - bow;
+      cy2 = y2 - bow;
+    }
+    // nudge the tail off the border so the start dot sits clear of it
+    const tx = tailX + (tailX === aR ? 4 : -4);
+    const sw = (n > 1 ? Math.min(4.2, 1.4 + 0.35 * n) : 1.4) +
+      (related ? 1 : 0);
+    // cyclic pairs listed first so the cap can't hide them, each one
+    // marked — a red bundle must say exactly which imports are cyclic
+    rec.pairs.sort((a2, b2) => (b2.c ? 1 : 0) - (a2.c ? 1 : 0));
+    const p = '<path class="iedge' + (red ? " cyc" : "") +
+      (dim ? " dimmed" : related ? " sel" : anySel ? " fade" : "") +
+      '" style="stroke-width:' + sw +
+      '" d="M' + tx + " " + y1 + " C" + mx + " " + cy1 + " " + mx + " " +
+      cy2 + " " + endX + " " + y2 + '" marker-end="url(#' +
+      (red ? "mx" : related ? "ms" : "mi") + ')"' +
+      (related ? ' marker-start="url(#md)"' : "") +
+      ' data-ka="' + esc(rec.aKey) + '" data-kb="' + esc(rec.bKey) +
+      '" data-ga="' + esc(rec.gid) + '" data-gb="' + esc(rec.gd) +
+      '"><title>' +
+      esc(rec.pairs.slice(0, 12).map(q => (q.c ? "⚠ " : "") + q.t)
+          .join("\n") +
+          (n > 12 ? "\n+" + (n - 12) + " more" : "") +
+          (rec.nCyc ? "\n⚠ " + rec.nCyc + " of " + n +
+            " import(s) here are cycle edges" : "")) +
+      "</title></path>";
+    if (related && !dim) {
+      svgSel += p;
+      relKeys.add(rec.aKey);
+      relKeys.add(rec.bKey);
+    } else {
+      svgEdges += p;
+    }
+  });
+
+  // call routes (aggregated), toggleable
+  if ($("showcalls").checked) {
+    const cagg = new Map();
+    DATA.calls.forEach(e => {
+      if (e.s === e.d) return;
+      const a = anchorOf(e.s), b = anchorOf(e.d);
+      if (!a.g || !b.g || a.key === b.key) return;
+      const k = a.key + "→" + b.key;
+      let rec = cagg.get(k);
+      if (!rec) cagg.set(k, rec = { a: a.g, b: b.g, n: 0, routes: 0,
+                                    aKey: a.key, bKey: b.key,
+                                    gid: gidOf(e.s), gd: gidOf(e.d),
+                                    fns: [], hit: false });
+      rec.n += e.n;
+      rec.routes++;
+      e.fns.forEach(f => { if (rec.fns.length < 8) rec.fns.push(f); });
+      if (filtering && hits.has(e.s) && hits.has(e.d)) rec.hit = true;
+    });
+    cagg.forEach(rec => {
+      const dim = filtering && !rec.hit;
+      const related = anySel &&
+        (selAnchors.has(rec.aKey) || selAnchors.has(rec.bKey));
+      // dip below both boxes, then rise INTO the target's bottom
+      // border — the head points at the box, and the path never
+      // tunnels through the target's interior
+      const x1 = rec.a.x + rec.a.w / 2, y1 = rec.a.y + rec.a.h,
+            x2 = rec.b.x + rec.b.w / 2, y2 = rec.b.y + rec.b.h;
+      const my = Math.max(y1, y2) + 40;
+      let p = '<path class="cedge' +
+        (dim ? " dimmed" : related ? " sel" : anySel ? " fade" : "") +
+        '" d="M' + x1 +
+        " " + y1 + " C" + x1 + " " + my + " " + x2 + " " + my + " " + x2 +
+        " " + (y2 + 4) + '" marker-end="url(#mc)"' +
+        ' data-ka="' + esc(rec.aKey) + '" data-kb="' + esc(rec.bKey) +
+        '" data-ga="' + esc(rec.gid) + '" data-gb="' + esc(rec.gd) +
+        '"><title>' +
+        esc(rec.n + " call sites" +
+            (rec.routes > 1 ? " over " + rec.routes + " routes" : "") +
+            "\n" + rec.fns.join("\n")) + "</title></path>";
+      if (!dim && (!anySel || related))
+        p += '<text class="clabel" x="' + ((x1 + x2) / 2) + '" y="' +
+          (my - 4) + '" data-ka="' + esc(rec.aKey) + '" data-kb="' +
+          esc(rec.bKey) + '" data-ga="' + esc(rec.gid) + '" data-gb="' +
+          esc(rec.gd) + '">' + rec.n + "</text>";
+      if (related && !dim) {
+        svgSel += p;
+        relKeys.add(rec.aKey);
+        relKeys.add(rec.bKey);
+      } else {
+        svgEdges += p;
+      }
+    });
+  }
+
+  // package boxes: the fold — one box per package, members inside
+  // when unfolded, a heat/cycle/error roll-up when folded
+  realPkgs.forEach(g => {
+    const gg = geomG[g.id];
+    if (!gg) return;
+    const isF = folded.has(g.id);
+    let rn = 0, rshare = 0, rexc = 0;
+    if (H) g.members.forEach(m => {
+      const mh = own(H, m.id);
+      if (!mh) return;
+      rn += mh.n;
+      rshare += modShare(mh);
+      rexc += mh.exc || 0;
+    });
+    const anyHit = filtering && g.members.some(m => hits.has(m.id));
+    const loc = g.members.reduce((a, m) => a + m.loc, 0);
+    const nErr = g.members.filter(m => m.err).length;
+    const cin = cycInside[g.id] ? cycInside[g.id].size : 0;
+    const cls = "pkg" + (isF ? " folded" : "") +
+      (H && !rn ? " cold" : "") +
+      (filtering ? (anyHit ? " hit" : " dimmed") : "") +
+      (isF && relKeys.has("p:" + g.id) && !(filtering && anyHit)
+        ? " rel" : "");
+    svgPkg += '<g class="' + cls + '" data-pkg="' + esc(g.id) + '">' +
+      '<rect x="' + gg.x + '" y="' + gg.y + '" width="' + gg.w +
+      '" height="' + gg.h + '" rx="9"' +
+      (isF && H && rn ? ' style="fill:' + heatFill(rshare) + '"' : "") +
+      "></rect>" +
+      '<text class="pname" x="' + (gg.x + 10) + '" y="' + (gg.y + 17) +
+      '">' + (isF ? "▸ " : "▾ ") +
+      esc(fitText(g.id, gg.w - 40)) + "</text>";
+    if (!isF && intraTotal[g.id])
+      svgPkg += '<text class="pinfo" x="' + (gg.x + gg.w - 10) + '" y="' +
+        (gg.y + 17) + '" text-anchor="end">⇄' + intraTotal[g.id] +
+        "<title>" + intraTotal[g.id] + " imports between this " +
+        "package's own modules — hidden until you expand a member " +
+        "(its own light up), search, or turn on the cycles toggle" +
+        "</title></text>";
+    if (isF)
+      svgPkg += '<text class="pinfo" x="' + (gg.x + 10) + '" y="' +
+        (gg.y + 34) + '">' +
+        esc(fitText(g.members.length + " modules · " +
+          loc.toLocaleString() + " loc" +
+          (H && rn ? " · " + (heatKind === "time" ? fmtUs(rshare)
+            : rn.toLocaleString() + " ev") + " (" +
+            (rshare / totalEv * 100).toFixed(0) + "%)" : "") +
+          (nErr ? " · " + nErr + " parse err" : ""), gg.w - 36)) +
+        "</text>";
+    if (isF && rexc)
+      svgPkg += '<text class="oexc" x="' + (gg.x + gg.w - 8) + '" y="' +
+        (gg.y + 16) + '">⚠' + rexc + "</text>";
+    if (isF && cin)
+      svgPkg += '<text class="cycpip" x="' + (gg.x + gg.w - 8) + '" y="' +
+        (gg.y + (rexc ? 30 : 16)) + '">⭯' + cin + "</text>";
+    svgPkg += "<title>" + esc(g.id + " — " + g.members.length +
+      " modules\n" +
+      g.members.slice(0, 20).map(m => m.id).join(", ") +
+      (g.members.length > 20 ? "…" : "") +
+      (cin ? "\n⚠ hides edges of " + cin + " import cycle(s) — " +
+        "unfold to see them" : "") +
+      "\nclick to " + (isF ? "unfold" : "fold")) + "</title></g>";
+  });
+
+  // module boxes (only the visible ones — folded members have none)
+  mods.forEach(m => {
+    const g = geom[m.id];
+    if (!g) return;
+    const mh = H ? own(H, m.id) : null;
+    const cls = "mod" + (m.err ? " err" : "") + (H && !mh ? " cold" : "") +
+      (filtering ? (hits.has(m.id) ? " hit" : " dimmed") : "") +
+      (relKeys.has("m:" + m.id) && !(filtering && hits.has(m.id))
+        ? " rel" : "");
+    svg += '<g class="' + cls + '" data-mod="' + esc(m.id) + '">' +
+      '<rect x="' + g.x + '" y="' + g.y + '" width="' + g.w +
+      '" height="' + g.h + '" rx="6"' +
+      (mh ? ' style="fill:' + heatFill(modShare(mh)) + '"' : "") +
+      "></rect>" +
+      '<text class="mname" x="' + (g.x + 10) + '" y="' + (g.y + 17) + '">' +
+      esc(m.id) + "</text>" +
+      '<text class="mloc" x="' + (g.x + 10) + '" y="' + (g.y + 31) + '">' +
+      (m.err ? "parse error" : m.loc + " loc · " + m.defs.length + " defs" +
+       (mh ? " · " + (heatKind === "time"
+         ? fmtUs(mh.tSelf || 0)
+         : mh.n.toLocaleString() + " ev") + " (" +
+        (modShare(mh) / totalEv * 100).toFixed(0) + "%)" : "")) +
+      (sccIndex[m.id] !== undefined
+        ? ' <tspan fill="#ff6b6b" font-weight="700">⭯</tspan>' : "") +
+      "</text><title>" + esc(m.path +
+        (sccIndex[m.id] !== undefined
+          ? "\n⚠ import cycle with: " + (cp =>
+              cp.slice(0, 6).join(", ") +
+              (cp.length > 6 ? " +" + (cp.length - 6) + " more" : "")
+            )(CYCLES[sccIndex[m.id]].filter(x => x !== m.id))
+          : "") +
+        (mh ? "\n" + mh.n.toLocaleString() + " events" +
+         (heatKind === "time"
+           ? " · self time " + fmtUs(mh.tSelf || 0) + " = " +
+             (modShare(mh) / totalEv * 100).toFixed(1) + "% of the run"
+           : " = " + (mh.n / totalEv * 100).toFixed(1) +
+             "% of the traced run") +
+         "\nfirst touched: event #" + (mh.first + 1) : "")) + "</title>";
+    if (mh) {
+      svg += '<text class="obadge" x="' + (g.x + g.w - 8) + '" y="' +
+        (g.y + 16) + '">#' + rank[m.id] + "</text>";
+      if (mh.exc)
+        svg += '<text class="oexc" x="' + (g.x + g.w - 8) + '" y="' +
+          (g.y + 30) + '">⚠' + mh.exc + "</text>";
+    }
+    // ⌖ trace-entry marker — a white disc with a dark "T" (Trace) so it
+    // reads on the dark map, and drawn ONLY on boxes that hold real,
+    // traceable code: skip parse-error boxes and empty __init__/namespace
+    // scaffolding (no defs and barely any source), where a trace captures
+    // nothing and the composed command is just a placeholder.
+    if (!m.err && (m.defs.length > 0 || m.loc > 3)) {
+      const bx = g.x + g.w - 12, by = g.y + g.h - 12;
+      svg += '<g class="cmdbtn" data-f="' + esc(m.path) + '">' +
+        "<title>trace this module — click for the tracer command " +
+        "(the funnel handoff)</title>" +
+        '<circle class="cmdbtn-disc" cx="' + bx + '" cy="' + by +
+        '" r="7"></circle>' +
+        '<text class="cmdbtn-glyph" x="' + bx + '" y="' + (by + 3.4) +
+        '" text-anchor="middle">T</text></g>';
+    }
+    if (expanded.has(m.id)) {
+      const st = moduleStruct(m);
+      const fns = mh ? mh.fns : null;
+      let yy = g.y + 40;
+      const fShown = Math.min(st.funcs.length, FN_SHOWN);
+
+      // intra-file call graph model — who calls whom, within this file.
+      // The function-world twin of the class inheritance view.
+      const intra = DATA.intra ? own(DATA.intra, m.id) : null;
+      const callees = Object.create(null), callers = Object.create(null);
+      const recSet = new Set();
+      const entrySet = new Set(intra ? intra.entries : []);
+      if (intra) intra.edges.forEach(([a, b]) => {
+        if (a === b) { recSet.add(a); return; }   // recursion, not an arrow
+        (callees[a] = callees[a] || []).push(b);
+        (callers[b] = callers[b] || []).push(a);
+      });
+      const focusFn = selFn && selFn.mod === m.id ? selFn.fn : null;
+      if (focusFn) focusShown = true;
+      const litCallee = new Set(focusFn ? (callees[focusFn] || []) : []);
+      const litCaller = new Set(focusFn ? (callers[focusFn] || []) : []);
+      const fnRowY = Object.create(null);   // fn name -> row-centre y
+
+      st.funcs.slice(0, fShown).forEach(d => {
+        const hit = query && d.n.toLowerCase().includes(query);
+        const fh = fns && own(fns, d.n);
+        const fLabel = fh ? (heatKind === "time" && fh.tCum !== undefined
+          ? "×" + fh.calls + " · " + fmtUs(fh.tCum)
+          : "×" + fh.n) : "";
+        fnRowY[d.n] = yy + 7;
+        let rel = "";
+        if (focusFn === d.n) rel = " fnsel";
+        else if (litCallee.has(d.n)) rel = " callee";
+        else if (litCaller.has(d.n)) rel = " caller";
+        const nOut = (callees[d.n] || []).length;
+        const nIn = (callers[d.n] || []).length;
+        const rec = recSet.has(d.n), ent = entrySet.has(d.n);
+        const nameTip = "<title>" + esc(d.n + "  (line " + d.l + ", " +
+          d.loc + " loc)" +
+          (intra ? "\ncalls " + nOut + " · called by " + nIn +
+            (rec ? " · recursive" : "") +
+            (ent ? " · entry point (called at module level — import " +
+              "time, or under __main__ when run as a script)" : "") +
+            "\nclick to focus its call graph" : "") +
+          (fh ? "\n" + fh.n + " events this run" +
+            (fh.tCum !== undefined ? " · cum " + fmtUs(fh.tCum) +
+             " · self " + fmtUs(fh.tSelf || 0) : "") : "")) + "</title>";
+        const lineTip = "<title>" + esc(d.n + "  (line " + d.l +
+          ")\nclick the line number for a scoped tracer command") +
+          "</title>";
+        if (ent)
+          svg += '<text class="fnentry" x="' + (g.x + 5) + '" y="' +
+            (yy + 10) + '">▸<title>entry point — called at module ' +
+            'level (import time, or under __main__ as a script)' +
+            "</title></text>";
+        svg += '<text class="defrow fnname' + rel + (hit ? " hit" : "") +
+          '" data-mod="' + esc(m.id) + '" data-fn="' + esc(d.n) +
+          '" data-f="' + esc(m.path) + '" data-l="' + d.l + '" x="' +
+          (g.x + 14) + '" y="' + (yy + 10) + '">' +
+          esc(fitText(d.n, g.w - 80)) +
+          (rec ? ' <tspan class="fnrec">↺</tspan>' : "") +
+          nameTip + '</text><text class="defloc defrow" data-f="' +
+          esc(m.path) + '" data-l="' + d.l + '" x="' +
+          (g.x + g.w - 10) + '" y="' + (yy + 10) + '" text-anchor="end">' +
+          (fLabel ? '<tspan class="fheat">' + fLabel + "</tspan>  " : "") +
+          ":" + d.l + lineTip + "</text>";
+        yy += 15;
+      });
+      if (st.funcs.length > fShown) {
+        svg += '<text class="defloc" x="' + (g.x + 14) + '" y="' +
+          (yy + 10) + '">+' + (st.funcs.length - fShown) +
+          " more functions</text>";
+        yy += 15;
+      }
+      // call-graph connectors: focused function ↔ its direct neighbours.
+      // Green = functions it calls; amber dashed = functions that call
+      // it. Routed in the left gutter so the text stays readable.
+      if (focusFn && fnRowY[focusFn] !== undefined) {
+        const yF = fnRowY[focusFn], xc = g.x + 8;
+        let hidden = 0, k = 0;   // one shared rail counter so caller and
+                                 // callee arcs never sit on the same rail
+        const arc = (yA, yB, cls, mk) => {
+          const rail = 16 + Math.min(k, 6) * 6;   // bounded gutter bulge
+          k++;
+          svg += '<path class="' + cls + '" d="M' + xc + " " + yA + " C" +
+            (xc - rail) + " " + yA + " " + (xc - rail) + " " + yB + " " +
+            xc + " " + yB + '" marker-end="url(#' + mk + ')"/>';
+        };
+        (callees[focusFn] || []).forEach(c => {
+          if (fnRowY[c] === undefined) { hidden++; return; }
+          arc(yF, fnRowY[c], "callarrow", "mh");
+        });
+        (callers[focusFn] || []).forEach(c => {
+          if (fnRowY[c] === undefined) { hidden++; return; }
+          arc(fnRowY[c], yF, "callerarrow", "mc");
+        });
+        if (hidden)
+          svg += '<text class="defloc" x="' + (g.x + 14) + '" y="' +
+            (yy + 10) + '">(' + hidden +
+            " related function(s) beyond the shown list)</text>";
+      }
+      // classes as chips: click one to see its ancestry + methods
+      const chipPos = Object.create(null);
+      if (st.classes.length) {
+        const rows = Math.ceil(st.classes.length / m._ncols);
+        st.classes.forEach((c, i) => {
+          const cx = g.x + 10 + Math.floor(i / rows) * (m._chipW + CHIP_GAP);
+          const cy = g.y + m._gridY + (i % rows) * (CHIP_H + CHIP_GAP);
+          chipPos[c.n] = [cx, cy];
+          const meths = st.methods[c.n] || [];
+          const isSel = sel && sel.mod === m.id && sel.cls === c.n;
+          const isAnc = sel && sel.mod === m.id && ancSet.has(c.n);
+          const hit = query && (c.n.toLowerCase().includes(query) ||
+            meths.some(d => d.n.toLowerCase().includes(query)));
+          let chipEv = 0;
+          if (fns) meths.forEach(d => {
+            const q2 = own(fns, d.n);
+            if (q2) chipEv += heatKind === "time" ? (q2.tCum || 0) : q2.n;
+          });
+          const chipLabel = chipEv
+            ? (heatKind === "time" ? " " + fmtUs(chipEv) : " ×" + chipEv)
+            : "";
+          svg += '<g class="chip' + (isSel ? " sel" : "") +
+            (isAnc ? " anc" : "") + (hit ? " hit" : "") + '" data-mod="' +
+            esc(m.id) + '" data-cls="' + esc(c.n) + '"><rect x="' + cx +
+            '" y="' + cy + '" width="' + m._chipW + '" height="' + CHIP_H +
+            '" rx="5"' +
+            (chipEv ? ' style="fill:' + heatFill(chipEv) + '"' : "") +
+            '></rect><text x="' + (cx + 8) + '" y="' + (cy + 16) +
+            '">' + esc(fitText(c.n, m._chipW - 40)) +
+            ' <tspan class="mcount">·' + meths.length + chipLabel +
+            "</tspan></text><title>" +
+            esc(c.n + "  (line " + c.l + ", " + c.loc + " loc)" +
+                (c.bases ? "\nbases: " + c.bases.join(", ") : "") +
+                (chipEv ? "\nthis run: " + (heatKind === "time"
+                  ? fmtUs(chipEv) + " cumulative" : chipEv + " events")
+                  : "") +
+                (meths.length ? "\nmethods: " + meths.map(d =>
+                  d.n.split(".")[1]).join(", ") : "")) + "</title></g>";
+        });
+        if (sel && sel.mod === m.id)
+          hedges.forEach(pair => {
+            const pa = chipPos[pair[0]], pb = chipPos[pair[1]];
+            if (!pa || !pb) return;
+            // connect FACING sides so the head always points INTO the
+            // base chip: base above → top-to-bottom; base below →
+            // bottom-to-top; same row → side-to-side
+            const cw = m._chipW;
+            const ax = pa[0] + cw / 2, bx = pb[0] + cw / 2;
+            let d;
+            if (pb[1] + CHIP_H <= pa[1] - 4) {        // base above
+              const yA = pa[1], yB = pb[1] + CHIP_H;
+              const my = (yA + yB) / 2;
+              d = "M" + ax + " " + yA + " C" + ax + " " + my + " " + bx +
+                " " + my + " " + bx + " " + (yB + 3);
+            } else if (pb[1] >= pa[1] + CHIP_H + 4) { // base below
+              const yA = pa[1] + CHIP_H, yB = pb[1];
+              const my = (yA + yB) / 2;
+              d = "M" + ax + " " + yA + " C" + ax + " " + my + " " + bx +
+                " " + my + " " + bx + " " + (yB - 3);
+            } else {                                  // same row
+              const yMid = pa[1] + CHIP_H / 2;
+              const goRight = pb[0] > pa[0];
+              const sx = goRight ? pa[0] + cw : pa[0];
+              const ex = goRight ? pb[0] - 3 : pb[0] + cw + 3;
+              const mx2 = (sx + ex) / 2;
+              d = "M" + sx + " " + yMid + " C" + mx2 + " " + yMid + " " +
+                mx2 + " " + yMid + " " + ex + " " + yMid;
+            }
+            svg += '<path class="hedge" d="' + d +
+              '" marker-end="url(#mh)"/>';
+          });
+      }
+      // selected-class panel: base list + method inventory
+      if (sel && sel.mod === m.id) {
+        const c = st.classes.find(x => x.n === sel.cls);
+        const meths = st.methods[sel.cls] || [];
+        let py = g.y + m._panelY;
+        svg += '<text class="panelhead" x="' + (g.x + 12) + '" y="' +
+          (py + 14) + '">' + esc(sel.cls) + "</text>" +
+          '<text class="panelbase" x="' + (g.x + 12) + '" y="' + (py + 28) +
+          '">' + esc(c && c.bases ? "⤴ " + c.bases.join(", ")
+                     : "(no bases)") + "</text>";
+        py += 34;
+        const shown = Math.min(meths.length, 20);
+        meths.slice(0, shown).forEach(d => {
+          const fh = fns && own(fns, d.n);
+          const tip = "<title>" + esc(d.n + "  (line " + d.l + ", " +
+            d.loc + " loc)" + (fh ? "\n" + fh.n + " events this run" : "")) +
+            "</title>";
+          svg += '<text class="panelrow" x="' + (g.x + 18) + '" y="' +
+            (py + 10) + '">.' + esc(fitText(d.n.split(".").slice(1)
+            .join("."), g.w - 110)) + tip +
+            '</text><text class="defloc" x="' +
+            (g.x + g.w - 10) + '" y="' + (py + 10) + '" text-anchor="end">' +
+            (fh ? '<tspan class="fheat">×' + fh.n + "</tspan>  " : "") +
+            ":" + d.l + tip + "</text>";
+          py += 13;
+        });
+        if (meths.length > shown)
+          svg += '<text class="defloc" x="' + (g.x + 18) + '" y="' +
+            (py + 10) + '">+' + (meths.length - shown) + " more</text>";
+      }
+    }
+    svg += "</g>";
+  });
+  world.innerHTML = svgPkg + svgEdges + svg + svgSel +
+    '<g id="hovlayer"></g>';   // hover clones ride above EVERYTHING
+  hovTag = null;   // fresh paths carry no hover classes — forget the memo
+  // if the focused function is no longer on screen (its package got
+  // folded, a filter hid it) drop the focus so the legend can't get stuck
+  if (selFn && !focusShown) selFn = null;
+  $("hint").innerHTML = focusShown
+    ? '<span style="color:var(--call)">▸ calls</span> · ' +
+      '<span style="color:var(--warn)">▸ called by</span> · ' +
+      "click the name again to clear"
+    : "hover a box to light its arrows · click a package to " +
+      "fold/unfold · click a module to expand · drag to pan · " +
+      "wheel to zoom";
+}
+
+/* ---------- interaction ---------- */
+/* funnel handoff: compose the exact microscope command for a module or
+   a specific def — the map tells you WHERE, this writes the HOW */
+
+/* Who could give a library module "meat"? Walk the import graph
+   BACKWARDS from it: an importer that can run itself (__main__ guard)
+   is a borrowable entry point. Tests WITHOUT a guard are pytest-style —
+   they define functions and exit if run directly, so they are named
+   honestly but never given a fake command. */
+const revImp = Object.create(null);
+DATA.imports.forEach(e => {
+  (revImp[e.d] = revImp[e.d] || []).push(e.s);
+});
+const isTestish = id => id.split(".").some(seg =>
+  seg === "test" || seg === "tests" || seg.startsWith("test_") ||
+  seg.endsWith("_test"));
+function runnableImporters(id) {
+  const seen = new Set([id]);
+  let frontier = [id], dist = 0;
+  const runnable = [], testers = [];
+  while (frontier.length && dist < 12) {
+    dist++;
+    const next = [];
+    frontier.forEach(cur => (revImp[cur] || []).forEach(imp => {
+      if (seen.has(imp)) return;
+      seen.add(imp);
+      next.push(imp);
+      const m = byId[imp];
+      if (m && m.run) runnable.push({ id: imp, d: dist });
+      else if (isTestish(imp)) testers.push(imp);
+    }));
+    frontier = next;
+  }
+  runnable.sort((a, b) => a.d - b.d || (a.id < b.id ? -1 : 1));
+  return { runnable, testers: testers.sort() };
+}
+/* entry paths must work from wherever the user's shell is — absolute
+   via the map's known root (rel include patterns stay relative) */
+const absOf = r => DATA.rootPath
+  ? (DATA.rootPath.endsWith("/" + r) || DATA.rootPath.endsWith(r)
+     ? DATA.rootPath : DATA.rootPath + "/" + r)
+  : r;
+function showCmd(rel, line) {
+  // the entry script is only KNOWN when this map was built with
+  // --trace (the trace records what was run); otherwise the user must
+  // fill it in — say so, instead of emitting a fake-looking filename
+  let entry = DATA.heat && DATA.heat.script ? DATA.heat.script : null;
+  // the heat records only the entry's BASENAME (cwd-dependent) — if
+  // that script is itself one of the map's modules, resolve it to an
+  // absolute path so the command runs from any shell location
+  if (entry) {
+    const hit = mods.find(m => m.path === entry ||
+                               m.path.endsWith("/" + entry));
+    if (hit) entry = absOf(hit.path);
+  }
+  // POSIX single-quote escaping: a ' inside the value closes the quote,
+  // adds an escaped ', and reopens — safe for spaces AND quotes alike
+  const sh = s => "'" + String(s).replace(/'/g, "'\\''") + "'";
+  const mod = byPath[rel];
+  const startAt = line
+    ? "--start-at " + sh(rel.split("/").pop() + ":" + line) + " " : "";
+  let cmd, note;
+  if (!entry && mod && mod.run) {
+    // the module has a __main__ guard: it IS its own entry point
+    cmd = "python3 tracer.py " + startAt + sh(absOf(rel));
+    note = "complete — this module runs itself (it has an " +
+      "<b>if __name__ == \"__main__\"</b> block)";
+  } else if (entry && entry.slice(0, 3) === "-m ") {
+    // the heat came from a `-m MODULE` run (#21): recompose THAT form,
+    // scoped to this module, with the map's own root — quoting the label
+    // as a script path would hand the tracer a bogus '-m pytest' file.
+    // --include on the basename (not the map-relative path) so it matches
+    // under the trace's own --root, which strips the map's top folder.
+    cmd = "python3 tracer.py " + (startAt ? "" : "--granularity fn ") +
+      "--root " + sh(DATA.rootPath || ".") + " --include " +
+      sh(rel.split("/").pop()) + " " + startAt + entry;
+    note = "re-runs the traced entry <b>" + esc(entry) + "</b>, scoped to " +
+      "this module · <b>fn</b> granularity (a whole suite line-by-line is " +
+      "enormous) · add a path or <b>::test_name</b> to focus";
+  } else if (entry) {
+    cmd = "python3 tracer.py --include " + sh(rel) + " " +
+      startAt + sh(entry);
+    note = "";
+  } else {
+    // no trace, module can't run itself: borrow a RUNNABLE importer
+    const sug = mod ? runnableImporters(mod.id) : { runnable: [],
+                                                    testers: [] };
+    if (sug.runnable.length) {
+      const best = byId[sug.runnable[0].id];
+      cmd = "python3 tracer.py --include " + sh(rel.split("/").pop()) +
+        " " + startAt + sh(absOf(best.path));
+      note = "entry borrowed from <b>" + esc(sug.runnable[0].id) +
+        "</b> — it runs itself and imports this module" +
+        (sug.runnable[0].d > 1
+          ? " (" + sug.runnable[0].d + " imports away)" : "") +
+        (sug.runnable.length > 1
+          ? " · also runnable: " + sug.runnable.slice(1, 3)
+              .map(r => esc(r.id)).join(", ")
+          : "") +
+        " · trace it once and auto-heat learns your real entry";
+    } else if ((mod && isTestish(mod.id)) || sug.testers.length) {
+      // #21: reachable only via a pytest-style test suite — the tracer can
+      // now RUN it (`--root … -m pytest …`), so compose the real command
+      // instead of the YOUR_SCRIPT.py placeholder.
+      const selfTest = mod && isTestish(mod.id);
+      const testMod = selfTest ? mod : byId[sug.testers[0]];
+      const rootArg = sh(DATA.rootPath || ".");
+      cmd = "python3 tracer.py " + (startAt ? "" : "--granularity fn ") +
+        "--root " + rootArg + " --include " + sh(rel.split("/").pop()) +
+        " " + startAt + "-m pytest " + sh(absOf(testMod.path));
+      note = (selfTest
+        ? "this IS a pytest module — trace it directly under pytest (#21)"
+        : "entry via its test <b>" + esc(sug.testers[0]) + "</b>" +
+          (sug.testers.length > 1
+            ? " (+" + (sug.testers.length - 1) + " more)" : "") +
+          " — pytest runs it and it imports this module") +
+        " · <b>fn</b> granularity; add <b>::test_name</b> to focus";
+    } else {
+      cmd = "python3 tracer.py --include " + sh(rel) + " " +
+        startAt + "YOUR_SCRIPT.py";
+      note = "replace <b>YOUR_SCRIPT.py</b> with the script you " +
+        "actually run — the map can't know your entry point without " +
+        "a trace";
+    }
+  }
+  $("cmdtext").textContent = cmd;
+  $("cmdnote").innerHTML = note;
+  $("cmdnote").style.display = note ? "block" : "none";
+  $("cmdcopy").textContent = "copy";
+  $("cmdbox").style.display = "flex";
+}
+$("cmdcopy").onclick = () => {
+  const t = $("cmdtext").textContent;
+  const done = () => { $("cmdcopy").textContent = "copied!"; };
+  if (navigator.clipboard && navigator.clipboard.writeText)
+    navigator.clipboard.writeText(t).then(done, () => {});
+  else {
+    const ta = document.createElement("textarea");
+    ta.value = t;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand("copy");
+    ta.remove();
+    done();
+  }
+};
+$("cmdclose").onclick = () => { $("cmdbox").style.display = "none"; };
+
+$("canvas").addEventListener("click", e => {
+  if (dragMoved) return;
+  const cmdEl = e.target.closest(".cmdbtn");
+  if (cmdEl) { showCmd(cmdEl.dataset.f); return; }
+  // a function NAME → focus its call graph; the :line number → the
+  // scoped tracer command (checked before the generic .defrow branch,
+  // since the name element also carries the .defrow class)
+  const fnEl = e.target.closest(".fnname");
+  if (fnEl) {
+    const mid = fnEl.dataset.mod, fn = fnEl.dataset.fn;
+    if (DATA.intra && own(DATA.intra, mid)) {
+      selFn = selFn && selFn.mod === mid && selFn.fn === fn
+        ? null : { mod: mid, fn };
+      sel = null;   // class focus and function focus are exclusive
+      render();
+    } else {
+      showCmd(fnEl.dataset.f, fnEl.dataset.l);   // no call data: fall back
+    }
+    return;
+  }
+  const defEl = e.target.closest(".defrow");
+  if (defEl && defEl.dataset.f) {
+    showCmd(defEl.dataset.f, defEl.dataset.l);
+    return;
+  }
+  const chip = e.target.closest(".chip");
+  if (chip) {
+    const next = { mod: chip.dataset.mod, cls: chip.dataset.cls };
+    sel = sel && sel.mod === next.mod && sel.cls === next.cls ? null : next;
+    selFn = null;   // class focus and function focus are exclusive
+    render();
+    return;
+  }
+  const g = e.target.closest(".mod");
+  if (g) {
+    const id = g.dataset.mod;
+    if (expanded.has(id)) {
+      expanded.delete(id);
+      if (sel && sel.mod === id) sel = null;
+      if (selFn && selFn.mod === id) selFn = null;
+    } else expanded.add(id);
+    render();
+    return;
+  }
+  // a package box (members sit on top, so this is the header/frame)
+  const pk = e.target.closest(".pkg");
+  if (pk) {
+    const gid = pk.dataset.pkg;
+    if (folded.has(gid)) folded.delete(gid);
+    else folded.add(gid);
+    render();
+  }
+});
+/* hover ANY box — module or package, folded or open — and its arrows
+   pop while the rest recede. Pure class toggling on the rendered
+   paths: no re-render, so it's instant even on big maps. Click keeps
+   its structural meaning (fold / expand). */
+let hovTag = null;
+function applyHover(mKey, gKey) {
+  const tag = mKey || (gKey ? "g:" + gKey : null);
+  if (tag === hovTag) return;
+  hovTag = tag;
+  const layer = document.getElementById("hovlayer");
+  if (layer) layer.innerHTML = "";   // drop previous hover clones
+  const paths = [...document.querySelectorAll(".iedge, .cedge, .clabel")];
+  const isRel = el => {
+    const d = el.dataset;
+    return mKey ? (d.ka === mKey || d.kb === mKey)
+      : gKey ? (d.ga === gKey || d.gb === gKey) : false;
+  };
+  // a box whose edges are all HIDDEN (e.g. only intra siblings) must
+  // not blank the whole map — no related edges, no fading at all
+  const active = !!tag && paths.some(p2 =>
+    !p2.classList.contains("clabel") && isRel(p2));
+  paths.forEach(p2 => {
+    const rel = active && isRel(p2);
+    p2.classList.toggle("hovoff", active && !rel);
+    if (!rel || !layer || p2.classList.contains("clabel")) return;
+    // lit arrows get the full selection treatment, transiently: a
+    // CLONE on the top layer — above every box, fattened, tail dot,
+    // bright head — while the original stays put for a perfect restore
+    const c = p2.cloneNode(true);
+    c.classList.add("hov");
+    c.classList.remove("hovoff", "fade", "dimmed");
+    c.style.strokeWidth =
+      ((parseFloat(p2.style.strokeWidth) || 1.4) + 1.8) + "px";
+    c.style.pointerEvents = "none";
+    if (c.classList.contains("iedge")) {
+      if (!c.classList.contains("cyc"))
+        c.setAttribute("marker-end", "url(#ms)");
+      c.setAttribute("marker-start", "url(#md)");
+    }
+    layer.appendChild(c);
+  });
+}
+$("canvas").addEventListener("mouseover", e => {
+  if (panning) return;   // no hover churn mid-drag
+  const mod = e.target.closest(".mod");
+  if (mod) { applyHover("m:" + mod.dataset.mod, null); return; }
+  const pk = e.target.closest(".pkg");
+  if (pk) { applyHover(null, pk.dataset.pkg); return; }
+  applyHover(null, null);
+});
+$("canvas").addEventListener("mouseleave", () => applyHover(null, null));
+
+$("showcalls").onchange = render;
+$("showcyc").onchange = render;
+$("showheat").onchange = render;
+/* one spotlight at a time: search, a cycle, or a walls row — every
+   entry point clears the others, and the note-bar link state follows */
+function setCycleSel(i) {
+  cycleSel = i;
+  document.querySelectorAll(".cyclink").forEach(el =>
+    el.classList.toggle("on",
+      el.dataset.i !== undefined && +el.dataset.i === i));
+}
+$("search").oninput = e => {
+  query = e.target.value.trim().toLowerCase();
+  setCycleSel(null);
+  exactSel = null;
+  render();
+};
+$("foldall").onclick = () => {
+  realPkgs.forEach(g => folded.add(g.id));
+  render();
+};
+$("unfoldall").onclick = () => {
+  folded.clear();
+  render();
+};
+
+/* cycles in the note bar: click one to spotlight its members;
+   "+N more…" expands the full list */
+$("note").addEventListener("click", e => {
+  const more = e.target.closest(".cycmore");
+  if (more) {
+    buildNote(true);
+    setCycleSel(cycleSel);   // re-sync the on-classes after the rebuild
+    return;
+  }
+  const l = e.target.closest(".cyclink");
+  if (!l) return;
+  const i = +l.dataset.i;
+  setCycleSel(cycleSel === i ? null : i);
+  query = "";
+  $("search").value = "";
+  exactSel = null;
+  render();
+});
+
+/* walls: the top modules by fan-in — what everything else leans on */
+function fanTable() {
+  if (DATA.fan) return DATA.fan;
+  const f = Object.create(null);   // older payloads: derive from edges
+  mods.forEach(m => { f[m.id] = { i: 0, o: 0 }; });
+  DATA.imports.forEach(e => {
+    if (f[e.s] && f[e.d]) { f[e.s].o++; f[e.d].i++; }
+  });
+  return f;
+}
+$("walls").onclick = () => {
+  const box = $("wallsbox");
+  if (box.style.display === "block") {
+    box.style.display = "none";
+    return;
+  }
+  const rows = Object.entries(fanTable())
+    .sort((a, b) => b[1].i - a[1].i || (a[0] < b[0] ? -1 : 1))
+    .slice(0, 10);
+  $("wallsbody").innerHTML = rows.filter(r => r[1].i || r[1].o)
+    .map(([id, f]) =>
+      '<div class="wallrow" data-id="' + esc(id) + '"><span class="win">←' +
+      f.i + '</span><span class="wout">→' + f.o + "</span>" + esc(id) +
+      "</div>").join("") ||
+    '<div class="wallrow">(no internal imports)</div>';
+  box.style.display = "block";
+};
+$("wallsbody").onclick = e => {
+  const r = e.target.closest(".wallrow");
+  if (!r || !r.dataset.id) return;
+  // exact-id spotlight: a substring query for a package name would
+  // light every sub-module box and the clicked wall would drown
+  exactSel = exactSel === r.dataset.id ? null : r.dataset.id;
+  query = "";
+  $("search").value = "";
+  setCycleSel(null);
+  render();
+};
+
+/* pan + zoom */
+let scale = 1, tx = 0, ty = 0, panning = false, px = 0, py = 0,
+    dragMoved = false;
+function apply() {
+  world.setAttribute("transform",
+    "translate(" + tx + " " + ty + ") scale(" + scale + ")");
+}
+const canvas = $("canvas");
+canvas.addEventListener("wheel", e => {
+  e.preventDefault();
+  const f = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+  const ns = Math.min(4, Math.max(0.05, scale * f));
+  const r = ns / scale;
+  tx = e.clientX - r * (e.clientX - tx);
+  ty = e.clientY - r * (e.clientY - ty);
+  scale = ns;
+  apply();
+}, { passive: false });
+canvas.addEventListener("mousedown", e => {
+  panning = true; dragMoved = false; px = e.clientX; py = e.clientY;
+  canvas.classList.add("panning");
+});
+window.addEventListener("mousemove", e => {
+  if (!panning) return;
+  if (Math.abs(e.clientX - px) + Math.abs(e.clientY - py) > 3)
+    dragMoved = true;
+  tx += e.clientX - px; ty += e.clientY - py;
+  px = e.clientX; py = e.clientY;
+  apply();
+});
+window.addEventListener("mouseup", () => {
+  panning = false;
+  canvas.classList.remove("panning");
+});
+function fit() {
+  const bb = world.getBBox();
+  if (!bb.width) return;
+  const cw = canvas.clientWidth, chh = canvas.clientHeight;
+  scale = Math.min(4, Math.min(cw / (bb.width + 80),
+                               chh / (bb.height + 80)));
+  tx = (cw - bb.width * scale) / 2 - bb.x * scale;
+  ty = (chh - bb.height * scale) / 2 - bb.y * scale;
+  apply();
+}
+$("fit").onclick = fit;
+
+render();
+fit();
+</script>
+</body>
+</html>

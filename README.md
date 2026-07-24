@@ -2,8 +2,13 @@
 
 **See what Python is actually doing.** A zero-dependency tracer and static
 mapper that turn a Python run — or a whole codebase — into an explorable,
-self-contained HTML page. Think *Python Tutor, but for real programs, and
-honest about what it doesn't know.*
+self-contained HTML page. It's built for a problem that keeps growing: an
+LLM can generate a whole project in seconds, but quickly grasping what that
+code *actually does*, and how it all fits together, is not easy. pyreplay
+makes that first pass fast — record a run and replay it step by step, or
+map the whole codebase at a glance. It won't fix your bugs (that's what a
+professional IDE is for) — it's the fast first look, especially at code an
+LLM wrote.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)

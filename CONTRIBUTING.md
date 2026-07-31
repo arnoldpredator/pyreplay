@@ -128,6 +128,8 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
 | 84 | Shadowing & collision audit | S | ★★ |
 | 85 | Float-hygiene probes | S–M | ★★ |
 | 86 | Event-loop starvation detector | S | ★★ |
+| 87 | Mutation-survivor forensics | M | ★★★ |
+| 88 | Metamorphic relations harness | S–M | ★★ |
 
 ---
 
@@ -1235,6 +1237,69 @@ original brief)*
 - **Prior art:** `PYTHONASYNCIODEBUG`'s slow_callback_duration — a
   logged line nobody sees; ours lands on the lane where it
   happened.
+
+## Section 10 — The verification pass (2026-07-31)
+
+A posterior-verification canon (the full gauntlet: typing gates →
+static analysis → property-based testing → mutation testing → formal
+methods → production gates) was checked against this list. Most rungs
+were already covered by the reliability lab and its neighbors
+(#25–#36, #66, #78) — pyreplay's role there is the instrument *under*
+the gauntlet: when a gate goes red, it shows why; before properties
+exist, it drafts them from observed behavior. Two real gaps surfaced,
+both places where recording the execution adds something the
+standalone gate lacks.
+
+### 87. Mutation-survivor forensics
+*(belongs with Section 1 — the reliability lab)*
+- **What:** mutation testing's chore is the *surviving* mutant — a
+  planted bug no test killed. Bridge to mutmut/cosmic-ray (used
+  as-is): for each survivor, run the nearest test twice at fn/line
+  granularity — original code vs mutant — align the two traces with
+  the divergence finder (#26), and report the first behavioral
+  divergence plus the values that differed with no assertion
+  consuming them. That's not just "this mutant survived" — it's *the
+  assertion you forgot to write*, located.
+- **Why:** in a no-reading regime the mutation score is your
+  eyesight (the only direct measurement of the test suite itself),
+  and survivors are exactly where the suite is blind. Today killing
+  a survivor means reading the diff and guessing; a traced
+  divergence turns it into a mechanical fix.
+- **How:** thin reader over the mutation tool's results cache →
+  re-run the covering test under the tracer for both versions
+  (#25's runner) → #26 alignment → report. Honesty note (the
+  equivalent-mutant problem): some mutants change nothing
+  observable; when the traces never diverge, say exactly that —
+  "no behavioral divergence found; possibly an equivalent mutant" —
+  never invent a difference.
+- **Effort:** M (needs #25 + #26; the bridge itself is thin).
+- **Prior art:** mutmut, cosmic-ray; the equivalent-mutant
+  literature. No tool today explains *why* a survivor survived.
+
+### 88. Metamorphic relations harness
+*(belongs with Section 1 — the reliability lab; sibling of #33)*
+- **What:** differential testing (#33) needs a second
+  implementation; metamorphic testing needs only a *symmetry*: the
+  true output may be unknown, but `f(perm(x)) == f(x)`,
+  `dist(a,b) == dist(b,a)`, `f(2x) == 2·f(x)` must still hold.
+  `--relation "f(sorted(x)) == f(x)"`-style declarations run under
+  the N-run harness (#25) over generated inputs (#29); a violation
+  keeps the input, shrinks it (#28), and traces both sides of the
+  broken symmetry.
+- **Why:** the oracle problem is the hard wall of testing numerical
+  and scientific code — you often *can't* say what the right answer
+  is, but you always know its invariances. This is the cheapest
+  verification instrument that works with no oracle at all, and a
+  natural fit for the physicist's instinct (conservation laws as
+  tests).
+- **How:** a relation is a pair (input transform, output relation)
+  evaluated by the existing `--start-when`/`--invariant` expression
+  machinery; violations become first-class events with the usual
+  scrubber markers; #26 diffs the two runs of a broken relation.
+- **Effort:** S–M on top of #25/#29.
+- **Prior art:** metamorphic testing (T.Y. Chen et al., 1998) —
+  standard in compiler and search-engine testing, almost never
+  available to everyday Python.
 
 ## Deliberately still rejected
 

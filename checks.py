@@ -179,6 +179,50 @@ def _():
            "self-reference must degrade to opaque, not recurse")
 
 
+@check("collapse honesty: call events diff attrs vs last observation")
+def _():
+    # a method-entry re-emission of an object seen before must stamp the
+    # HONEST changed-attr list (`cha`, possibly empty) — not re-flag every
+    # attribute because the frame is new. A mutation the tracer never saw
+    # (scoped-out file) must land in cha on the next observed call.
+    fixture("fx_poke.py", (
+        "def poke(o):\n"
+        "    o.state += 1\n"
+        "def poke_and_read(o):\n"
+        "    o.state += 1\n"
+        "    return o.read()\n"))
+    fx = fixture("fx_attrcall.py", (
+        "from fx_poke import poke, poke_and_read\n"
+        "class Box:\n"
+        "    def __init__(self):\n"
+        "        self.state = 0\n"
+        "        self.k = 1\n"
+        "    def read(self):\n"
+        "        return self.state\n"
+        "b = Box()\n"
+        "b.read()\n"
+        "poke_and_read(b)\n"
+        "poke(b)\n"
+        "b.read()\n"))
+    evs = run_trace(fx, "--include", "fx_attrcall.py")["events"]
+    init = [e for e in evs if e["e"] == "call" and e["fn"] == "__init__"]
+    expect(init and "cha" not in init[0]["ch"].get("self", {}),
+           "first-ever observation must carry NO cha (everything is new)")
+    reads = [e for e in evs if e["e"] == "call" and e["fn"] == "read"
+             and "self" in e["ch"]]
+    expect(len(reads) == 3, f"expected 3 read() calls, got {len(reads)}")
+    expect(reads[0]["ch"]["self"].get("cha") == [],
+           f"1st read: object already observed, nothing moved — cha must "
+           f"be [], got {reads[0]['ch']['self'].get('cha')!r}")
+    expect(reads[1]["ch"]["self"].get("cha") == ["state"],
+           f"read from a scoped-OUT frame: the unobserved mutation must "
+           f"surface as cha=['state'], "
+           f"got {reads[1]['ch']['self'].get('cha')!r}")
+    expect(reads[2]["ch"]["self"].get("cha") == [],
+           f"3rd read: the poke was already observed at the module line — "
+           f"call must be quiet, got {reads[2]['ch']['self'].get('cha')!r}")
+
+
 @check("aliasing: dict-in-list mutation stamps chi")
 def _():
     fx = fixture("fx_alias.py", (

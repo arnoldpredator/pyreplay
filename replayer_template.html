@@ -1499,14 +1499,22 @@ function render() {
         const oldMap = {};
         if (old !== undefined && old.t === "obj")
           old.v.forEach(p => { oldMap[p[0]] = p[1]; });
-        // "cha" = tracer-stamped names of attrs whose DEEP contents
-        // changed (beyond the encoded head) — authoritative
+        // "cha" = tracer-stamped names of the attrs that ACTUALLY changed.
+        // On CALL events it is authoritative, even when EMPTY (a method-
+        // entry re-emission of an object seen before: nothing moved, so
+        // no attr row flags). On LINE events it only SUPPLEMENTS the sig
+        // comparison (it lists deep changes; shallow ones are caught by
+        // sig). Absent cha (old traces, first observation) falls back to
+        // sig; frame birth then shows all attrs as new — honestly, since
+        // nothing was ever observed before.
+        const hasCha = Array.isArray(v.cha) && ev.e === "call";
         const chaSet = new Set(v.cha || []);
         v.v.forEach(([ak, av]) => {
           const aOld = oldMap[ak];
-          const aCh = isCh && (chaSet.has(ak) ||
-                               old === undefined || old.t !== "obj" ||
-                               aOld === undefined || sig(aOld) !== sig(av));
+          const aCh = isCh && (hasCha
+            ? chaSet.has(ak)
+            : (old === undefined || old.t !== "obj" ||
+               aOld === undefined || sig(aOld) !== sig(av)));
           displayRows.push({ label: k + "." + ak, enc: av,
                              old: aCh ? aOld : undefined, isCh: aCh });
         });

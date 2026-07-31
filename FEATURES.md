@@ -512,7 +512,11 @@ dead or invented panel; every cap and truncation is announced.
   are encoded as first-class values; nested objects recurse; cycles
   terminate.
 - **Displayed:** `self.adj_list`, `g.N` appear as their own rows, each
-  with its own view selector — a graph stored inside an object gets
+  with its own view selector. On a method-entry event, an attribute
+  flags as changed only if it differs from the object's **last
+  observation** — static config attrs stay quiet instead of re-flagging
+  on every call (on the object's first appearance everything is
+  honestly new and shows in full) — a graph stored inside an object gets
   the graph offer right where it lives; nested objects render as
   attribute tables.
 - **Why:** OOP code stops being opaque `<Cart object at 0x…>` blobs.

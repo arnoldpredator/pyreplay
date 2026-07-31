@@ -65,6 +65,7 @@ import runpy
 import sys
 import threading
 import time
+import weakref
 import types
 
 MAX_EVENTS = 200_000   # safety cap so a hot loop can't produce a 2 GB trace
@@ -571,6 +572,15 @@ class Tracer:
         self.sources = {}      # rel path -> file text, embedded for the viewer
         self._path_cache = {}  # raw co_filename -> rel path or None (= skip)
         self._snapshots = {}   # id(frame) -> {var: repr} for change detection
+        # id(obj) -> (weakref|None, class name, attr encodings, attr
+        # fingerprints): the last observation of each object ACROSS frames.
+        # On a method-call event a promoted attribute counts as changed
+        # only against this memory — not merely because the frame is new.
+        # First observation = no entry = everything legitimately new
+        # (shown in full). The weakref guards against id() reuse;
+        # unweakrefable classes fall back to a class-name check and accept
+        # the (value-identical) residual risk.
+        self._objmem = {}
         self.truncated = False
         # CLI runs abort at the cap (no point running on once the trace is
         # full); in-process watch() must NOT kill its host — it uninstalls
@@ -919,6 +929,45 @@ class Tracer:
                 if oldpair is not None and oid is not None \
                         and oldpair[2] == oid:
                     muts.append(name)
+            if isinstance(enc, dict) and enc.get("t") == "obj" \
+                    and oid is not None:
+                # frame birth re-emits every attr as "changed"; diff the
+                # object against its LAST OBSERVATION instead, and stamp
+                # the honest changed-attr list (possibly EMPTY — "seen
+                # before, nothing moved"). No memory = first observation
+                # = no stamp = everything shown, honestly new. Encodings
+                # are the comparable unit (they exist for every attr);
+                # fingerprints supplement for deep-beyond-head changes.
+                fps = fp[1] if (isinstance(fp, tuple) and fp
+                                and fp[0] == "obj") else {}
+                if event == "call" and oldpair is None \
+                        and name in changed:
+                    mem = self._objmem.get(oid)
+                    if mem is not None and (
+                            mem[0]() is not None if mem[0] is not None
+                            else mem[1] == type(value).__name__):
+                        cha = []
+                        for ak, aenc in enc.get("v", []):
+                            try:
+                                moved = mem[2].get(ak) != aenc
+                                if not moved:
+                                    pf, nf = mem[3].get(ak), fps.get(ak)
+                                    if pf is not None or nf is not None:
+                                        moved = pf is not nf and pf != nf
+                            except Exception:
+                                moved = True
+                            if moved:
+                                cha.append(ak)
+                        changed[name] = {**changed[name], "cha": cha}
+                try:
+                    wr = weakref.ref(value)
+                except TypeError:
+                    wr = None
+                self._objmem[oid] = (wr, type(value).__name__,
+                                     dict(enc.get("v", [])), fps)
+        if len(self._objmem) > 8192:   # prune dead entries, bounded memory
+            self._objmem = {k: m for k, m in self._objmem.items()
+                            if m[0] is not None and m[0]() is not None}
         self._snapshots[id(frame)] = cur
         ali = [v for v in by_oid.values() if len(v) > 1]
 

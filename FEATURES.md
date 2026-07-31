@@ -599,7 +599,11 @@ dead or invented panel; every cap and truncation is announced.
   values as of *before* the line executes (a line's effect appears on
   the next event); return values ride on RETURN events.
 - **Displayed:** the Event panel lists them next to the badge — read
-  the inputs, predict, then step.
+  the inputs, predict, then step. An object mentioned only through
+  specific attributes (`self.G`) shows just those attribute rows, not
+  the whole object; a bare mention (or anything the static pass can't
+  see) keeps the full object — and the badges menu's "full objects in
+  line panel" toggle restores the old behavior.
 - **Why:** matches how you reason about a line: what does it see, what
   will it do.
 - **Use case:** before stepping an `if`, read the operands it's about

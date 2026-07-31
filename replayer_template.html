@@ -323,6 +323,7 @@
         <label><input type="checkbox" data-mach="imp"> &#9881; import time</label>
         <label><input type="checkbox" data-mach="mro"> MRO panel</label>
         <label><input type="checkbox" data-mach="dun"> dunder hints</label>
+        <label><input type="checkbox" data-mach="fullobj"> full objects in line panel</label>
       </div>
     </details>
   </div>
@@ -1305,7 +1306,7 @@ function computeStacks(idx) {
    glyphs on; the wordier panels (MRO, dunder) off. */
 const MACH_KEY = "pyreplay-mach";
 const MACH_DEFAULTS = { alias: true, cell: true, def: true, imp: true,
-                        mro: false, dun: false };
+                        mro: false, dun: false, fullobj: false };
 let MACH = { ...MACH_DEFAULTS };
 try { MACH = { ...MACH_DEFAULTS,
                ...JSON.parse(localStorage.getItem(MACH_KEY) || "{}") }; }
@@ -1440,9 +1441,37 @@ function render() {
   let panel = "";
   if (ev.e === "line") {
     const names = ((DATA.linevars || {})[ev.f] || {})[ev.l] || [];
+    const lattrs = ((DATA.lineattrs || {})[ev.f] || {})[ev.l] || {};
+    // an object mentioned ONLY through specific attributes (self.G) shows
+    // just those attribute rows — unless the user asked for full objects
+    // (badges menu), the attr list is unknown (bare mention, getattr, old
+    // trace), or a mentioned attr may hide beyond a TRUNCATED encoding
+    // head (can't be sure -> show the whole object; unknown = show all).
     const vals = names.filter(n => top && n in top.vars)
-      .map(n => '<div class="cvar"><span class="vn">' + escapeHtml(n) +
-        "</span> = " + renderValue(top.vars[n]) + "</div>")
+      .map(n => {
+        const v = top.vars[n];
+        const want = lattrs[n];
+        if (!MACH.fullobj && v && v.t === "obj" &&
+            Array.isArray(want) && want.length) {
+          const encMap = {};
+          v.v.forEach(p => { encMap[p[0]] = p[1]; });
+          const complete = v.n <= v.v.length;
+          const rows = [];
+          let sure = true;
+          for (const a of want) {
+            if (a in encMap) rows.push([n + "." + a, encMap[a]]);
+            else if (!complete) { sure = false; break; }
+            // complete head + absent = not instance state (a method,
+            // class attr…): nothing to show for it — skip, honestly
+          }
+          if (sure && rows.length)
+            return rows.map(([lbl, enc]) =>
+              '<div class="cvar"><span class="vn">' + escapeHtml(lbl) +
+              "</span> = " + renderValue(enc) + "</div>").join("");
+        }
+        return '<div class="cvar"><span class="vn">' + escapeHtml(n) +
+          "</span> = " + renderValue(v) + "</div>";
+      })
       .join("");
     if (ev.cond) {
       const k = ev.cond.k || "if";

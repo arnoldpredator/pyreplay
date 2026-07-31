@@ -1212,6 +1212,46 @@ def build_line_vars(source, filename="<unknown>"):
     return out
 
 
+def build_line_attrs(source, filename="<unknown>"):
+    """Static analysis: which ATTRIBUTES of each base name a line mentions
+    (`r = s.G @ o` -> {L: {"s": ["G"]}}). A base that also appears BARE on
+    the line (`probe(s) + s.G`) is omitted — the line works with the whole
+    object, so the viewer must not narrow it. Chains record the first hop
+    only (`s.a.b` -> "a"). The viewer uses this to show just the mentioned
+    attribute rows of an object instead of its full dump; anything this
+    pass cannot see (getattr, computed access) simply isn't recorded and
+    the viewer falls back to the whole object — unknown = show all."""
+    out = {}
+    try:
+        tree = ast.parse(source, filename=filename)
+    except SyntaxError:
+        return out
+    consumed = set()      # id() of Name nodes that are an Attribute's base
+    attr_pairs = {}       # line -> [(col, base, attr)]
+    bare = {}             # line -> {base names used on their own}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) \
+                and isinstance(node.value, ast.Name):
+            nm = node.value
+            consumed.add(id(nm))
+            attr_pairs.setdefault(nm.lineno, []).append(
+                (nm.col_offset, nm.id, node.attr))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and id(node) not in consumed:
+            bare.setdefault(node.lineno, set()).add(node.id)
+    for line, pairs in attr_pairs.items():
+        per_base = {}
+        for _, base, attr in sorted(pairs):
+            if base in bare.get(line, ()):
+                continue
+            lst = per_base.setdefault(base, [])
+            if attr not in lst and len(lst) < 8:
+                lst.append(attr)
+        if per_base:
+            out[line] = per_base
+    return out
+
+
 def build_dataflow(source, filename="<unknown>"):
     """Static data-flow: for each assignment line, which SOURCE names feed
     each TARGET name. `c = a + b` -> {L: {"c": ["a", "b"]}}. Powers the
@@ -1678,6 +1718,9 @@ def _write_trace(tr, out, granularity, entry_label, error,
         "linevars": {rel: build_line_vars(text, rel)
                      for rel, text in tr.sources.items()}
                     if granularity == "line" else {},
+        "lineattrs": {rel: build_line_attrs(text, rel)
+                      for rel, text in tr.sources.items()}
+                     if granularity == "line" else {},
         "dataflow": {rel: build_dataflow(text, rel)
                      for rel, text in tr.sources.items()}
                     if granularity == "line" else {},

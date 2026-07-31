@@ -293,6 +293,44 @@ def _():
            f"linevars for the loop wrong: {lv.get('22')}, {lv.get('23')}")
 
 
+@check("line panel: attr mentions — bare use disables narrowing")
+def _():
+    # `r = s.G + o` narrows s to its mentioned attr; `probe(s) + s.G`
+    # uses s BARE on the same line, so no narrowing (the viewer must
+    # show the whole object); method mentions are recorded too (the
+    # viewer decides what to do with non-state attrs).
+    body = (
+        "class S:\n"
+        "    def __init__(self):\n"
+        "        self.G = [1, 2]\n"
+        "        self.kappa = 0.3\n"
+        "    def step(self):\n"
+        "        return 0\n"
+        "def probe(x):\n"
+        "    return 0\n"
+        "s = S()\n"
+        "o = [3]\n"
+        "r = s.G + o\n"
+        "q = probe(s) + len(s.G)\n"
+        "w = s.step()\n")
+    fx = fixture("fx_lattr.py", body)
+    la = run_trace(fx)["lineattrs"]["fx_lattr.py"]
+    lines = body.split("\n")
+    lno = {frag: i + 1 for i, frag in enumerate(lines)}
+    r_l = str(lno["r = s.G + o"])
+    q_l = str(lno["q = probe(s) + len(s.G)"])
+    w_l = str(lno["w = s.step()"])
+    g_l = str(lno["        self.G = [1, 2]"])
+    expect(la.get(r_l, {}).get("s") == ["G"],
+           f"attr read must narrow: line {r_l} -> {la.get(r_l)!r}")
+    expect("s" not in la.get(q_l, {}),
+           f"bare use must disable narrowing: line {q_l} -> {la.get(q_l)!r}")
+    expect(la.get(w_l, {}).get("s") == ["step"],
+           f"method mention recorded: line {w_l} -> {la.get(w_l)!r}")
+    expect(la.get(g_l, {}).get("self") == ["G"],
+           f"attr TARGET recorded (pre-value matters): {la.get(g_l)!r}")
+
+
 @check("provenance: static data-flow (target <- sources) per assignment")
 def _():
     fx = fixture("fx_dataflow.py", (

@@ -3,14 +3,14 @@
 Everything already built is in FEATURES.md (the 62-feature catalog).
 This file is the other half — **every feature we know we want and have
 not built yet** — and how to contribute one. It's written so a stranger
-can pick an item and implement it. Features are numbered **#25 onward**
-(#1–24 are already shipped).
+can pick an item and implement it. Features are numbered **#63 onward**, continuing the catalog of the
+62 shipped features in FEATURES.md (#01–#62).
 
 ## Start here — how to contribute
 
 New here and want to help? Three steps:
 
-1. **Pick something.** The **Index** below lists features #25–#86; the
+1. **Pick something.** The **Index** below lists features #63–#126; the
    **Good first** lists at the end are the gentlest way in. Bug reports,
    edge cases, and more `example_*.py` programs are just as welcome.
    Adding **another language** is the biggest prize — see "Support
@@ -50,13 +50,13 @@ The rest is reconstructed as design lenses, not quotes:
 
 - **The Hotz lens — machine truth, zero overhead.** Show the actual
   interpreter (bytecode, specializations), cost nothing when idle,
-  attach to anything, never fake a number. → #47, #48, #64, #65, #55.
+  attach to anything, never fake a number. → #85, #86, #102, #103, #93.
 - **The Torvalds lens — bisect it, diff it, no magic.** Every bug is
   a difference between a world that works and one that doesn't; build
-  the tools that find the first divergence. → #26, #32, #33, #57.
+  the tools that find the first divergence. → #64, #70, #71, #95.
 - **The Stroustrup lens — types, invariants, resources.** What holds
   always? What type flows here? Who owns this resource and who closed
-  it? → #35, #36, #44, #46.
+  it? → #73, #74, #82, #84.
 
 **Effort:** S = a focused day · M = several days · L = a week+, schema
 touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
@@ -66,70 +66,70 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
 
 | # | Feature | Effort | Payoff |
 |---|---------|--------|--------|
-| 25 | Run it N times; count outcomes, catch flakes | M | ★★★ |
-| 26 | First event where two runs diverge | L | ★★★ |
-| 27 | Color lines by failing-run correlation (SBFL) | S | ★★★ |
-| 28 | Auto-shrink a failing input (ddmin) | M | ★★ |
-| 29 | Random-input entry with seed capture | M | ★★ |
-| 30 | Perturb thread/task schedules to flush races | L | ★★★ |
-| 31 | Inject exceptions/latency on purpose | L | ★★ |
-| 32 | git bisect driven by a trace predicate | S | ★★★ |
-| 33 | Compare implementations on the same inputs | M | ★★ |
-| 34 | Record extra expressions each line (--watch) | S | ★★ |
-| 35 | Contracts checked during the run (--invariant) | S | ★★ |
-| 36 | Mine the invariants the runs never broke | L | ★★★ |
-| 37 | Full backward slice of a value | L | ★★★ |
-| 38 | Forward taint from an input | L | ★★ |
-| 39 | "Why didn't this line run?" | M | ★★★ |
-| 40 | Prove a loop is stuck (state recurrence) | M | ★★ |
-| 41 | Catch the first NaN/Inf at birth | S | ★★★ |
-| 42 | Strip-charts + phase portraits of variables | M | ★★★ |
-| 43 | Object-reference graph at an event | L | ★★ |
-| 44 | Per-variable type histograms; None alarms | M | ★★ |
-| 45 | Array shape/dtype timeline | M | ★★★ |
-| 46 | I/O lane via audit hooks; resource-leak pairing | M | ★★ |
-| 47 | Code anatomy: AST + bytecode panel | S–XL | ★★ |
-| 48 | Ternary/short-circuit verdicts via BRANCH events | L | ★★ |
-| 49 | Memory heat on the map (tracemalloc) | M | ★★ |
-| 50 | Who-woke-whom arrows across tasks/threads | L | ★★★ |
-| 51 | Critical path through a concurrent run | M | ★★ |
-| 52 | Lock-wait attribution | L | ★★ |
-| 53 | Multiprocessing children traced into lanes | XL | ★★★ |
-| 54 | Live streaming replayer (--serve) | L | ★★ |
-| 55 | Attach to a running process (PEP 768) | M | ★★★ |
-| 56 | Project-wide static call graph | L | ★★ |
-| 57 | Git churn × complexity overlay | M | ★★★ |
-| 58 | Declared layering rules; violations in red | S | ★★ |
-| 59 | Dead code with runtime evidence | M | ★★ |
-| 60 | Per-test chapters in suite traces | M | ★★★ |
-| 61 | Startup import-cost view | S | ★★ |
-| 62 | Public-API vs actual-use leaks | M | ★★ |
-| 63 | Chunked trace + keyframes past 2M events | L | ★★★ |
-| 64 | monitoring-backed cheaper LINE tracing | M | ★★ |
-| 65 | Black-box flight recorder (ring buffer) | M | ★★★ |
-| 66 | Reproducibility capsule (stdin/env/seeds) | S–XL | ★★★ |
-| 67 | Schema spec + import/export bridges | M | ★★ |
-| 68 | Deep links: a URL that opens a moment | S | ★★★ |
-| 69 | Notes pinned to events; exportable | M | ★★ |
-| 70 | Recorded walkthroughs (executable lessons) | M | ★★ |
-| 71 | Query bar over all events | M | ★★★ |
-| 72 | Two traces side by side, cursors synced | M | ★★ |
-| 73 | Export a panel as video/GIF | M | ★★ |
-| 74 | Sortable table view for list-of-dicts | S | ★★ |
-| 75 | Ghost-highlight the untaken branch | S | ★★ |
-| 76 | Hear the trace (sonification) | M | ★ |
-| 77 | Text bundle of a trace slice | S | ★★ |
-| 78 | Symbolic "what input reaches this line" | XL | ★ |
-| 79 | Full deterministic record/replay | XL | ★★ |
-| 80 | Console & logging lane synced to the trace | M | ★★★ |
-| 81 | Dynamic edges: runtime relations the parse can't see | M | ★★★ |
-| 82 | Boundary schemas: observed interfaces at the borders | M–L | ★★★ |
-| 83 | NVTX bridge: Python names on the GPU timeline | M | ★★ |
-| 84 | Shadowing & collision audit | S | ★★ |
-| 85 | Float-hygiene probes | S–M | ★★ |
-| 86 | Event-loop starvation detector | S | ★★ |
-| 87 | Mutation-survivor forensics | M | ★★★ |
-| 88 | Metamorphic relations harness | S–M | ★★ |
+| 63 | Run it N times; count outcomes, catch flakes | M | ★★★ |
+| 64 | First event where two runs diverge | L | ★★★ |
+| 65 | Color lines by failing-run correlation (SBFL) | S | ★★★ |
+| 66 | Auto-shrink a failing input (ddmin) | M | ★★ |
+| 67 | Random-input entry with seed capture | M | ★★ |
+| 68 | Perturb thread/task schedules to flush races | L | ★★★ |
+| 69 | Inject exceptions/latency on purpose | L | ★★ |
+| 70 | git bisect driven by a trace predicate | S | ★★★ |
+| 71 | Compare implementations on the same inputs | M | ★★ |
+| 72 | Record extra expressions each line (--watch) | S | ★★ |
+| 73 | Contracts checked during the run (--invariant) | S | ★★ |
+| 74 | Mine the invariants the runs never broke | L | ★★★ |
+| 75 | Full backward slice of a value | L | ★★★ |
+| 76 | Forward taint from an input | L | ★★ |
+| 77 | "Why didn't this line run?" | M | ★★★ |
+| 78 | Prove a loop is stuck (state recurrence) | M | ★★ |
+| 79 | Catch the first NaN/Inf at birth | S | ★★★ |
+| 80 | Strip-charts + phase portraits of variables | M | ★★★ |
+| 81 | Object-reference graph at an event | L | ★★ |
+| 82 | Per-variable type histograms; None alarms | M | ★★ |
+| 83 | Array shape/dtype timeline | M | ★★★ |
+| 84 | I/O lane via audit hooks; resource-leak pairing | M | ★★ |
+| 85 | Code anatomy: AST + bytecode panel | S–XL | ★★ |
+| 86 | Ternary/short-circuit verdicts via BRANCH events | L | ★★ |
+| 87 | Memory heat on the map (tracemalloc) | M | ★★ |
+| 88 | Who-woke-whom arrows across tasks/threads | L | ★★★ |
+| 89 | Critical path through a concurrent run | M | ★★ |
+| 90 | Lock-wait attribution | L | ★★ |
+| 91 | Multiprocessing children traced into lanes | XL | ★★★ |
+| 92 | Live streaming replayer (--serve) | L | ★★ |
+| 93 | Attach to a running process (PEP 768) | M | ★★★ |
+| 94 | Project-wide static call graph | L | ★★ |
+| 95 | Git churn × complexity overlay | M | ★★★ |
+| 96 | Declared layering rules; violations in red | S | ★★ |
+| 97 | Dead code with runtime evidence | M | ★★ |
+| 98 | Per-test chapters in suite traces | M | ★★★ |
+| 99 | Startup import-cost view | S | ★★ |
+| 100 | Public-API vs actual-use leaks | M | ★★ |
+| 101 | Chunked trace + keyframes past 2M events | L | ★★★ |
+| 102 | monitoring-backed cheaper LINE tracing | M | ★★ |
+| 103 | Black-box flight recorder (ring buffer) | M | ★★★ |
+| 104 | Reproducibility capsule (stdin/env/seeds) | S–XL | ★★★ |
+| 105 | Schema spec + import/export bridges | M | ★★ |
+| 106 | Deep links: a URL that opens a moment | S | ★★★ |
+| 107 | Notes pinned to events; exportable | M | ★★ |
+| 108 | Recorded walkthroughs (executable lessons) | M | ★★ |
+| 109 | Query bar over all events | M | ★★★ |
+| 110 | Two traces side by side, cursors synced | M | ★★ |
+| 111 | Export a panel as video/GIF | M | ★★ |
+| 112 | Sortable table view for list-of-dicts | S | ★★ |
+| 113 | Ghost-highlight the untaken branch | S | ★★ |
+| 114 | Hear the trace (sonification) | M | ★ |
+| 115 | Text bundle of a trace slice | S | ★★ |
+| 116 | Symbolic "what input reaches this line" | XL | ★ |
+| 117 | Full deterministic record/replay | XL | ★★ |
+| 118 | Console & logging lane synced to the trace | M | ★★★ |
+| 119 | Dynamic edges: runtime relations the parse can't see | M | ★★★ |
+| 120 | Boundary schemas: observed interfaces at the borders | M–L | ★★★ |
+| 121 | NVTX bridge: Python names on the GPU timeline | M | ★★ |
+| 122 | Shadowing & collision audit | S | ★★ |
+| 123 | Float-hygiene probes | S–M | ★★ |
+| 124 | Event-loop starvation detector | S | ★★ |
+| 125 | Mutation-survivor forensics | M | ★★★ |
+| 126 | Metamorphic relations harness | S–M | ★★ |
 
 ---
 
@@ -140,7 +140,7 @@ are an experiment. Everything here treats program behavior as a
 distribution to be measured — the physicist's instinct applied to
 software.
 
-### 25. The N-run harness
+### 63. The N-run harness
 - **What:** `tracer.py --runs 50 script.py` — execute the target N
   times (fn granularity by default), record per-run outcome (exit,
   exception type+site, wall time, event count) plus one representative
@@ -161,7 +161,7 @@ software.
 - **Prior art:** every stress-test harness ever; pytest-flakefinder;
   the physicist's repeated-measurement instinct.
 
-### 26. The divergence finder (recovers "trace-vs-trace diffing")
+### 64. The divergence finder (recovers "trace-vs-trace diffing")
 - **What:** given two traces of the same code (pass vs fail, before vs
   after an edit), find the **first event where they diverge** and show
   both timelines side by side from that point.
@@ -174,15 +174,15 @@ software.
   longest-common-subsequence, anchored at call boundaries so the
   alignment survives loop-count differences); report the first
   mismatch and the last common ancestor event. Renderer: dual view
-  (see #72) opening at the divergence. Nondeterminism (dict of
+  (see #110) opening at the divergence. Nondeterminism (dict of
   addresses, timing) is why canonicalization is the real work.
 - **Effort:** L. Alignment robustness is the hard part; start with
   "identical prefix" (cheap, covers most real cases) and grow.
 - **Prior art:** `git bisect` philosophy applied inside one run;
   Pernosco's multi-run analysis; McKeeman's differential testing.
 
-### 27. Spectrum-based fault localization (SBFL)
-- **What:** with the #25 harness's passing and failing runs, score
+### 65. Spectrum-based fault localization (SBFL)
+- **What:** with the #63 harness's passing and failing runs, score
   every line: executed-in-failures vs executed-in-passes, Ochiai
   suspiciousness `ef / sqrt((ef+nf)·(ef+ep))`; paint scores on the
   source and the map as a **suspicion palette** (distinct from heat).
@@ -193,12 +193,12 @@ software.
   or per-function at fn granularity) + a 20-line scoring pass; a
   ranked "top suspicious" panel with jump links. Honesty: correlation
   ≠ causation, N stated, ties shown as ties.
-- **Effort:** S once #25 exists (and #60 makes it work per-test).
+- **Effort:** S once #63 exists (and #98 makes it work per-test).
 - **Prior art:** Tarantula (Jones/Harrold/Stasko 2002), Ochiai (Abreu
   et al.) — a whole academic field, almost never available to working
   Python programmers.
 
-### 28. Automatic input shrinking (delta debugging)
+### 66. Automatic input shrinking (delta debugging)
 - **What:** `--shrink` — given a failing run and a failure predicate
   (exception type/site or `--start-when`-style expression), minimize
   the stdin/argv that still reproduces it (ddmin: remove chunks,
@@ -215,11 +215,11 @@ software.
   isolating failure-inducing input", 2002); Hypothesis's shrinker;
   creduce.
 
-### 29. Property/fuzz entry
+### 67. Property/fuzz entry
 - **What:** `--fuzz GEN.py` — run a user-supplied generator function
   that yields random inputs (seeded, seed recorded per run) through
   the N-run harness; on first failure, keep the seed, re-run traced,
-  and hand the input to #28 to shrink.
+  and hand the input to #66 to shrink.
 - **Why:** the runs-statistics idea aimed at *inputs* instead of
   scheduling: you don't have a failing case yet — go find one while
   you sleep.
@@ -232,12 +232,12 @@ software.
 - **Prior art:** Hypothesis (MacIver), AFL's philosophy (keep the
   seed, minimize the case), property-based testing.
 
-### 30. Schedule fuzzing (concurrency chaos)
+### 68. Schedule fuzzing (concurrency chaos)
 - **What:** `--chaos-schedule SEED` — perturb interleavings on
   purpose: randomized micro-delays injected from the trace callback at
   line/call boundaries, `sys.setswitchinterval` jitter for threads, a
   shuffling event-loop wrapper for asyncio ready-queues; combined with
-  #25 to measure "fails 7/100 under perturbation, 0/100 without".
+  #63 to measure "fails 7/100 under perturbation, 0/100 without".
 - **Why:** race conditions are probability distributions; widening the
   explored interleaving space is how you collapse "works on my
   machine" into a reproducible rate. This is the multi-run idea's
@@ -253,14 +253,14 @@ software.
   random priority-change points find most races) is directly
   portable.
 
-### 31. Fault injection (chaos engineering for one process)
+### 69. Fault injection (chaos engineering for one process)
 - **What:** `--inject "shop.pay:raises=TimeoutError:on_call=3"` —
   force a chosen call site to raise / return a sentinel / stall, then
   watch (with the existing exception machinery) how the failure
   propagates and what catches it.
 - **Why:** error-handling paths are the least-executed, least-tested
   code in any codebase; injection is the only way to *see* them run.
-  The propagation-chain view (#32 in FEATURES) was built for exactly
+  The propagation-chain view (#70 in FEATURES) was built for exactly
   this moment.
 - **How:** an import-time wrapper installed by the tracer around the
   named callable (we own the process bootstrap); every injection is
@@ -270,7 +270,7 @@ software.
 - **Prior art:** Netflix chaos engineering, aerospace HALT testing —
   break it on the bench, not in the air.
 
-### 32. Behavioral bisect (git × tracer)
+### 70. Behavioral bisect (git × tracer)
 - **What:** a documented `--check EXPR` mode: run the target, exit 0/1
   on a predicate over the run (exception happened, output contains X,
   event-count over N, `--start-when`-style state test) — precisely
@@ -288,17 +288,17 @@ software.
 - **Prior art:** `git bisect run` — the Torvalds lens in its purest
   form.
 
-### 33. Differential testing against a reference implementation
+### 71. Differential testing against a reference implementation
 - **What:** `--oracle brute.py fast.py --fuzz GEN.py` — run two
   implementations on the same inputs; on output mismatch, keep the
-  input, trace **both**, and open the divergence finder (#26) on the
+  input, trace **both**, and open the divergence finder (#64) on the
   pair.
 - **Why:** the repo already contains
   `strategy_1_brute_force.py … strategy_4_segment_tree.py` — the
   AtCoder workflow IS differential testing done by hand. Automate the
   loop: the brute force is the specification.
 - **How:** harness compares stdout (configurable normalizer); wire to
-  #28 to shrink the disagreement input. No schema changes.
+  #66 to shrink the disagreement input. No schema changes.
 - **Effort:** M.
 - **Prior art:** McKeeman, "Differential testing for software" (1998);
   Csmith; competitive programmers' stress-test scripts everywhere.
@@ -307,11 +307,11 @@ software.
 
 ## Section 2 — Deeper causality (from "what changed" to "why")
 
-### 34. Watch expressions at record time (reframes a rejected idea)
+### 72. Watch expressions at record time (reframes a rejected idea)
 - **What:** `--watch "len(queue)" --watch "cart.total()"` — arbitrary
   expressions evaluated **during the run** at each line event of
   chosen frames, recorded as synthetic variables with full life
-  navigation, plots (#42), and provenance participation.
+  navigation, plots (#80), and provenance participation.
 - **Why:** the old rejection ("replay-side eval belongs to Python, not
   the viewer") stands — so evaluate at *record* time, where Python is
   alive. Derived quantities (lengths, sums, ratios) are often the real
@@ -324,7 +324,7 @@ software.
 - **Prior art:** every debugger's watch pane — but recorded over the
   whole run instead of one paused moment.
 
-### 35. Continuous invariants (`--invariant`)
+### 73. Continuous invariants (`--invariant`)
 - **What:** `--invariant "balance >= 0" --invariant "i <= j"` —
   expressions that must hold; every violation is recorded as a soft
   VIOLATION event (amber, scrubber markers, count in the banner) while
@@ -332,7 +332,7 @@ software.
 - **Why:** assertions you don't have to edit into the code, checked
   everywhere, with the trace showing state at each violation. The
   contract mindset without touching the target.
-- **How:** same evaluator as #34; a violation stores the expression,
+- **How:** same evaluator as #72; a violation stores the expression,
   values of its names, and links into provenance ("which assignment
   broke it"). Also honest about scope: checked only where the frame
   defines the names.
@@ -340,14 +340,14 @@ software.
 - **Prior art:** Design by Contract (Meyer/Eiffel), C's assert —
   Stroustrup lens distilled.
 
-### 36. Invariant mining (Daikon-lite)
-- **What:** observe many runs (#25) and **propose** the invariants
+### 74. Invariant mining (Daikon-lite)
+- **What:** observe many runs (#63) and **propose** the invariants
   that never broke: `x > 0`, `i < len(a)`, `a is sorted at return`,
   `type(x) constant`, `total is monotonically nondecreasing` — per
   function entry/exit and per loop.
 - **Why:** mined invariants are executable documentation ("what this
   code actually guarantees") and bug detectors (a run that breaks a
-  99%-invariant is your suspect — feed it to #26).
+  99%-invariant is your suspect — feed it to #64).
 - **How:** a template library checked against the recorded
   fingerprints offline (no run-time cost): candidate set instantiated
   per variable/pair, killed on first counterexample, survivors ranked
@@ -358,7 +358,7 @@ software.
 - **Prior art:** Daikon (Michael Ernst et al.) — the canonical dynamic
   invariant detector; almost never applied to everyday Python.
 
-### 37. Full backward slice (transitive provenance)
+### 75. Full backward slice (transitive provenance)
 - **What:** today's provenance panel is one hop ("← from a, b").
   Slice mode: click a value → compute the closure — **every event
   that contributed to it** — and dim the rest of the trace; the
@@ -377,23 +377,23 @@ software.
   slicing; Agrawal); Cyberbrain — ours stands on ast dataflow instead
   of fragile bytecode value-stacks.
 
-### 38. Forward taint ("descendants of this input")
+### 76. Forward taint ("descendants of this input")
 - **What:** the same walk, forward: mark a value (an stdin field, a
   config entry, a function argument) and highlight every variable and
   branch verdict it influenced downstream.
 - **Why:** "if I change this config, what is affected?" and "which
   outputs depend on this input?" — impact analysis and data lineage in
   one gesture; the security cousin is classic taint analysis.
-- **How:** transpose the #37 graph; tainted verdicts (a branch whose
+- **How:** transpose the #75 graph; tainted verdicts (a branch whose
   condition read a tainted value) mark whole control regions as
   control-tainted, displayed distinctly (data vs control influence —
   the honest split).
-- **Effort:** L (shares 80% of its machinery with #37 — build
+- **Effort:** L (shares 80% of its machinery with #75 — build
   together).
 - **Prior art:** taint tracking (Perl's taint mode, TaintDroid);
   data-lineage tooling in databases.
 
-### 39. Whyline queries — "why didn't this line run?"
+### 77. Whyline queries — "why didn't this line run?"
 - **What:** click any line that never executed (or a variable that
   never changed) and get the causal answer: "the guard at
   cart.py:38 evaluated False on all 12 arrivals — here they are",
@@ -410,7 +410,7 @@ software.
   to halve debugging time in studies, and virtually absent from real
   tools.
 
-### 40. Nontermination detector (state recurrence)
+### 78. Nontermination detector (state recurrence)
 - **What:** for a loop suspected of hanging: hash (line, frame's
   fingerprint set) each iteration; an **exact repeat proves** the loop
   can never exit (pure state) — banner: "iteration state at event
@@ -427,7 +427,7 @@ software.
   framing is Poincaré recurrence — a closed system returning to a
   previous state must repeat forever.
 
-### 41. NaN/Inf tripwire (first-origin of numerical poison)
+### 79. NaN/Inf tripwire (first-origin of numerical poison)
 - **What:** `--trip nan` — the fingerprint encoder tests floats as it
   sees them; the FIRST NaN/Inf in the run raises a first-class TRIP
   event with the provenance link to the operands that produced it;
@@ -440,7 +440,7 @@ software.
   (bounded, only on floats already being fingerprinted); works with
   triggers ("start recording AT the first NaN" = `--start-trip nan` —
   the pre-trigger cheap watch loop does the testing). Generalize:
-  `--trip "negative"` for domain tripwires via #35's machinery.
+  `--trip "negative"` for domain tripwires via #73's machinery.
 - **Effort:** S.
 - **Prior art:** numpy's errstate/seterr (raises where it happens, not
   where it *came from* — provenance is our edge); debuggers' hardware
@@ -450,8 +450,8 @@ software.
 
 ## Section 3 — New instruments (measure what is invisible)
 
-### 42. The variable oscilloscope (strip-charts + phase portraits)
-- **What:** any numeric variable (or #34 watch) gets a `chart` view:
+### 80. The variable oscilloscope (strip-charts + phase portraits)
+- **What:** any numeric variable (or #72 watch) gets a `chart` view:
   value vs event-axis as a strip-chart with change points, crash and
   trip markers aligned; pick TWO variables → a **phase portrait**
   (x vs y trajectory).
@@ -466,7 +466,7 @@ software.
 - **Prior art:** oscilloscopes and strip-chart recorders; dynamical
   systems' phase-space analysis; no mainstream debugger has this.
 
-### 43. Heap topology view (the pointer graph)
+### 81. Heap topology view (the pointer graph)
 - **What:** at the current event, draw the object-reference graph
   around a chosen variable: nodes = objects (typed, sized), edges =
   references; shared objects (our 🔗 aliases) visibly shared; cycles
@@ -484,9 +484,9 @@ software.
   teaching visualization Python has ever had, absent from tools for
   real codebases.
 
-### 44. Type-flow histograms & instability alarms
+### 82. Type-flow histograms & instability alarms
 - **What:** aggregate the types every variable/argument/return
-  actually had across a run (and across #25 runs): function rows gain
+  actually had across a run (and across #63 runs): function rows gain
   "x: int 98% · None 2%" — with the 2% linked to their events; a ⚠
   on unstable types.
 - **Why:** the sneaky None, the str that is sometimes bytes, the
@@ -503,7 +503,7 @@ software.
   instability as the enemy); MonkeyType (Instagram) records call types
   — ours ties them to moments you can jump to.
 
-### 45. Array shape/dtype timeline
+### 83. Array shape/dtype timeline
 - **What:** for objects exposing `.shape`/`.dtype` (numpy, torch,
   pandas) — record that metadata even though internals are opaque:
   each variable gets a shape timeline; a SHAPE-CHANGE badge when it
@@ -520,7 +520,7 @@ software.
 - **Prior art:** every numpy debugging session ever conducted by
   printing `.shape`; TensorBoard's graph shapes, made local.
 
-### 46. The I/O lane (strace-lite) + resource pairing
+### 84. The I/O lane (strace-lite) + resource pairing
 - **What:** record `sys.addaudithook` events — file opens, socket
   connects, subprocess spawns, `exec/eval`, imports — as a parallel
   I/O lane in the replayer, each linked to the frame that caused it;
@@ -542,7 +542,7 @@ software.
 - **Prior art:** strace/ltrace; PEP 578 audit hooks (designed for
   security auditing, almost never surfaced to developers).
 
-### 47. Code anatomy panel (recovers "opcode-level" — AST + bytecode)
+### 85. Code anatomy panel (recovers "opcode-level" — AST + bytecode)
 - **What:** Tier 0 (static): a collapsible AST tree of the selected
   function — the syntax layer above the bytecode, instaviz-style.
   Tier 1 (static): a panel showing `dis` output for the
@@ -562,14 +562,14 @@ software.
 - **Prior art:** `dis` module; PEP 659 specializing interpreter —
   visible in no mainstream tool.
 
-### 48. Sub-line branch verdicts (BRANCH events)
+### 86. Sub-line branch verdicts (BRANCH events)
 - **What:** the documented blind spot — ternaries, `and`/`or`
   short-circuits, comprehension `if`s — closed on 3.12+ via
   `sys.monitoring` BRANCH/JUMP events: verdicts for branches *inside*
   a line, shown at column precision (`co_positions`).
 - **Why:** today the honesty note says "sub-line branching is not
   visible"; this deletes the caveat where the interpreter allows it.
-- **How:** extend the monitoring backend (line mode, #64) to register
+- **How:** extend the monitoring backend (line mode, #102) to register
   BRANCH; map instruction offsets to source columns; the Event panel
   underlines the sub-expression with its verdict. Falls back honestly
   pre-3.12.
@@ -577,7 +577,7 @@ software.
 - **Prior art:** PEP 669's event set (refined further in 3.14);
   coverage.py's branch coverage — which counts, but never *shows*.
 
-### 49. Memory heat (calorimetry)
+### 87. Memory heat (calorimetry)
 - **What:** `--memory` — sample `tracemalloc` snapshots at intervals
   (and at call boundaries in fn mode); the map gains a third palette:
   **BYTES ALLOCATED (net / peak)** per module; the replayer shows a
@@ -604,7 +604,7 @@ software.
 
 ## Section 4 — Concurrency truth
 
-### 50. Happens-before arrows (who woke whom)
+### 88. Happens-before arrows (who woke whom)
 - **What:** causality edges drawn between lanes: task A *created* B,
   cancelled C, `gather`ed D; a queue `put` in one lane linked to the
   `get` that received the same item in another; thread `start`/`join`
@@ -623,23 +623,23 @@ software.
   tracing span links (OpenTelemetry) — imported into a single
   process.
 
-### 51. Critical-path highlight
+### 89. Critical-path highlight
 - **What:** for an fn-granularity concurrent trace: compute the
-  longest dependency chain (through awaits, joins and #50 edges) that
+  longest dependency chain (through awaits, joins and #88 edges) that
   determined total wall time; paint it gold in lanes and Perfetto
   export.
 - **Why:** "we are 40% async" is trivia; "these five awaits ARE your
   runtime, everything else overlaps for free" is an optimization
   order. Speeding up anything off the critical path is wasted work.
 - **How:** classic CPM/PERT longest-path over the slice DAG (slices +
-  happens-before edges); needs #50. Honest about untracked externals
+  happens-before edges); needs #88. Honest about untracked externals
   (network waits show as gaps attributed to the awaiting slice).
-- **Effort:** M after #50.
+- **Effort:** M after #88.
 - **Prior art:** PERT/critical-path method (1950s operations
   research); Chrome's flame charts have it for the web — Python
   doesn't.
 
-### 52. Lock-wait attribution
+### 90. Lock-wait attribution
 - **What:** time spent *waiting* vs *holding* each lock/semaphore:
   which call sites contend, who blocked whom, longest queue.
 - **Why:** contention is invisible in source and dominant in threaded
@@ -653,7 +653,7 @@ software.
 - **Prior art:** Linux `perf lock`; JVM contention profilers — a
   category Python tooling barely has.
 
-### 53. Multiprocessing lanes (recovers a "documented limit")
+### 91. Multiprocessing lanes (recovers a "documented limit")
 - **What:** children of `multiprocessing`/`concurrent.futures`
   traced too (fn granularity), each child writing
   `trace_…pid.html`-part files, merged into one replayer as extra
@@ -665,14 +665,14 @@ software.
   (`.pth`/sitecustomize) so any child Python auto-starts a tracer in
   fn mode writing to a shared session directory; merge aligns per-
   process monotonic clocks via the fork/spawn call's timestamp pair
-  (skew honestly labeled ±). Renderer scales via #63.
+  (skew honestly labeled ±). Renderer scales via #101.
 - **Effort:** XL (bootstrap is fiddly, merge is careful work) —
   arguably the largest single unlock on this list for real codebases.
 - **Prior art:** coverage.py's multiprocessing support; VizTracer's
   multiprocess tracing; Perfetto's multi-track model (already our
   export target).
 
-### 54. Live mission control (`--serve`)
+### 92. Live mission control (`--serve`)
 - **What:** watch the trace **while the program runs**: tracer
   streams events over a localhost `http.server` + SSE; the replayer
   follows live (or you scrub back while it continues), heartbeat
@@ -689,7 +689,7 @@ software.
 - **Prior art:** every observability dashboard; py-spy top's live
   view — but with full event fidelity instead of samples.
 
-### 55. Attach to a running process (PEP 768)
+### 93. Attach to a running process (PEP 768)
 - **What:** `tracer.py --attach PID` — on Python 3.14+, inject a
   `watch()`-style recorder into an ALREADY-RUNNING process via the
   new safe external debugger interface (`sys.remote_exec`), record a
@@ -700,8 +700,7 @@ software.
 - **How:** `sys.remote_exec(pid, bootstrap.py)` where bootstrap
   imports our watch() with a time/event budget and writes the trace
   to an agreed path; all watch() semantics (cap without killing the
-  host, restore prior settrace) already exist — that groundwork was
-  #24.
+  host, restore prior settrace) already exist — that groundwork shipped as watch() (catalog feature 12).
 - **Effort:** M once 3.14 is the floor; the safety analysis is the
   work.
 - **Prior art:** PEP 768 (accepted for 3.14); py-spy --dump; rr's
@@ -711,7 +710,7 @@ software.
 
 ## Section 5 — The map grows
 
-### 56. Project-wide static call graph
+### 94. Project-wide static call graph
 - **What:** today's call routes are module→module counts and the
   intra-file graph is per-file; the completion: resolve `from x
   import f` / `x.f()` across files into one project call graph —
@@ -723,12 +722,12 @@ software.
 - **How:** symbol table per module (defs, imports, aliases) + a
   resolution pass (direct names, `self.method` within a class,
   best-effort attribute chains); every edge labeled resolved/guessed.
-  Feeds better ⌖ commands and #59.
+  Feeds better ⌖ commands and #97.
 - **Effort:** L.
 - **Prior art:** pyan3 (unmaintained), Sourcetrail (discontinued —
   its niche is empty), IDE indexers (closed and per-symbol).
 
-### 57. Crime-scene overlay (git churn × complexity)
+### 95. Crime-scene overlay (git churn × complexity)
 - **What:** a second map palette from history: per-module change
   frequency (`git log --numstat`) × a stdlib-computed complexity
   score; the risk quadrant = **churns often AND complex AND hot at
@@ -746,7 +745,7 @@ software.
   Nagappan & Ball's defect-prediction studies; CodeScene
   (commercial) — none of it free and local.
 
-### 58. Layering rules (declared architecture, enforced visually)
+### 96. Layering rules (declared architecture, enforced visually)
 - **What:** an optional `.pyreplay-layers` file ("ui → logic → data;
   data must not import ui"); the map paints violating import edges
   red with a VIOLATION list in the notes.
@@ -759,8 +758,8 @@ software.
 - **Prior art:** import-linter; ArchUnit (Java) — the visual half is
   ours for free.
 
-### 59. Dead-code evidence report
-- **What:** combine static reachability (#56, from entry points and
+### 97. Dead-code evidence report
+- **What:** combine static reachability (#94, from entry points and
   `__init__` exports) with dynamic never-executed (across every trace
   the auto-heat scanner can find): a ranked list — "statically
   unreachable AND never executed in 9 recorded runs" down to "only
@@ -775,23 +774,23 @@ software.
 - **Prior art:** vulture (static-only); coverage.py (dynamic-only) —
   the join is the feature.
 
-### 60. Per-test chapters (the suite dissected)
+### 98. Per-test chapters (the suite dissected)
 - **What:** when the entry is `-m pytest`, record test boundaries as
   chapter events (a tiny auto-injected pytest plugin): the density
   strip gains test-colored segments with names; heat can be filtered
   per test; "which tests touch module X" appears on every map box.
 - **Why:** a suite trace today is one undifferentiated river. Chapters
   make it navigable — jump to test_checkout's segment — and unlock
-  the killer join: **failing test × SBFL (#27) = ranked suspect
+  the killer join: **failing test × SBFL (#65) = ranked suspect
   lines** from one suite run.
-- **How:** we own the pytest invocation (#21) — add `-p pyreplay_shim`
+- **How:** we own the pytest invocation (catalog feature 11) — add `-p pyreplay_shim`
   injecting start/end/outcome marker events; everything downstream is
   aggregation and rendering.
 - **Effort:** M.
 - **Prior art:** pytest's own reporting; Google's test-impact
   analysis — miniaturized to one repo.
 
-### 61. Import-cost view (startup autopsy)
+### 99. Import-cost view (startup autopsy)
 - **What:** a dedicated report from any fn trace: time under each
   `<module>` frame at startup, as a treemap-ish list on the map —
   "1.9 s before main(): pandas 1.1 s, your plugins 0.4 s…".
@@ -805,7 +804,7 @@ software.
 - **Prior art:** `python -X importtime` (text, per-process, hard to
   read) — ours lands on the map with jump links.
 
-### 62. API-surface honesty (encapsulation leaks)
+### 100. API-surface honesty (encapsulation leaks)
 - **What:** per package: what it exports (`__all__`, public names) vs
   what outsiders ACTUALLY import from it (the map knows every import
   edge): a leak list — "7 modules reach into `store._internal`".
@@ -822,13 +821,13 @@ software.
 
 ## Section 6 — Scale & interchange
 
-### 63. Chunked trace + keyframes (recovers backlog #20)
+### 101. Chunked trace + keyframes (the long-planned scale unlock)
 - **What:** break the single embedded JSON into gzipped chunks with
   periodic full-state **keyframes**; the replayer loads O(window)
   around the cursor instead of O(run).
 - **Why:** the ~2M-event / ~512 MB browser wall is the hard ceiling on
   everything else (multiprocessing lanes, whole-suite line traces,
-  #65 dumps). Keyframes also make seek instant at any size.
+  #103 dumps). Keyframes also make seek instant at any size.
 - **How:** browser-native `DecompressionStream('gzip')` (no build
   tools broken); tracer writes chunk boundaries at call-depth-zero
   points; a keyframe = full variables snapshot (the trigger
@@ -838,8 +837,8 @@ software.
 - **Prior art:** video codecs (I-frames/P-frames — this is literally
   that); Perfetto's trace processor.
 
-### 64. Cheap LINE tracing via sys.monitoring
-- **What:** extend the monitoring backend (#19/fn-only today) to LINE
+### 102. Cheap LINE tracing via sys.monitoring
+- **What:** extend the monitoring backend (shipped fn-only — catalog feature 06) to LINE
   events with surgical enable/disable per code object — line-level
   microscopes at a fraction of settrace's ~100× tax (target ~10–20×).
 - **Why:** every line-level feature (verdicts, provenance, machinery)
@@ -847,12 +846,12 @@ software.
   on ONE code object only, near-free).
 - **How:** register LINE + the existing exception set; per-code
   `set_local_events` is the whole trick; keep byte-parity checks vs
-  settrace in checks.py (the #19 discipline).
+  settrace in checks.py (the same parity discipline that audited the fn backend).
 - **Effort:** M.
 - **Prior art:** PEP 669's stated purpose; coverage.py 7.x's
   sysmon-based speedups prove the win is real.
 
-### 65. Black-box flight recorder
+### 103. Black-box flight recorder
 - **What:** `--black-box` — near-zero-cost fn-granularity ring buffer
   (last N events only, in memory); on crash OR on signal
   (`SIGUSR1`), dump the buffer as a normal trace. Run it always.
@@ -867,7 +866,7 @@ software.
 - **Prior art:** aviation FDR/CVR; automotive EDR; VizTracer's ring
   buffer — none produce a self-contained replayer file.
 
-### 66. Reproducibility capsule (tiers of rr)
+### 104. Reproducibility capsule (tiers of rr)
 - **What:** Tier 1 (S): every trace embeds the run's capsule — argv,
   cwd, env subset, python/platform versions, stdin **tee'd** into
   the file, PYTHONHASHSEED — plus a "reproduce" box printing the
@@ -889,7 +888,7 @@ software.
   crisis literature — Tier 1 is what every scientific workflow
   wishes it had by default.
 
-### 67. Rosetta bridges (spec + import/export)
+### 105. Rosetta bridges (spec + import/export)
 - **What:** publish the event schema as a versioned JSON-Schema spec
   (the layer-2 contract, made public); importers: py-spy speedscope
   and VizTracer JSON drawn as heat/lanes on our map/replayer;
@@ -909,7 +908,7 @@ software.
 
 ## Section 7 — The replayer as a medium
 
-### 68. Deep links — a URL that opens a moment
+### 106. Deep links — a URL that opens a moment
 - **What:** the full viewer state (event index, file tab, selected
   variable, view choices, overlay) serialized into the URL fragment;
   paste `trace_x.html#ev=8412&var=dist&view=graph` into an issue and
@@ -923,7 +922,7 @@ software.
 - **Prior art:** every good web app; Perfetto's permalink (theirs
   needs a server — ours is a file).
 
-### 69. Annotations — notes pinned to events
+### 107. Annotations — notes pinned to events
 - **What:** press `N` at any event: attach a note ("HERE total goes
   negative — why?"); notes listed in a side panel, exported/imported
   as a JSON sidecar so they travel with the trace file.
@@ -935,8 +934,8 @@ software.
 - **Effort:** M.
 - **Prior art:** PDF annotations; Pernosco's shared notes.
 
-### 70. Guided tours — executable lessons
-- **What:** an ordered sequence of annotated stops (#69 + #68) saved
+### 108. Guided tours — executable lessons
+- **What:** an ordered sequence of annotated stops (#107 + #106) saved
   as a tour: the replayer gains "next stop" navigation and a narration
   box — a recorded walkthrough someone else can replay.
 - **Why:** the project's teaching soul, weaponized: "watch quicksort
@@ -949,7 +948,7 @@ software.
 - **Prior art:** Jupyter notebooks' narrative computing; museum audio
   guides; CodeTour (VS Code) — which tours *source*, not *execution*.
 
-### 71. The query bar (omniscient search)
+### 109. The query bar (omniscient search)
 - **What:** search over events, not text: `x == 42`,
   `type:exception KeyError`, `fn:push after:5000`, `changed:total` —
   results as a jump list + scrubber pins (the bookmarks machinery).
@@ -958,28 +957,28 @@ software.
   query, not an hour.
 - **How:** in-memory scan over decoded events with a tiny predicate
   grammar (no eval of user Python in the viewer — parse a fixed
-  grammar honestly); progress + cost shown on big traces (#63 makes
+  grammar honestly); progress + cost shown on big traces (#101 makes
   it windowed).
 - **Effort:** M.
 - **Prior art:** Bil Lewis's Omniscient Debugger (2003); Pernosco's
   queries — the feature that makes recorded execution *better* than
   live debugging, not just equal.
 
-### 72. Dual synced replayers
+### 110. Dual synced replayers
 - **What:** open two traces side by side with linked cursors —
-  aligned by the #26 divergence map when available, by manual anchor
+  aligned by the #64 divergence map when available, by manual anchor
   pairs otherwise; divergence point marked in both scrubbers.
-- **Why:** before/after a fix, pass vs fail, brute vs fast (#33):
+- **Why:** before/after a fix, pass vs fail, brute vs fast (#71):
   humans diff by eye extremely well when the two films are locked in
   step.
 - **How:** two iframes + postMessage cursor protocol + an alignment
   table; degrade to proportional sync with an honest "unaligned"
   badge.
-- **Effort:** M (L with full alignment — build after #26).
+- **Effort:** M (L with full alignment — build after #64).
 - **Prior art:** diff tools' two-pane discipline applied to
   executions.
 
-### 73. Movie export
+### 111. Movie export
 - **What:** select a panel (the bars view, the graph+overlay, the
   grid) and an event range → export a WebM (canvas captureStream +
   MediaRecorder, browser-native) or animated GIF of it playing.
@@ -992,7 +991,7 @@ software.
 - **Prior art:** asciinema for terminals; nothing equivalent for
   execution state.
 
-### 74. Records table view
+### 112. Records table view
 - **What:** a `table` view for list-of-dicts / list-of-tuples with
   uniform keys: sortable columns, the changed cell highlighted, +K
   windowing rules inherited.
@@ -1006,12 +1005,12 @@ software.
 - **Prior art:** every dataframe viewer; ours diffs per-cell across
   time.
 
-### 75. Ghost branch — the road not taken
+### 113. Ghost branch — the road not taken
 - **What:** at any verdict event, faintly highlight the suite that
   was NOT entered (the else that didn't run, the loop body skipped on
   0 iterations) for exactly one step.
 - **Why:** makes absence visible at the moment of decision — the
-  gentle sibling of #39, and for a learner the moment branching
+  gentle sibling of #77, and for a learner the moment branching
   *clicks*.
 - **How:** ast extents per branch arm are already computed for
   dataflow; renderer tints the untaken range. Off by default,
@@ -1019,7 +1018,7 @@ software.
 - **Effort:** S.
 - **Prior art:** none we know of — cheap and genuinely novel.
 
-### 76. Sonification — hear the trace
+### 114. Sonification — hear the trace
 - **What:** map events to sound while playing: pitch by call depth,
   timbre by file, a tick per loop iteration, dissonance on
   exceptions; a run becomes a rhythm you learn.
@@ -1034,7 +1033,7 @@ software.
   auralization literature of the 90s — never shipped in a mainstream
   tool.
 
-### 77. The explain bundle
+### 115. The explain bundle
 - **What:** export a compact, human/LLM-readable text slice of the
   trace: N events around the cursor with source lines, variable
   states, verdicts and provenance, formatted for pasting into an
@@ -1044,7 +1043,7 @@ software.
   that truth in text. pyreplay stays offline — the bundle is a file;
   where it goes is the user's business.
 - **How:** a serializer over existing data + a "copy bundle" button;
-  size-capped, self-describing header (script, capsule info if #66
+  size-capped, self-describing header (script, capsule info if #104
   exists).
 - **Effort:** S.
 - **Prior art:** crash reporters' minidumps, made narrative.
@@ -1053,11 +1052,11 @@ software.
 
 ## Section 8 — Research-grade (flagged honestly as such)
 
-### 78. Symbolic branch exploration
+### 116. Symbolic branch exploration
 - **What:** for a chosen never-taken branch: attempt to solve the
   path condition ("what stdin reaches line 84?") via symbolic
   execution of the guarding expressions.
-- **Why:** #39 answers why a line didn't run; this answers what WOULD
+- **Why:** #77 answers why a line didn't run; this answers what WOULD
   make it run — test-input generation for the untested path.
 - **How:** realistically, an optional bridge to CrossHair (Z3-based,
   exists today) fed with our dataflow; a from-scratch solver is a
@@ -1065,15 +1064,15 @@ software.
 - **Effort:** XL (bridge: L).
 - **Prior art:** CrossHair; KLEE; concolic testing (DART/SAGE).
 
-### 79. Full deterministic record/replay
-- **What:** #66 Tier 3 completed into rr-class fidelity: every
+### 117. Full deterministic record/replay
+- **What:** #104 Tier 3 completed into rr-class fidelity: every
   nondeterminism source intercepted so any recorded run re-executes
   identically — enabling reverse-execution debugging on top of our
   replayer.
 - **Why:** the end-state of the whole field: the recording IS the
   bug, forever. Kept here as the north star and marked honestly:
   CPython offers no cheap path to syscall-level capture; the
-  pure-Python subset (#66 Tier 3) is the realistic 80%.
+  pure-Python subset (#104 Tier 3) is the realistic 80%.
 - **Effort:** XL.
 - **Prior art:** rr (Mozilla), Pernosco, UndoDB — all C/C++-world;
   Python's equivalent does not exist, which is exactly why it's
@@ -1085,16 +1084,16 @@ software.
 
 A 10-category bug taxonomy and 20-tool observability inventory were
 checked against this list; most of both were already covered
-(FEATURES.md or #25–79), but seven real gaps surfaced. Each entry
+(FEATURES.md or #63–#117), but seven real gaps surfaced. Each entry
 notes the section it thematically belongs to.
 
-### 80. Console & logging lane (stdout/stderr/logging as events)
+### 118. Console & logging lane (stdout/stderr/logging as events)
 *(belongs with Section 3 — instruments)*
 - **What:** capture everything the program prints or logs as
   first-class events tied to the emitting frame and line: a console
   panel in the replayer synced to the timeline — click a log line to
   jump to the exact moment it was written, and vice versa; log levels
-  colored; with #60, output attributed per test.
+  colored; with #98, output attributed per test.
 - **Why:** print-debugging is the most-used debugger on Earth and
   logs are the one signal every codebase already emits — yet they are
   divorced from state. Tying each line to its execution moment turns
@@ -1110,7 +1109,7 @@ notes the section it thematically belongs to.
   them can jump from a log line to the program state that produced
   it.
 
-### 81. Dynamic edges — what the run saw that the parse couldn't
+### 119. Dynamic edges — what the run saw that the parse couldn't
 *(belongs with Section 5 — the map)*
 - **What:** overlay trace-observed relations on the static map:
   caller→callee module pairs from fn traces drawn as distinct "dark
@@ -1136,13 +1135,13 @@ notes the section it thematically belongs to.
   with; pyreplay is unusually placed to close it because it owns both
   layers.
 
-### 82. Boundary schemas — observed interfaces at the borders
+### 120. Boundary schemas — observed interfaces at the borders
 *(belongs with Section 2/3 — causality & instruments)*
 - **What:** at function/module boundaries, record the *structural
   schema* of arguments and returns — keys, types, nesting, lengths,
   not values: "returns dict{id:int, items:list[dict{sku,qty}]} —
   14 calls, stable"; show it as the def's observed interface on map
-  rows and in the replayer; diff schemas across runs (#25) and
+  rows and in the replayer; diff schemas across runs (#63) and
   across traces ("returned a list last week, a dict today");
   optionally check against a declared expectation.
 - **Why:** the data-assumption bug — the wrong-shape payload, the
@@ -1153,12 +1152,12 @@ notes the section it thematically belongs to.
   single most common bug class.
 - **How:** the encoder already fingerprints structure; add a
   shape-abstraction pass (values → types) aggregated per call site
-  at fn granularity; declared-schema checks reuse the #35 evaluator.
+  at fn granularity; declared-schema checks reuse the #73 evaluator.
 - **Effort:** M–L.
 - **Prior art:** consumer-driven contracts (Pact), pydantic — but
   observed rather than declared; MonkeyType's cousin for shapes.
 
-### 83. NVTX bridge — Python meaning on the GPU timeline
+### 121. NVTX bridge — Python meaning on the GPU timeline
 *(belongs with Section 6 — interchange; recovers Phase 5 of the
 original brief)*
 - **What:** `--export-nvtx` — at fn granularity, emit NVTX ranges
@@ -1178,7 +1177,7 @@ original brief)*
 - **Prior art:** NVTX / Nsight Systems; PyTorch profiler's
   `emit_nvtx`.
 
-### 84. Shadowing & collision audit
+### 122. Shadowing & collision audit
 *(belongs with Section 5 — the map, plus a replayer badge)*
 - **What:** detect name masking at three levels: a local shadowing a
   global/enclosing name or a builtin (`sum`, `list`, `id`…); a
@@ -1200,12 +1199,12 @@ original brief)*
   warnings — per-file lint text; ours lands on the map and on the
   live variable row.
 
-### 85. Float-hygiene probes
-*(belongs with Section 1/3 — the lab & instruments; pairs with #41)*
+### 123. Float-hygiene probes
+*(belongs with Section 1/3 — the lab & instruments; pairs with #79)*
 - **What:** (a) flag float equality as it executes — the verdict
   machinery already sees the compare and the operand types; flag
   `== `/`!=` between floats statically too; (b) a harness probe:
-  re-run a chosen reduction under #25 with permuted operand order
+  re-run a chosen reduction under #63 with permuted operand order
   and a `math.fsum`/`decimal` shadow, reporting the spread ("your
   sum varies by 3e-9 across orderings — the accumulation is
   ill-conditioned").
@@ -1221,7 +1220,7 @@ original brief)*
 - **Prior art:** Kahan summation lore; Herbie; FpDebug — none of it
   reachable from a working Python session today.
 
-### 86. Event-loop starvation detector
+### 124. Event-loop starvation detector
 *(belongs with Section 4 — concurrency)*
 - **What:** in asyncio traces, badge any slice that held the event
   loop beyond a threshold without yielding — "task worker-A blocked
@@ -1244,19 +1243,19 @@ A posterior-verification canon (the full gauntlet: typing gates →
 static analysis → property-based testing → mutation testing → formal
 methods → production gates) was checked against this list. Most rungs
 were already covered by the reliability lab and its neighbors
-(#25–#36, #66, #78) — pyreplay's role there is the instrument *under*
+(#63–#74, #104, #116) — pyreplay's role there is the instrument *under*
 the gauntlet: when a gate goes red, it shows why; before properties
 exist, it drafts them from observed behavior. Two real gaps surfaced,
 both places where recording the execution adds something the
 standalone gate lacks.
 
-### 87. Mutation-survivor forensics
+### 125. Mutation-survivor forensics
 *(belongs with Section 1 — the reliability lab)*
 - **What:** mutation testing's chore is the *surviving* mutant — a
   planted bug no test killed. Bridge to mutmut/cosmic-ray (used
   as-is): for each survivor, run the nearest test twice at fn/line
   granularity — original code vs mutant — align the two traces with
-  the divergence finder (#26), and report the first behavioral
+  the divergence finder (#64), and report the first behavioral
   divergence plus the values that differed with no assertion
   consuming them. That's not just "this mutant survived" — it's *the
   assertion you forgot to write*, located.
@@ -1267,24 +1266,24 @@ standalone gate lacks.
   divergence turns it into a mechanical fix.
 - **How:** thin reader over the mutation tool's results cache →
   re-run the covering test under the tracer for both versions
-  (#25's runner) → #26 alignment → report. Honesty note (the
+  (#63's runner) → #64 alignment → report. Honesty note (the
   equivalent-mutant problem): some mutants change nothing
   observable; when the traces never diverge, say exactly that —
   "no behavioral divergence found; possibly an equivalent mutant" —
   never invent a difference.
-- **Effort:** M (needs #25 + #26; the bridge itself is thin).
+- **Effort:** M (needs #63 + #64; the bridge itself is thin).
 - **Prior art:** mutmut, cosmic-ray; the equivalent-mutant
   literature. No tool today explains *why* a survivor survived.
 
-### 88. Metamorphic relations harness
-*(belongs with Section 1 — the reliability lab; sibling of #33)*
-- **What:** differential testing (#33) needs a second
+### 126. Metamorphic relations harness
+*(belongs with Section 1 — the reliability lab; sibling of #71)*
+- **What:** differential testing (#71) needs a second
   implementation; metamorphic testing needs only a *symmetry*: the
   true output may be unknown, but `f(perm(x)) == f(x)`,
   `dist(a,b) == dist(b,a)`, `f(2x) == 2·f(x)` must still hold.
   `--relation "f(sorted(x)) == f(x)"`-style declarations run under
-  the N-run harness (#25) over generated inputs (#29); a violation
-  keeps the input, shrinks it (#28), and traces both sides of the
+  the N-run harness (#63) over generated inputs (#67); a violation
+  keeps the input, shrinks it (#66), and traces both sides of the
   broken symmetry.
 - **Why:** the oracle problem is the hard wall of testing numerical
   and scientific code — you often *can't* say what the right answer
@@ -1295,8 +1294,8 @@ standalone gate lacks.
 - **How:** a relation is a pair (input transform, output relation)
   evaluated by the existing `--start-when`/`--invariant` expression
   machinery; violations become first-class events with the usual
-  scrubber markers; #26 diffs the two runs of a broken relation.
-- **Effort:** S–M on top of #25/#29.
+  scrubber markers; #64 diffs the two runs of a broken relation.
+- **Effort:** S–M on top of #63/#67.
 - **Prior art:** metamorphic testing (T.Y. Chen et al., 1998) —
   standard in compiler and search-engine testing, almost never
   available to everyday Python.
@@ -1304,32 +1303,32 @@ standalone gate lacks.
 ## Deliberately still rejected
 
 - **Viewer-side eval / edit-and-continue** — replay must never
-  pretend to compute; recording-side #34/#35 cover the need honestly.
+  pretend to compute; recording-side #72/#73 cover the need honestly.
 - **3D visualization** — aggregation and filtering, not rendering
   heroics (unchanged since the brief).
 - **Rebuilding samplers/profilers** — py-spy and friends exist; we
-  bridge (#67), not clone.
+  bridge (#105), not clone.
 - **Auto-running composed commands from the map** — the ⌖ copy box is
   the interface on purpose: the funnel teaches; a button would
   obscure.
 
 ## If you only build five
 
-1. **#25 + #26** — the reliability lab and the divergence finder: the
+1. **#63 + #64** — the reliability lab and the divergence finder: the
    remembered idea, and the tool it makes possible.
-2. **#60** — per-test chapters (it unlocks #27's ranked suspects for
+2. **#98** — per-test chapters (it unlocks #65's ranked suspects for
    free).
-3. **#63** — chunked keyframes: every ambitious feature above hits
+3. **#101** — chunked keyframes: every ambitious feature above hits
    the 2M wall without it.
-4. **#68** — deep links: one day of work, changes how traces are
+4. **#106** — deep links: one day of work, changes how traces are
    shared forever.
-5. **#42** — the oscilloscope: the demo that shows people what kind
+5. **#80** — the oscilloscope: the demo that shows people what kind
    of tool this is.
 
 ## Good first features (S-effort, self-contained)
 
-#27 (after 25) · #32 · #34 · #35 · #41 · #47-static · #58 · #61 ·
-#66-Tier1 · #68 · #74 · #75 · #77 · #84 · #86.
+#65 (after 63) · #70 · #72 · #73 · #79 · #85-static · #96 · #99 ·
+#104-Tier1 · #106 · #112 · #113 · #115 · #122 · #124.
 
 ---
 

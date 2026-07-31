@@ -677,6 +677,7 @@ dead or invented panel; every cap and truncation is announced.
 - **Displayed:** **↦** = name rebound (old object untouched); **↺** =
   object mutated (every alias changed too); **🔗** on variables that
   are the same object under different names (hover lists the aliases).
+  Toggleable in the viewer's badges menu (on by default).
 - **Why:** kills the "why did `a` flash when I touched `b`" confusion
   at the root — the single most common Python mental-model gap.
 - **Use case:** `b = a; b.append(x)` — both variables flash with 🔗 and
@@ -693,6 +694,7 @@ dead or invented panel; every cap and truncation is announced.
 - **Displayed:** **⛓↑** = lives in the enclosing frame (nonlocal);
   **⛓↓** = shared with inner functions defined here (hover names the
   partner frame).
+  Toggleable in the viewer's badges menu (on by default).
 - **Why:** decorators, factories, callbacks — and the late-binding
   loop-of-lambdas trap — depend on cells nobody can see. Now visible.
 - **Use case:** the classic loop-of-lambdas bug: every lambda shows ⛓↑
@@ -708,6 +710,7 @@ dead or invented panel; every cap and truncation is announced.
   function's default objects.
 - **Displayed:** **⚠def** on an argument that *is* the shared mutable
   default (`def f(x, acc=[])`).
+  Toggleable in the viewer's badges menu (on by default).
 - **Why:** the def-time-evaluation trap persists state across calls and
   is invisible in source; the badge makes it jump out.
 - **Use case:** a "fresh" accumulator arrives already holding last
@@ -723,6 +726,7 @@ dead or invented panel; every cap and truncation is announced.
   module's import are flagged.
 - **Displayed:** **⚙ import time** next to the event badge while inside
   import execution.
+  Toggleable in the viewer's badges menu (on by default).
 - **Why:** the interpreter's two lives — loading vs running — kept
   permanently distinct; explains "why did this run before main?".
 - **Use case:** a module-level `registry.append(...)` fires during
@@ -738,6 +742,7 @@ dead or invented panel; every cap and truncation is announced.
 - **Measured:** name-based recognition of `__lt__`/`__eq__`/
   `__getitem__`/… frames (approximate and labeled as such).
 - **Displayed:** a hint on the call: "invoked implicitly by Python — <".
+  Off by default — enable it in the viewer's badges menu.
 - **Why:** operators secretly calling methods is core Python; the hint
   connects `a < b` to the `__lt__` frame that appears.
 - **Use case:** sorting a list of custom objects — each comparison
@@ -758,6 +763,7 @@ dead or invented panel; every cap and truncation is announced.
   Exporter, passed ZipMixin and JsonMixin, found export on Serializer".
   Cooperative `super()` chains show successive suppliers walking the
   chain.
+  Off by default — enable it in the viewer's badges menu.
 - **Why:** multiple inheritance stops being folklore — you watch C3
   resolution happen call by call.
 - **Use case:** `example_mro.py`: successive `super().speak()` calls

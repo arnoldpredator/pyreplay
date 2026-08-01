@@ -560,6 +560,16 @@ jumpable to where execution actually arrived. Click an executed line's
 number and you jump to its first execution. Line granularity (under fn
 the panel says why it can't answer).
 
+**The backward slice (✂).** The provenance row's "← from a, b" is one
+hop; the **✂ slice** button beside it iterates to closure — every
+recorded event that contributed to the clicked value, drawn as green
+pins on the scrubber, with ←/→ walking the slice instead of the
+stream and Esc exiting. The walk crosses call boundaries through
+return values into the callee's own chain; what name-flow can't
+cross — attribute/subscript writes, in-place mutation, caller
+arguments — becomes a listed **frontier stop**, never a silent gap.
+A 10k-event trace collapses to the dozen events that made one value.
+
 **Boundary schemas.** Every trace aggregates each function's observed
 interface — the structural *shape* of arguments and returns (`dict{qty,
 price}`, `list[dict{sku, qty}]`), never values. Stable interfaces show

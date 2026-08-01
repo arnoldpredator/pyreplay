@@ -2004,6 +2004,28 @@ def build_dataflow(source, filename="<unknown>"):
                 srcs = names_in(node.value)
                 out.setdefault(node.lineno, {})[tn] = (
                     [tn] + [s for s in srcs if s != tn])[:8]
+        elif isinstance(node, ast.AnnAssign):
+            if node.value is not None:
+                for tn in targets(node.target):
+                    out.setdefault(node.lineno, {})[tn] = \
+                        names_in(node.value)
+        elif isinstance(node, ast.NamedExpr):
+            if isinstance(node.target, ast.Name):
+                out.setdefault(node.lineno, {})[node.target.id] = \
+                    names_in(node.value)
+        elif isinstance(node, (ast.For, ast.AsyncFor)):
+            # the loop variable draws from the iterable — the most
+            # common chain link a backward slice (#75) has to cross
+            for tn in targets(node.target):
+                out.setdefault(node.lineno, {})[tn] = \
+                    names_in(node.iter)
+        elif isinstance(node, ast.Return):
+            if node.value is not None:
+                # "<return>" pseudo-target: #75 crosses call
+                # boundaries by walking a return value back to the
+                # return statement's own source names
+                out.setdefault(node.lineno, {})["<return>"] = \
+                    names_in(node.value)
     return out
 
 

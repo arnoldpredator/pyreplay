@@ -745,6 +745,42 @@ dead or invented panel; every cap and truncation is announced.
 
 ---
 
+### 75. The backward slice — transitive provenance (v1)
+- **Measured:** the provenance panel's one hop, iterated to closure.
+  From a clicked value, the walk resolves its assignment line's
+  source names (the static dataflow, which now also tracks `return`
+  expressions, loop targets and walrus bindings), finds where each
+  source was last set *in that frame instance* (the change index),
+  and recurses — crossing call boundaries through return values into
+  the callee's own chain. Name-flow only, and it says so: attribute/
+  subscript writes, in-place mutation, C-level effects and caller
+  arguments become **frontier stops**, listed, never silently
+  crossed. Capped at 400 events, the cap stated.
+- **Displayed:** a **✂ slice** button beside every "← from …" row.
+  Click it: the scrubber grows a strip of green pins — the trace
+  reduced to the events that contributed to this value — the slice
+  bar names the seed, the event count and the frontier stops (hover
+  lists each with its reason), and ←/→ plus the step buttons walk
+  the slice instead of the stream. Esc exits.
+- **Why:** "how did this wrong answer come to be" as a navigation
+  mode. A 10k-event trace collapses to the dozen events that matter
+  for one value — Weiser's program slicing, standing on ast dataflow
+  and the recorded change index instead of fragile bytecode stacks.
+- **Use case:** `d = scale(b) + a` computed wrong. Slice `d`: eight
+  green pins — `d`, `c`, `a`, `b`, the def of `scale`, and inside
+  the call, `return m + 1` back through `m` — with two honest
+  frontier stops (`k` is an argument; the def-binding isn't an
+  assignment). Walk them with → and the story tells itself.
+- **Command:** any line-granularity trace — click ✂ slice on a
+  changed variable's provenance row. (Caller-argument crossing and
+  container-element flow are the roadmap remainder.)
+- **Screenshot** — the slice of `d`: green pins on the scrubber, the
+  slice bar counting 8 events and 2 frontier stops.
+
+  [![Feature 75 — backward slice](screenshots/75-slice.png)](screenshots/75-slice.png)
+
+---
+
 ### 80. The oscilloscope — strip-charts & phase portraits
 - **Measured:** nothing new — the per-frame change index already holds
   every value a numeric variable took; the chart is a pure projection
@@ -1590,7 +1626,7 @@ dead or invented panel; every cap and truncation is announced.
 ## J. Infrastructure (no screenshots needed)
 
 ### 61. `checks.py` — the regression suite
-62 data-level checks (no browser): the tracer re-runs the permanent
+64 data-level checks (no browser): the tracer re-runs the permanent
 example suite and the mapper its fixtures, the embedded JSON is
 extracted from each generated HTML (chunked or not), and the honesty
 invariants are asserted in plain Python — windowed-change correctness,
@@ -1603,7 +1639,8 @@ deep links, per-test chapters, `--check` exit codes, the black-box
 ring, capsule contents, console-lane attribution, whyline guards,
 boundary schemas, schedule-chaos determinism and honesty labels,
 happens-before edge causality and Perfetto flow pairing, dark-edge
-diffing and crime-scene churn, each with its absence honesty.
+diffing and crime-scene churn (each with its absence honesty), the
+backward slice's dataflow contract and golden closure.
 Every subprocess the suite spawns pins its stdin, so
 the result cannot depend on how the suite was invoked. Run before and
 after every change, always.

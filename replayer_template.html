@@ -269,6 +269,21 @@
   .prov .provlink { background: none; border: 0; font: inherit; padding: 0;
     color: var(--accent); cursor: pointer; text-decoration: underline dotted; }
   .prov .provlink:hover { color: var(--changed-text); }
+  .prov .provslice { background: none; border: 1px solid var(--border);
+    border-radius: 4px; font: inherit; font-size: 10px; padding: 0 5px;
+    margin-left: 6px; color: var(--call); cursor: pointer; }
+  .prov .provslice:hover { border-color: var(--call); }
+  #smarks { position: relative; height: 7px; margin: 0 7px 2px; }
+  .smark { position: absolute; top: 0; width: 3px; height: 7px;
+    background: var(--call); border-radius: 1px; cursor: pointer; }
+  .smark:hover { background: #b2f0bb; }
+  #slicebar { display: none; padding: 4px 14px; background: #17251b;
+    color: var(--call); font-size: 12px; border-top: 1px solid
+    var(--border); }
+  #slicebar b { color: var(--text); }
+  #slicebar .sfront { color: var(--warn); text-decoration: underline
+    dotted; cursor: help; }
+  #slicebar button { margin-left: 10px; padding: 0 8px; font-size: 11px; }
   .vval { overflow-x: auto; white-space: nowrap; padding-top: 3px; }
   .pv { word-break: break-all; }
   .pv.str { color: #a8d08a; }
@@ -467,6 +482,7 @@
   </div>
 </main>
 <footer>
+  <div id="slicebar"></div>
   <div id="qbar">
     <input id="query" type="search" spellcheck="false"
       placeholder="query events — x=42 · count>10 · type:exc · exc:KeyError · fn:push · file:cart · changed:total · mut:items · after:5000 · trip · bare word = source text · space = AND ( / focuses · Enter = next hit )">
@@ -2604,7 +2620,11 @@ function render() {
                 escapeHtml(s) + "</span>";
           });
           prov = '<div class="prov" title="what produced ' +
-            escapeHtml(r.label) + '">← from ' + links.join(", ") + "</div>";
+            escapeHtml(r.label) + '">← from ' + links.join(", ") +
+            ' <button class="provslice" data-slice="' +
+            escapeHtml(r.label) + '" title="#75 backward slice: every ' +
+            'recorded event that contributed to this value — pins the ' +
+            'scrubber, ←/→ walk the chain">✂ slice</button></div>';
         }
       }
       return '<div class="vrow' + (r.isCh && !resumed ? " changed" : "") +
@@ -2668,8 +2688,8 @@ function stepOut() {
     if (eventFrame[j] === par) { goto(j); return; }
 }
 ctl("btn-first", () => { stop(); goto(0); });
-ctl("btn-prev",  () => { stop(); goto(idx - 1); });
-ctl("btn-next",  () => { stop(); goto(idx + 1); });
+ctl("btn-prev",  () => { stop(); sliceStep(-1); });   // #75: walks the
+ctl("btn-next",  () => { stop(); sliceStep(1); });    // slice when on
 ctl("btn-over",  () => { stop(); stepOver(); });
 ctl("btn-out",   () => { stop(); stepOut(); });
 ctl("btn-last",  () => { stop(); goto(events.length - 1); });
@@ -2901,6 +2921,9 @@ $("vars").addEventListener("click", e => {
   } else if (t.classList.contains("vcount")) {
     historyVar = historyVar === t.dataset.var ? null : t.dataset.var;
     render();
+  } else if (t.classList.contains("provslice")) {
+    stop();
+    enterSlice(t.dataset.slice);   // #75
   } else if (t.classList.contains("vtick")
              || t.classList.contains("provlink")
              || t.classList.contains("cpoint")) {
@@ -2914,8 +2937,9 @@ document.addEventListener("keydown", e => {
     if (e.key === "Escape") e.target.blur();   // recover the transport
     return;
   }
-  if (e.key === "ArrowRight") { stop(); goto(idx + 1); }
-  else if (e.key === "ArrowLeft") { stop(); goto(idx - 1); }
+  if (e.key === "ArrowRight") { stop(); sliceStep(1); }
+  else if (e.key === "ArrowLeft") { stop(); sliceStep(-1); }
+  else if (e.key === "Escape") { if (SLICE) exitSlice(); }
   else if (e.key === "Home") { stop(); goto(0); }
   else if (e.key === "End") { stop(); goto(events.length - 1); }
   else if (e.key === " ") { e.preventDefault(); play(); }
@@ -3025,6 +3049,163 @@ function ensureQmarks() {
   }
   return box;
 }
+/* ---------- #75 backward slice: transitive provenance ----------
+   The provenance panel answers one hop ("← from a, b"); the slice
+   iterates it to closure: every recorded event that contributed to
+   the clicked value. Name-flow only, and it says so — attribute/
+   subscript writes, in-place mutation, C-level effects and caller
+   arguments are FRONTIER stops, listed, never silently crossed. */
+let SLICE = null;
+const SLICE_CAP = 400;
+
+function lastChangeBefore(name, fid, at, inclusive) {
+  const cl = changesFor(name, fid);
+  let last = -1;
+  for (const j of cl) {
+    if (j < at || (inclusive && j === at)) last = j;
+    else break;
+  }
+  return last;
+}
+
+function computeSlice(label, at) {
+  const evs = new Set(), frontier = [], seen = new Set();
+  let truncated = false;
+  const fid0 = eventFrame[at];
+  const seed = lastChangeBefore(label, fid0, at, true);
+  const queue = [];
+  if (seed >= 0) queue.push({ n: label, at: seed, fid: fid0 });
+  else frontier.push({ n: label, at: -1,
+                       why: "no recorded change in this frame" });
+  while (queue.length) {
+    if (evs.size >= SLICE_CAP) { truncated = true; break; }
+    const nd = queue.shift();
+    const key = nd.fid + "|" + nd.n + "@" + nd.at;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    evs.add(nd.at);
+    const ev = events[nd.at];
+    if (nd.n !== "<return>" && ev.e === "call") {
+      // a parameter arrives AT the call: the chain continues in the
+      // caller's argument expression, which name-flow can't cross
+      frontier.push({ n: nd.n, at: nd.at,
+                      why: "argument — came from the caller's call " +
+                        "site" });
+      continue;
+    }
+    let dfEv = nd.at;   // "<return>": the return line IS the expr line
+    if (nd.n !== "<return>") {
+      // a change is reported one executed line late — walk back to
+      // the assignment's own line in this frame
+      let pj = nd.at - 1;
+      while (pj >= 0 && eventFrame[pj] !== nd.fid) pj--;
+      if (pj < 0) {
+        frontier.push({ n: nd.n, at: nd.at,
+                        why: "born before this frame's recorded " +
+                          "events" });
+        continue;
+      }
+      dfEv = pj;
+    }
+    const srcs = (((DATA.dataflow || {})[events[dfEv].f] || {})
+                  [events[dfEv].l] || {})[nd.n];
+    if (!srcs) {
+      frontier.push({ n: nd.n, at: nd.at,
+                      why: "assignment not name-tracked (attribute/" +
+                        "subscript target, in-place mutation, or a " +
+                        "C-level effect)" });
+      continue;
+    }
+    for (const s of srcs) {
+      const last = lastChangeBefore(s, nd.fid, nd.at, false);
+      if (last >= 0) queue.push({ n: s, at: last, fid: nd.fid });
+      else frontier.push({ n: s, at: -1,
+                           why: "parameter, literal input, or set " +
+                             "before this frame" });
+    }
+    // calls on the assignment line: the value may have come THROUGH
+    // a return — every DIRECT-child return between the line and the
+    // change joins the chain and continues inside its callee
+    if (nd.n !== "<return>") {
+      for (let j = nd.at - 1; j > dfEv; j--) {
+        if (events[j].e !== "return") continue;
+        const cfid = eventFrame[j];
+        if (cfid === nd.fid) continue;
+        let c0 = -1;
+        for (let k = j; k > dfEv; k--)
+          if (eventFrame[k] === cfid && events[k].e === "call") c0 = k;
+        if (c0 > 0 && eventFrame[c0 - 1] === nd.fid)
+          queue.push({ n: "<return>", at: j, fid: cfid });
+      }
+    }
+  }
+  return { label, seed: at, evs, frontier, truncated,
+           order: [...evs].sort((a, b) => a - b) };
+}
+
+function ensureSmarks() {
+  let box = document.getElementById("smarks");
+  if (!box) {
+    box = document.createElement("div");
+    box.id = "smarks";
+    const bar = document.getElementById("qbar");
+    bar.parentNode.insertBefore(box, bar);
+  }
+  return box;
+}
+
+function drawSlice() {
+  const box = ensureSmarks(), bar = $("slicebar");
+  box.innerHTML = "";
+  box.style.display = "none";
+  if (!SLICE) { bar.style.display = "none"; return; }
+  const total = Math.max(1, events.length - 1);
+  SLICE.order.forEach(j => {
+    const p = document.createElement("span");
+    p.className = "smark";
+    p.style.left = (j / total * 100) + "%";
+    p.title = "slice — event " + (j + 1);
+    p.onclick = () => { stop(); goto(j); };
+    box.appendChild(p);
+  });
+  box.style.display = "";
+  const fr = SLICE.frontier;
+  bar.innerHTML = "✂ SLICE of <b>" + escapeHtml(SLICE.label) +
+    "</b> @ ev " + (SLICE.seed + 1) + " — " + SLICE.order.length +
+    " event(s)" +
+    (fr.length ? ' · <span class="sfront" title="' +
+      escapeHtml(fr.slice(0, 12).map(f => f.n + ": " + f.why)
+        .join("\n") +
+        (fr.length > 12 ? "\n+" + (fr.length - 12) + " more" : "")) +
+      '">' + fr.length +
+      " frontier stop(s) — the chain is not tracked past these" +
+      "</span>" : "") +
+    (SLICE.truncated ? " · capped at " + SLICE_CAP + " events" : "") +
+    " · ←/→ walk the slice" +
+    '<button id="sliceoff">exit (Esc)</button>';
+  bar.style.display = "block";
+  $("sliceoff").onclick = exitSlice;
+}
+
+function enterSlice(label) {
+  SLICE = computeSlice(label, idx);
+  drawSlice();
+}
+function exitSlice() {
+  SLICE = null;
+  drawSlice();
+}
+function sliceStep(dir) {
+  if (!SLICE || !SLICE.order.length) { goto(idx + dir); return; }
+  const o = SLICE.order;
+  if (dir > 0) {
+    for (const j of o) if (j > idx) { goto(j); return; }
+  } else {
+    for (let k = o.length - 1; k >= 0; k--)
+      if (o[k] < idx) { goto(o[k]); return; }
+  }
+}
+
 function runQuery() {
   const q = $("query").value;
   const box = ensureQmarks();

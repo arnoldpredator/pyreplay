@@ -7,7 +7,7 @@ can pick an item and implement it. Features are numbered **#63 onward**, continu
 in FEATURES.md. Fifteen roadmap items have shipped since the list was
 written (63, 64, 65, 70, 77, 79, 80, 98, 101 v1, 103, 104 Tier 1,
 106, 109, 118, 120 v1) — their rows below are struck through;
-**45 remain unbuilt** (plus the stated remainders of 88/101/104/119/120).
+**44 remain unbuilt** (plus the stated remainders of 75/88/101/104/119/120).
 
 ## Start here — how to contribute
 
@@ -81,7 +81,7 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
 | 72 | Record extra expressions each line (--watch) | S | ★★ |
 | 73 | Contracts checked during the run (--invariant) | S | ★★ |
 | 74 | Mine the invariants the runs never broke | L | ★★★ |
-| 75 | Full backward slice of a value | L | ★★★ |
+| 75 | ~~Full backward slice of a value~~ **shipped (v1; caller-arg crossing remains)** | — | ★★★ |
 | 76 | Forward taint from an input | L | ★★ |
 | 77 | ~~"Why didn't this line run?"~~ **shipped** | — | ★★★ |
 | 78 | Prove a loop is stuck (state recurrence) | M | ★★ |
@@ -299,6 +299,7 @@ software.
   invariant detector; almost never applied to everyday Python.
 
 ### 75. Full backward slice (transitive provenance)
+**v1 shipped 2026-08-01** — now catalog entry #75 in [FEATURES.md](FEATURES.md): ✂ slice from any provenance row — closure walk with return-crossing, green scrubber pins, ←/→ walks the slice, frontier stops listed with reasons. What remains: caller-argument crossing, container-element flow.
 - **What:** today's provenance panel is one hop ("← from a, b").
   Slice mode: click a value → compute the closure — **every event
   that contributed to it** — and dim the rest of the trace; the

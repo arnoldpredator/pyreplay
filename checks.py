@@ -2423,6 +2423,74 @@ def _():
            f"{mp['modules'][0]}")
 
 
+@check("slice dataflow: return, loop and walrus targets tracked (#75)")
+def _():
+    fx = fixture("fx_slice_df.py", (
+        "def f(k):\n"
+        "    m = k * 3\n"
+        "    return m + 1\n"
+        "total = 0\n"
+        "for i in range(3):\n"
+        "    total = total + i\n"
+        "r = f(total)\n"
+        "if (w := r + 1) > 5:\n"
+        "    print(w)\n"))
+    df = run_trace(fx, name="slice_df")["dataflow"]["fx_slice_df.py"]
+    expect(df.get("3", {}).get("<return>") == ["m"],
+           f"a return statement must expose its sources under "
+           f"'<return>': {df.get('3')}")
+    expect(df.get("5", {}).get("i") == ["range"],
+           f"a loop variable draws from its iterable's names: "
+           f"{df.get('5')}")
+    expect(df.get("8", {}).get("w") == ["r"],
+           f"a walrus target draws from its value: {df.get('8')}")
+
+
+@check("slice: golden chain — the closure is exact on a known case (#75)")
+def _():
+    # mirrors the viewer's walk on a single-frame program where the
+    # full closure is known by hand: d <- (c, a), c <- b, b <- a
+    fx = fixture("fx_slice.py", (
+        "a = 2\n"
+        "b = a + 3\n"
+        "c = b * b\n"
+        "d = c + a\n"
+        "print(d)\n"))
+    p = run_trace(fx, name="slice_gold")
+    evs, df = p["events"], p["dataflow"]["fx_slice.py"]
+
+    def changes(name):
+        return [i for i, e in enumerate(evs)
+                if name in (e.get("ch") or {})]
+    seed = changes("d")[-1]
+    sl, frontier, queue, seen = set(), [], [("d", seed)], set()
+    while queue:
+        n, at = queue.pop(0)
+        if (n, at) in seen:
+            continue
+        seen.add((n, at))
+        sl.add(at)
+        pj = at - 1          # single frame: every event is in it
+        if pj < 0:
+            frontier.append(n)
+            continue
+        srcs = df.get(str(evs[pj].get("l")), {}).get(n)
+        if srcs is None:
+            frontier.append(n)
+            continue
+        for s in srcs:
+            prior = [j for j in changes(s) if j < at]
+            if prior:
+                queue.append((s, prior[-1]))
+            else:
+                frontier.append(s)
+    expect(sl == {seed, changes("c")[-1], changes("b")[-1],
+                  changes("a")[-1]},
+           f"slice of d must be exactly the d/c/b/a chain, got {sl}")
+    expect(not frontier,
+           f"a fully name-tracked chain has no frontier: {frontier}")
+
+
 # ---------------------------------------------------------------- runner
 
 def main():

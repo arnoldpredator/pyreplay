@@ -92,6 +92,10 @@
   .badge.excsoft { background: #8a6d3b; color: #fff; }
   .badge.yield  { background: #b48ead; }
   .badge.resume { background: #b48ead; }
+  .badge.hb     { background: #56b6c2; }
+  #wake { display: none; font-size: 12px; color: #56b6c2; }
+  #wake .wkj { cursor: pointer; text-decoration: underline;
+    color: var(--accent); }
   #ctx { color: var(--warn); font-size: 11px; margin-left: 10px; }
   /* machinery-badges menu: display toggles only — data is always recorded */
   #machmenu { position: relative; }
@@ -441,6 +445,7 @@
       <div id="where"></div>
       <div id="hint"></div>
       <div id="retval"></div>
+      <div id="wake"></div>
       <div id="iface"></div>
       <div id="mro"></div>
       <div id="cond"></div>
@@ -925,6 +930,12 @@ $("iface").addEventListener("click", e => {
 });
 $("whyline").addEventListener("click", e => {
   if (e.target.classList && e.target.classList.contains("wlj")) {
+    stop();
+    goto(parseInt(e.target.dataset.goto, 10));
+  }
+});
+$("wake").addEventListener("click", e => {   // #88: to the other end
+  if (e.target.classList && e.target.classList.contains("wkj")) {
     stop();
     goto(parseInt(e.target.dataset.goto, 10));
   }
@@ -2030,9 +2041,9 @@ function computeStacks(idx) {
   }
   for (let i = start; i <= idx; i++) {
     const ev = events[i];
-    if (ev.e === "chap") {           // a test boundary is not a frame,
-      maybeKeyframe(i, idx, stacks, curT);   // but state-after-it is
-      continue;                              // still snapshot-worthy
+    if (ev.e === "chap" || ev.e === "hb") {  // boundaries and wakes are
+      maybeKeyframe(i, idx, stacks, curT);   // not frames, but state
+      continue;                              // is still snapshot-worthy
     }
     const t = laneOf(ev);
     curT = t;
@@ -2116,7 +2127,44 @@ function render() {
 
   const badge = $("badge");
   const GK = { g: "generator", c: "coroutine", a: "async generator" };
-  if (ev.e === "log") {
+  /* #88: the wake panel — who woke whom, jumpable to the other end */
+  const wk = $("wake");
+  if (ev.e === "hb") {
+    const srcLane = (ev.t || "main") + (ev.tk ? " · " + ev.tk : "");
+    const laneHit = e =>
+      (e.e !== "hb") && ((e.tk === ev.dst) ||
+        (!e.tk && (e.t || "MainThread") === ev.dst));
+    let tgt = -1;
+    if (ev.hb === "tjoin") {
+      for (let k = idx - 1; k >= 0; k--)
+        if (laneHit(events[k])) { tgt = k; break; }
+    } else {
+      for (let k = idx + 1; k < events.length; k++)
+        if (laneHit(events[k])) { tgt = k; break; }
+      if (tgt < 0)   // a black-box window can hold the consequences
+        for (let k = idx - 1; k >= 0; k--)   // but not the wake order
+          if (laneHit(events[k])) { tgt = k; break; }
+    }
+    const dir = ev.hb === "tjoin"
+      ? esc2(ev.dst) + " finished ⤳ " + esc2(srcLane) + " continues"
+      : esc2(srcLane) + " ⤳ " + esc2(ev.dst) +
+        (ev.hb === "create" ? " — task created" : " — thread started");
+    wk.innerHTML = dir + (tgt >= 0
+      ? ' · <span class="wkj" data-goto="' + tgt +
+        '">jump to the other end ›</span>'
+      : ' · <span style="color:var(--dim)">(the other lane never ' +
+        'recorded an event)</span>');
+    wk.style.display = "block";
+  } else {
+    wk.style.display = "none";
+  }
+  if (ev.e === "hb") {
+    badge.className = "badge hb";
+    const HB = { create: "WAKE — task created",
+                 tstart: "WAKE — thread started",
+                 tjoin: "WAKE — join returned" };
+    badge.textContent = "⤳ " + (HB[ev.hb] || "WAKE " + ev.hb);
+  } else if (ev.e === "log") {
     badge.className = "badge log";
     badge.textContent = "CONSOLE " + (ev.s === "err" ? "stderr" : "stdout");
   } else if (ev.e === "chap") {
@@ -2913,7 +2961,7 @@ function parseQuery(q) {
       const k = { exception: "exc", exc: "exc", line: "line",
                   call: "call", return: "return", ret: "return",
                   chap: "chap", test: "chap", log: "log",
-                  console: "log", yield: "yield",
+                  console: "log", hb: "hb", wake: "hb", yield: "yield",
                   resume: "resume" }[m[1].toLowerCase()];
       if (!k) { bad.push(tok); return; }
       if (k === "yield")

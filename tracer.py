@@ -107,6 +107,17 @@ still owns the schedule: biased exploration, not replay). Under
 without" becomes an afternoon's sentence. Timings under chaos are not
 performance truth; --export-perfetto is refused.
 
+Every run also records WHO WOKE WHOM (#88): thread started/joined and
+asyncio task created (create_task, ensure_future, gather and TaskGroup
+all funnel through it) land as first-class ⤳ wake events at the exact
+moment they happen, attributed to the wake site. The viewer names the
+edge and jumps to its other end; the Perfetto export draws real flow
+arrows between the lanes. A start edge is recorded BEFORE the OS gets
+the child thread — a started thread can live its whole life before
+start() returns, and a wake must precede its consequences. v1 records
+create/start/join; cancel edges and queue put→get correlation remain
+on the roadmap.
+
 Every fn or line trace also aggregates its BOUNDARY SCHEMAS (#120):
 the structural shape of every function's observed arguments and
 returns — types, keys, nesting, never values — shown on call/return
@@ -997,6 +1008,10 @@ class Tracer:
         self._tk_pin = {}     # id(frame) -> lane pinned at trigger time
         self._tlabels = {}    # thread ident -> (thread obj, display name)
         self._tcounts = {}    # thread name -> how many threads used it
+        self._tobj_labels = {}  # id(thread) -> label (#88; ident-reuse-proof)
+        self._hb_objs = {}      # id(obj) -> thread/task woken by an hb
+        #                         event — held so id() stays unambiguous
+        #                         and task names can late-bind
         # False = watching but not recording
         self.armed = start_at is None and start_when is None
         # #103: ring mode — a bounded window that never truncates the
@@ -1169,6 +1184,69 @@ class Tracer:
             ev["tk"] = tk
         self.events.append(ev)
 
+    def record_hb(self, kind, dst_name, dst_obj=None):
+        """#88: a happens-before edge — task created, thread started or
+        joined — as a first-class event (e="hb") at the moment the wake
+        action ran, attributed to the nearest in-scope frame. The
+        event's own lane (t/tk) is where the action happened; "dst" is
+        the OTHER lane. Direction by kind: create/tstart wake own→dst,
+        tjoin means dst's end released own. A thread dst arrives as the
+        Thread OBJECT (never its ident — the OS reuses idents the
+        moment a thread dies) and is resolved to its lane label at
+        write time (labels are assigned lazily — see resolve_hb)."""
+        if not self.armed or self.truncated \
+                or len(self.events) >= self.max_events:
+            return
+        ev = {"e": "hb", "hb": kind, "dst": str(dst_name), "ch": {},
+              "fn": "<wake>"}
+        if dst_obj is not None:
+            self._hb_objs[id(dst_obj)] = dst_obj
+            ev["_di"] = id(dst_obj)
+        f = sys._getframe(2)          # skip record_hb + the hook wrapper
+        depth = 0
+        while f is not None and depth < 40:
+            rel = self._rel(f.f_code.co_filename)
+            if rel is not None:
+                ev["f"] = rel
+                ev["l"] = f.f_lineno
+                ev["fn"] = f.f_code.co_name
+                break
+            f = f.f_back
+            depth += 1
+        if self.granularity == "fn":
+            now = time.perf_counter_ns() // 1000
+            ev["ts"] = max(0, now - self._last_ts)
+            self._last_ts = now
+        tname = self._thread_label()
+        if tname != "MainThread":
+            ev["t"] = tname
+        tk = self._task_name()
+        if tk is not None:
+            ev["tk"] = tk
+        self.events.append(ev)
+
+    def resolve_hb(self):
+        """#88: late-bind wake destinations. A thread's lane label
+        exists only once it records an event, and a task can be RENAMED
+        after creation (its lane key is the final name) — so hb events
+        hold the woken OBJECT and bind the label here, at write time.
+        A thread that never entered traced code keeps its raw name,
+        honestly marked."""
+        for e in self.events:
+            di = e.pop("_di", None)
+            if di is None:
+                continue
+            label = self._tobj_labels.get(di)
+            if label is None:
+                getn = getattr(self._hb_objs.get(di), "get_name", None)
+                if getn is not None:      # a task: ask its FINAL name
+                    try:
+                        label = getn()
+                    except Exception:
+                        label = None
+            e["dst"] = label if label is not None \
+                else e["dst"] + " (never traced)"
+
     def _gen_mark(self, frame, event, yielding=None):
         """Generator/coroutine lifecycle: first call "c", resumption "r",
         suspension (yield/await) "y", true exhaustion "e" — one instance
@@ -1210,6 +1288,9 @@ class Tracer:
         self._tcounts[name] = n
         label = name if n == 1 else f"{name} #{n}"
         self._tlabels[th.ident] = (th, label)
+        # #88: idents are OS handles and get REUSED the moment a thread
+        # dies — wake-edge resolution must key on the object instead
+        self._tobj_labels[id(th)] = label
         return label
 
     def _current_task(self):
@@ -1581,6 +1662,60 @@ class Tracer:
 
 
 MON = getattr(sys, "monitoring", None)   # PEP 669, Python 3.12+
+
+
+def _install_hb_hooks(tracer):
+    """#88: wrap the wake primitives — threading.Thread.start/join and
+    the event loop's create_task (the funnel for asyncio.create_task,
+    ensure_future, gather and TaskGroup) — so causality lands in the
+    stream as hb events. Class-level patches; returns the undo list.
+    v1 records create/start/join; cancel and queue put→get correlation
+    are the roadmap remainder."""
+    undo = []
+    t_start = threading.Thread.start
+
+    def start_hb(self, *a, **kw):
+        # the edge is recorded BEFORE the OS gets the child: a started
+        # thread can run its whole life before start() returns, and the
+        # wake must precede its consequences in the stream
+        try:
+            tracer.record_hb("tstart", self.name, self)
+        except Exception:
+            pass
+        return t_start(self, *a, **kw)
+    threading.Thread.start = start_hb
+    undo.append(lambda: setattr(threading.Thread, "start", t_start))
+
+    t_join = threading.Thread.join
+
+    def join_hb(self, *a, **kw):
+        r = t_join(self, *a, **kw)
+        try:
+            if not self.is_alive():   # a timed-out join released nobody
+                tracer.record_hb("tjoin", self.name, self)
+        except Exception:
+            pass
+        return r
+    threading.Thread.join = join_hb
+    undo.append(lambda: setattr(threading.Thread, "join", t_join))
+
+    try:
+        import asyncio.base_events as _abe
+        l_create = _abe.BaseEventLoop.create_task
+
+        def create_hb(self, coro, **kw):
+            task = l_create(self, coro, **kw)
+            try:
+                tracer.record_hb("create", task.get_name(), task)
+            except Exception:
+                pass
+            return task
+        _abe.BaseEventLoop.create_task = create_hb
+        undo.append(lambda: setattr(_abe.BaseEventLoop, "create_task",
+                                    l_create))
+    except Exception:
+        pass   # no asyncio here: thread edges still work
+    return undo
 
 
 class MonitoringBackend:
@@ -2070,6 +2205,7 @@ def export_perfetto(events, script, path):
     lanes = {}     # lane label -> tid
     open_b = {}    # tid -> names of B slices not yet closed by an E
     stray = 0      # returns whose call predates the trace: skipped
+    hb_flows = []  # #88: wake edges, bound to slices in a second pass
     acc = 0
 
     def brief(enc):
@@ -2134,6 +2270,22 @@ def export_perfetto(events, script, path):
                     else f"TEST {ev.get('o', 'end')} — ")
             tevs.append({"ph": "i", "s": "t", "name": mark + ev.get("id", ""),
                          "cat": "test", "ts": acc, "pid": 1, "tid": tid})
+        elif kind == "hb":
+            # #88: the wake is an instant; the causality is a FLOW —
+            # Perfetto draws the arrow between the two lanes
+            hbk = ev.get("hb")
+            label = {"tstart": "started thread", "tjoin": "joined thread",
+                     "create": "created task"}.get(hbk, hbk)
+            tevs.append({"ph": "i", "s": "t",
+                         "name": "⤳ " + label + " " + ev.get("dst", "?"),
+                         "cat": "wake", "ts": acc, "pid": 1, "tid": tid})
+            if hbk == "create":
+                dst_lane = (ev.get("t", "main") + " · task "
+                            + ev.get("dst", "?"))
+            else:
+                dst_lane = ev.get("dst", "?")
+            hb_flows.append({"kind": hbk, "ts": acc, "tid": tid,
+                             "dst_lane": dst_lane})
         elif kind == "line":
             # a line event means a line-granularity stream: it carries
             # no time, and exporting it would be fiction — refuse here
@@ -2148,6 +2300,47 @@ def export_perfetto(events, script, path):
                          "tid": tid,
                          "args": {"(unclosed)": "frame still live when "
                                                 "the trace ended"}})
+    # #88 second pass: bind each wake edge to real slices. A create/
+    # tstart arrow runs from the wake instant to the woken lane's FIRST
+    # slice after it; a tjoin arrow runs from the joined lane's LAST
+    # slice end to the join instant. A lane that never sliced gets the
+    # instant only — no invented arrow.
+    fid = 0
+    for fl in hb_flows:
+        dst_tid = lanes.get(fl["dst_lane"])
+        if dst_tid is None:
+            continue
+        if fl["kind"] == "tjoin":
+            src = None
+            for e in tevs:
+                if e.get("tid") == dst_tid and e["ph"] == "E" \
+                        and e["ts"] <= fl["ts"]:
+                    src = e
+            if src is None:
+                continue
+            fid += 1
+            tevs.append({"ph": "s", "id": fid, "name": "wake",
+                         "cat": "wake", "ts": src["ts"], "pid": 1,
+                         "tid": dst_tid})
+            tevs.append({"ph": "f", "id": fid, "name": "wake",
+                         "cat": "wake", "bp": "e", "ts": fl["ts"],
+                         "pid": 1, "tid": fl["tid"]})
+        else:
+            dst = None
+            for e in tevs:
+                if e.get("tid") == dst_tid and e["ph"] == "B" \
+                        and e["ts"] >= fl["ts"]:
+                    dst = e
+                    break
+            if dst is None:
+                continue
+            fid += 1
+            tevs.append({"ph": "s", "id": fid, "name": "wake",
+                         "cat": "wake", "ts": fl["ts"], "pid": 1,
+                         "tid": fl["tid"]})
+            tevs.append({"ph": "f", "id": fid, "name": "wake",
+                         "cat": "wake", "bp": "e", "ts": dst["ts"],
+                         "pid": 1, "tid": dst_tid})
     with open(path, "w", encoding="utf-8") as f:
         json.dump({"traceEvents": tevs,
                    "otherData": {"tool": "pyreplay", "script": script}}, f)
@@ -3507,6 +3700,9 @@ def main(argv):
                       file=_RAW["err"], flush=True)
         threading.Thread(target=_beat, daemon=True).start()
 
+    # #88: hooks go in AFTER the tracer's own heartbeat thread started —
+    # the tracer's machinery must never appear as a wake edge
+    hb_undo = _install_hb_hooks(tracer)
     error = None
     mon = None
     if backend == "monitoring":
@@ -3525,6 +3721,7 @@ def main(argv):
             # the tracer's own prints must bypass the console tee
             nonlocal snap_n
             snap_n += 1
+            tracer.resolve_hb()   # #88: bind labels known so far
             shim = types.SimpleNamespace(
                 events=list(tracer.events), sources=dict(tracer.sources),
                 truncated=False, abort_on_cap=True,
@@ -3598,6 +3795,8 @@ def main(argv):
             tracer.chaos.unhook()
         if old_switch is not None:
             sys.setswitchinterval(old_switch)
+        for u in hb_undo:
+            u()
 
     ring_info = None
     if black_box:
@@ -3622,6 +3821,7 @@ def main(argv):
         capsule["stdin"] = base64.b64encode(
             bytes(stdin_sink.data)).decode("ascii")
         capsule["stdinTrunc"] = stdin_sink.total > len(stdin_sink.data)
+    tracer.resolve_hb()   # #88: idents -> lane labels
     bounds = _boundaries(tracer.events)
     extra = {"capsule": capsule,
              "ring": ring_info,

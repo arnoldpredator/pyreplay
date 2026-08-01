@@ -7,7 +7,7 @@ can pick an item and implement it. Features are numbered **#63 onward**, continu
 in FEATURES.md. Fifteen roadmap items have shipped since the list was
 written (63, 64, 65, 70, 77, 79, 80, 98, 101 v1, 103, 104 Tier 1,
 106, 109, 118, 120 v1) — their rows below are struck through;
-**48 remain unbuilt** (plus the stated remainders of 101/104/120).
+**47 remain unbuilt** (plus the stated remainders of 88/101/104/120).
 
 ## Start here — how to contribute
 
@@ -94,7 +94,7 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
 | 85 | Code anatomy: AST + bytecode panel | S–XL | ★★ |
 | 86 | Ternary/short-circuit verdicts via BRANCH events | L | ★★ |
 | 87 | Memory heat on the map (tracemalloc) | M | ★★ |
-| 88 | Who-woke-whom arrows across tasks/threads | L | ★★★ |
+| 88 | ~~Who-woke-whom arrows across tasks/threads~~ **shipped (v1; queue correlation remains)** | — | ★★★ |
 | 89 | Critical path through a concurrent run | M | ★★ |
 | 90 | Lock-wait attribution | L | ★★ |
 | 91 | Multiprocessing children traced into lanes | XL | ★★★ |
@@ -498,6 +498,7 @@ software.
 ## Section 4 — Concurrency truth
 
 ### 88. Happens-before arrows (who woke whom)
+**v1 shipped 2026-08-01** — now catalog entry #88 in [FEATURES.md](FEATURES.md): create/start/join edges as first-class ⤳ events with other-end jumps, plus Perfetto flow arrows between lanes. What remains: cancel edges, queue put→get correlation (uncertain-match honesty), trio/greenlet hooks.
 - **What:** causality edges drawn between lanes: task A *created* B,
   cancelled C, `gather`ed D; a queue `put` in one lane linked to the
   `get` that received the same item in another; thread `start`/`join`

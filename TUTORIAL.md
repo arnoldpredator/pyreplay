@@ -419,6 +419,15 @@ reopens on resume, so suspension shows as a real gap in the row.
 Honesty rule as always: line traces carry no timestamps, so
 `--export-perfetto` refuses to run without `--granularity fn`.
 
+**Who woke whom (the ⤳ arrows).** Every trace records the wake edges
+as first-class events: thread started/joined, asyncio task created
+(`create_task`, `ensure_future`, `gather` and `TaskGroup` all funnel
+through the same door). In the replayer a **⤳ WAKE** badge names the
+edge and offers a jump to its other end; in the Perfetto export the
+edges become real flow arrows drawn between lanes. Threads can outrun
+their own `start()` call — the edge is recorded before the OS gets the
+child, so the wake always precedes its consequences in the stream.
+
 ## 4d. The reliability lab & the instruments (2026-08)
 
 **Run it N times (`--runs`).** One run is an anecdote. `python3

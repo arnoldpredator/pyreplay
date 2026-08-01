@@ -2233,6 +2233,76 @@ def _():
            "refusal must say WHY (perturbed timings)")
 
 
+@check("hb: thread start/join edges, causal order, reuse-proof labels (#88)")
+def _():
+    p = run_trace(os.path.join(HERE, "example_race.py"), name="hb_race")
+    hbs = [e for e in p["events"] if e.get("e") == "hb"]
+    starts = [e for e in hbs if e["hb"] == "tstart"]
+    joins = [e for e in hbs if e["hb"] == "tjoin"]
+    expect(len(starts) == 2 and len(joins) == 2,
+           f"expected 2 starts + 2 joins, got "
+           f"{[(e['hb'], e['dst']) for e in hbs]}")
+    lanes = {e.get("t") for e in p["events"] if e.get("t")}
+    expect({e["dst"] for e in starts} == lanes,
+           f"start dsts {sorted(e['dst'] for e in starts)} must equal the "
+           f"worker lanes {sorted(lanes)} — ident reuse would collapse them")
+    expect({e["dst"] for e in joins} == lanes,
+           "join dsts must cover both workers")
+    expect(all("_di" not in e for e in hbs),
+           "unresolved _di leaked into the payload")
+    for s in starts:
+        at = p["events"].index(s)
+        first_dst = next(i for i, e in enumerate(p["events"])
+                         if e.get("t") == s["dst"])
+        expect(at < first_dst,
+               f"a wake must precede its consequences: tstart {s['dst']} "
+               f"at {at}, first dst event {first_dst}")
+    q = run_trace(os.path.join(HERE, "example_sort.py"), name="hb_none")
+    expect(not any(e.get("e") == "hb" for e in q["events"]),
+           "a single-threaded run must record no wake edges")
+
+
+@check("hb: asyncio create edges late-bind renamed tasks (#88)")
+def _():
+    p = run_trace(os.path.join(HERE, "example_tasks.py"),
+                  "--granularity", "fn", name="hb_tasks")
+    creates = [e for e in p["events"] if e.get("e") == "hb"
+               and e["hb"] == "create"]
+    expect(len(creates) >= 3,
+           f"expected >= 3 task-create edges, got {len(creates)}")
+    tks = {e.get("tk") for e in p["events"] if e.get("tk")}
+    named = {e["dst"] for e in creates}
+    expect({"producer", "consumer"} <= tks,
+           f"sanity: the named task lanes exist ({tks})")
+    expect({"producer", "consumer"} <= named,
+           f"renamed tasks must resolve to their FINAL lane names, "
+           f"got {named}")
+
+
+@check("hb: perfetto flows — wake arrows bound in pairs across lanes (#88)")
+def _():
+    out = os.path.join(TMP, "hb_flow.json")
+    r = subprocess.run([PY, os.path.join(HERE, "tracer.py"),
+                        "--granularity", "fn", "--export-perfetto", out,
+                        "--out", os.path.join(TMP, "hb_flow.html"),
+                        os.path.join(HERE, "example_tasks.py")],
+                       capture_output=True, text=True, cwd=TMP,
+                       stdin=subprocess.DEVNULL, timeout=120)
+    expect(os.path.exists(out), f"no perfetto file ({r.stdout} {r.stderr})")
+    with open(out, encoding="utf-8") as fh:
+        te = json.load(fh)["traceEvents"]
+    wakes = [e for e in te if e.get("cat") == "wake"]
+    s = [e for e in wakes if e["ph"] == "s"]
+    f = [e for e in wakes if e["ph"] == "f"]
+    expect(len(s) >= 2 and len(s) == len(f),
+           f"flow arrows must come in bound pairs: {len(s)} s / {len(f)} f")
+    expect({e["id"] for e in s} == {e["id"] for e in f},
+           "every flow start must meet its finish")
+    expect(any(a["tid"] != b["tid"] for a in s for b in f
+               if a["id"] == b["id"]),
+           "at least one arrow must actually cross lanes")
+
+
 # ---------------------------------------------------------------- runner
 
 def main():

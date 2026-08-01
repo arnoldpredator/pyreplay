@@ -94,7 +94,7 @@ your target language). Both are laid out in
 ## Tests
 
 ```bash
-python3 checks.py     # 55 data-level checks — should print all green
+python3 checks.py     # 58 data-level checks — should print all green
 ```
 
 Every feature is pinned by a check. Run it before and after any change; a
@@ -104,7 +104,7 @@ green suite is the contract that keeps contributions honest.
 
 Bug reports, edge cases, more example programs, and **other languages** are
 all very welcome. **[CONTRIBUTING.md](CONTRIBUTING.md) is the place to start** — one file
-with the roadmap of what to build (48 unbuilt features plus a "good first"
+with the roadmap of what to build (47 unbuilt features plus a "good first"
 list), the ground rules, and the event-log schema a new-language backend emits.
 
 ## License

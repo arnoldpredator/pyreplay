@@ -1131,6 +1131,43 @@ dead or invented panel; every cap and truncation is announced.
 
   [![Feature 41 — perfetto](screenshots/41-perfetto.png)](screenshots/41-perfetto.png)
 
+### 88. Happens-before arrows — who woke whom (v1)
+- **Measured:** the wake primitives are wrapped for the run —
+  `threading.Thread.start`/`join` and the event loop's `create_task`
+  (the funnel for `create_task`, `ensure_future`, `gather` and
+  `TaskGroup`) — and each wake lands in the stream as a first-class
+  event at the moment it happened, attributed to the wake site. A
+  start edge is recorded BEFORE the OS gets the child: a started
+  thread can live its whole life before `start()` returns, and a wake
+  must precede its consequences. Thread labels and task names
+  late-bind at write time — the OS reuses thread idents the moment a
+  thread dies, and tasks get renamed after creation; both would
+  mislabel the edge if bound eagerly. v1 records create/start/join;
+  cancel edges and queue put→get correlation are the roadmap
+  remainder.
+- **Displayed:** a **⤳ WAKE** badge in the replayer with the edge
+  spelled out — "main ⤳ Thread-2 (transfer) — thread started",
+  "worker finished ⤳ main continues" — and a *jump to the other end*
+  link. In the Perfetto export every wake is an instant AND a flow
+  arrow drawn between the lanes: creation arrows run from the waking
+  slice to the woken lane's first slice, join arrows from the joined
+  lane's last slice back to the waiter.
+- **Why:** lanes show interleaving; they don't show **causation**.
+  Race debugging is precisely the arrows — who released whom, which
+  start explains which activity. This is Lamport's happens-before,
+  imported into a single process.
+- **Use case:** in `example_race.py`, click the wake at `t1.start()`
+  and land on the worker's first event; at the join, jump back to its
+  last. In `example_tasks.py`'s Perfetto timeline the arrows run
+  main → Task-1 → producer/consumer.
+- **Command:** automatic in every trace. For the drawn arrows:
+  `python3 tracer.py --granularity fn --export-perfetto out.json
+  example_tasks.py` → ui.perfetto.dev.
+- **Screenshot** — the WAKE panel at `t1.start()`: the edge named, the
+  jump ready.
+
+  [![Feature 88 — happens-before](screenshots/88-wake.png)](screenshots/88-wake.png)
+
 ---
 
 ## H. The static map — structure without executing anything
@@ -1484,7 +1521,7 @@ dead or invented panel; every cap and truncation is announced.
 ## J. Infrastructure (no screenshots needed)
 
 ### 61. `checks.py` — the regression suite
-55 data-level checks (no browser): the tracer re-runs the permanent
+58 data-level checks (no browser): the tracer re-runs the permanent
 example suite and the mapper its fixtures, the embedded JSON is
 extracted from each generated HTML (chunked or not), and the honesty
 invariants are asserted in plain Python — windowed-change correctness,
@@ -1495,7 +1532,8 @@ the 2026-08 wave: runs-harness outcome classification + SBFL suspects,
 divergence depths, NaN-trip transitions, chart and query machinery,
 deep links, per-test chapters, `--check` exit codes, the black-box
 ring, capsule contents, console-lane attribution, whyline guards,
-boundary schemas, schedule-chaos determinism and honesty labels.
+boundary schemas, schedule-chaos determinism and honesty labels,
+happens-before edge causality and Perfetto flow pairing.
 Every subprocess the suite spawns pins its stdin, so
 the result cannot depend on how the suite was invoked. Run before and
 after every change, always.

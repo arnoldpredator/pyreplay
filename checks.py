@@ -3714,6 +3714,65 @@ def _():
            "static tiers survive without heat")
 
 
+@check("api leaks: private modules, private names, __all__ (#100)")
+def _():
+    proj = os.path.join(TMP, "leak100")
+    st = os.path.join(proj, "store")
+    os.makedirs(st, exist_ok=True)
+    with open(os.path.join(st, "__init__.py"), "w") as fh:
+        fh.write("from store.api import solve\n")
+    with open(os.path.join(st, "api.py"), "w") as fh:
+        fh.write("__all__ = ['solve']\n\n\n"
+                 "def solve(x):\n    return _prep(x) * 2\n\n\n"
+                 "def _prep(x):\n    return x + 1\n\n\n"
+                 "def extra(x):\n    return x\n")
+    with open(os.path.join(st, "_internal.py"), "w") as fh:
+        fh.write("def helper():\n    return 1\n")
+    with open(os.path.join(st, "cli.py"), "w") as fh:
+        fh.write("import store._internal\n\n\n"
+                 "def main():\n    return store._internal.helper()\n")
+    with open(os.path.join(proj, "outside.py"), "w") as fh:
+        fh.write("import store._internal\n"
+                 "from store.api import solve, extra, _prep\n"
+                 "print(solve(1), extra(2), _prep(3))\n")
+    with open(os.path.join(proj, "dynall.py"), "w") as fh:
+        fh.write("__all__ = [n for n in ('a', 'b')]\n"
+                 "def a():\n    return 1\n")
+    with open(os.path.join(proj, "user_dyn.py"), "w") as fh:
+        fh.write("from dynall import a\nprint(a())\n")
+    mp = run_map(proj, name="map_leak100")
+    AL = mp["apileaks"]
+    ml = {L["d"]: L["srcs"] for L in AL["modLeaks"]}
+    expect(ml.get("store._internal") == ["outside"],
+           f"only the OUTSIDER reaches count — the sibling cli is "
+           f"the convention working: {ml}")
+    nl = {(L["d"], L["n"]): (L["kind"], L["srcs"])
+          for L in AL["nameLeaks"]}
+    expect(nl.get(("store.api", "_prep")) == ("private", ["outside"]),
+           f"an outsider importing _prep is a private-name leak: {nl}")
+    expect(nl.get(("store.api", "extra"))
+           == ("undeclared", ["outside"]),
+           f"extra is public but NOT in __all__ — undeclared: {nl}")
+    expect(("store.api", "solve") not in nl,
+           "solve is in __all__ — importing it is the interface")
+    expect(("dynall", "a") not in nl,
+           "a COMPUTED __all__ stays None — no undeclared claims "
+           "without a literal declaration (honest absence)")
+    expect(["outside", "store._internal"] in AL["edges"]
+           and ["outside", "store.api"] in AL["edges"],
+           f"leak edges cover both reach kinds: {AL['edges']}")
+    expect("store.api" in AL["declared"]
+           and "dynall" not in AL["declared"],
+           "declared = literal __all__ modules only")
+    with open(os.path.join(HERE, "map_template.html"),
+              encoding="utf-8") as fh:
+        tpl = fh.read()
+    for probe in ('id="showapileaks"', ".iedge.apileak",
+                  "intra-package reaches not counted",
+                  "bypass the name audit"):
+        expect(probe in tpl, f"leak surface missing: {probe}")
+
+
 # ---------------------------------------------------------------- runner
 
 def main():

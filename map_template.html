@@ -66,6 +66,7 @@
   .mod .defrow { fill: #e6eaf2; font-size: 10px; cursor: default; }
   .mod .defrow.hit { fill: var(--warn); font-weight: 700; }
   .mod .defrow.ghost { fill: #79839a; font-style: italic; }
+  .iedge.apileak { stroke: #e06c75; stroke-dasharray: 6 4; }
   .mod .gh { fill: #9aa3b8; font-size: 8.5px; }
   /* intra-file call graph: focused function + its neighbours */
   .mod .fnname.caller { fill: var(--warn); font-weight: 700; }
@@ -210,6 +211,9 @@
       <option value="risk">risk (× heat)</option>
       <option value="graph">graph (structure)</option>
     </select></label>
+  <label class="toggle" id="apileaklbl" style="display:none"
+    title="#100: paint encapsulation leaks — outside imports of _private modules/names and names outside a declared __all__ — dashed red">
+    <input type="checkbox" id="showapileaks"> 🔓 leaks</label>
   <label class="toggle" id="cyclbl" style="display:none"
     title="Paint every import-cycle edge red (clicking a cycle in the
 bottom bar spotlights it even with this off)">
@@ -364,6 +368,12 @@ function buildNote(allCycles) {
             "is complex AND carries the runtime"
           : " — switch the lens to churn × cx to see it"));
   }
+  if (DATA.apileaks && (DATA.apileaks.modLeaks.length ||
+      DATA.apileaks.nameLeaks.length)) {
+    bits.push("🔓 " + DATA.apileaks.modLeaks.length +
+      " private-module leak(s) · " + DATA.apileaks.nameLeaks.length +
+      " name leak(s) — the walls panel has the audit");
+  }
   if (DATA.dead && DATA.dead.cands.length) {
     const c = DATA.dead.counts;
     bits.push("👻 dead-code evidence: " + c.A + " unreferenced · " +
@@ -419,6 +429,11 @@ buildNote(false);
 if (DATA.heat) $("heatlbl").style.display = "";
 if (DATA.heat && DATA.heat.dark && DATA.heat.dark.length)
   $("darklbl").style.display = "";
+/* #100: the leak edge set + toggle */
+const LEAKS = new Set(((DATA.apileaks || {}).edges || [])
+  .map(([s, d]) => s + "|" + d));
+if (LEAKS.size) $("apileaklbl").style.display = "";
+$("showapileaks").onchange = render;
 if (DATA.churn || DATA.graphlens) {   // #95 lenses need history;
   $("lenslbl").style.display = "";    // #129's graph lens is static
   if (!DATA.heat)
@@ -784,7 +799,7 @@ function render() {
     }
     const k = a.key + "→" + b.key;
     let rec = iagg.get(k);
-    if (!rec) iagg.set(k, rec = { a: a.g, b: b.g, pairs: [],
+    if (!rec) iagg.set(k, rec = { a: a.g, b: b.g, pairs: [], nLk: 0,
                                   aKey: a.key, bKey: b.key,
                                   nCyc: 0, hit: false, gid: gidOf(e.s),
                                   gd: gidOf(e.d),
@@ -792,8 +807,10 @@ function render() {
                                   // around the box, not through it
                                   intra: gidOf(e.s) === gidOf(e.d) });
     const cyc = isCycEdge(e.s, e.d);
-    rec.pairs.push({ t: e.s + "  imports  " + e.d, c: cyc });
+    const lk = LEAKS.has(e.s + "|" + e.d);
+    rec.pairs.push({ t: e.s + "  imports  " + e.d, c: cyc, lk });
     if (cyc) rec.nCyc++;
+    if (lk) rec.nLk++;
     if (filtering && hits.has(e.s) && hits.has(e.d)) rec.hit = true;
   });
   // cycle-red is DETAIL ON DEMAND: the toggle paints every cyclic edge,
@@ -813,6 +830,7 @@ function render() {
     const n = rec.pairs.length;
     const red = rec.nCyc > 0 &&
       (cycOn || (cycleSel !== null && rec.hit));
+    const lkOn = rec.nLk > 0 && $("showapileaks").checked;
     if (rec.intra) {
       intraTotal[rec.gid] = (intraTotal[rec.gid] || 0) + n;
       if (!related && !red && !(filtering && rec.hit)) return;
@@ -861,6 +879,7 @@ function render() {
     // marked — a red bundle must say exactly which imports are cyclic
     rec.pairs.sort((a2, b2) => (b2.c ? 1 : 0) - (a2.c ? 1 : 0));
     const p = '<path class="iedge' + (red ? " cyc" : "") +
+      (lkOn ? " apileak" : "") +
       (dim ? " dimmed" : related ? " sel" : anySel ? " fade" : "") +
       '" style="stroke-width:' + sw +
       '" d="M' + tx + " " + y1 + " C" + mx + " " + cy1 + " " + mx + " " +
@@ -870,7 +889,8 @@ function render() {
       ' data-ka="' + esc(rec.aKey) + '" data-kb="' + esc(rec.bKey) +
       '" data-ga="' + esc(rec.gid) + '" data-gb="' + esc(rec.gd) +
       '"><title>' +
-      esc(rec.pairs.slice(0, 12).map(q => (q.c ? "⚠ " : "") + q.t)
+      esc(rec.pairs.slice(0, 12).map(q =>
+          (q.c ? "⚠ " : "") + (q.lk ? "🔓 " : "") + q.t)
           .join("\n") +
           (n > 12 ? "\n+" + (n - 12) + " more" : "") +
           (rec.nCyc ? "\n⚠ " + rec.nCyc + " of " + n +
@@ -1720,6 +1740,33 @@ $("walls").onclick = () => {
         '"><span class="win">' + fmtCost(us) + "</span>" + esc(id) +
         "</div>").join("");
   }
+  // #100: the leak audit — intended vs real interface
+  const AL = DATA.apileaks;
+  if (AL && (AL.modLeaks.length || AL.nameLeaks.length)) {
+    html += '<div class="wallhead">🔓 encapsulation leaks — intended ' +
+      "vs real interface (intra-package reaches not counted)</div>" +
+      AL.modLeaks.map(L =>
+        '<div class="wallrow" data-id="' + esc(L.d) + '" title="' +
+        esc(L.srcs.join(", ") + " reach into " + L.d +
+        " — click to spotlight it") + '"><span class="win">←' +
+        L.srcs.length + "</span>" + esc(L.d) + "</div>").join("") +
+      AL.nameLeaks.map(L =>
+        '<div class="wallrow" data-id="' + esc(L.d) + '" title="' +
+        esc(L.srcs.join(", ") + " import " + L.n + " — " +
+        (L.kind === "private" ? "a private name"
+          : "not in " + L.d + "'s declared __all__")) +
+        '"><span class="win">←' + L.srcs.length + "</span>" +
+        esc(L.d + "." + L.n) +
+        (L.kind === "undeclared" ? " <span style=\'color:#e5c07b\'>∉ __all__</span>" : "") +
+        "</div>").join("") +
+      '<div class="wallnote">' + AL.declared.length + " module(s) " +
+      "declare a literal __all__" +
+      (AL.stars ? " · " + AL.stars +
+        " star-import(s) bypass the name audit" : "") +
+      (AL.capped ? " · lists capped at 100" : "") +
+      " · toggle 🔓 leaks in the header to paint the edges.</div>";
+  }
+
   // #129: graph theory beside the degree counts — every number NAMES
   // its graph, and betweenness routinely crowns a different (truer)
   // load-bearing wall than fan-in does

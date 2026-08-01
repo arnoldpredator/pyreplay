@@ -158,6 +158,7 @@ class ModuleScan(ast.NodeVisitor):
         self.defs = []
         self.calls = []          # (src_def|None, dst_mod|None, dst_name|None)
         self.unresolved = 0      # calls static analysis cannot attribute
+        self.dunder_all = None   # #100: literal __all__, or None
         self.dynimp = 0          # #119: __import__/import_module call
         #                          sites — targets unknown until traced
         self._scope = []
@@ -240,6 +241,25 @@ class ModuleScan(ast.NodeVisitor):
                 self.aliases[a.asname or a.name] = ("mod", sub)
             else:
                 self.aliases[a.asname or a.name] = ("func", tgt, a.name)
+
+    def visit_Assign(self, node):
+        # #100: a LITERAL module-level __all__ declares the intended
+        # surface; anything computed stays None (honest absence)
+        if not self._scope:
+            for t in node.targets:
+                if isinstance(t, ast.Name) and t.id == "__all__" \
+                        and isinstance(node.value, (ast.List, ast.Tuple)):
+                    vals = []
+                    for el in node.value.elts:
+                        if isinstance(el, ast.Constant) \
+                                and isinstance(el.value, str):
+                            vals.append(el.value)
+                        else:
+                            vals = None
+                            break
+                    if vals is not None:
+                        self.dunder_all = vals
+        self.generic_visit(node)
 
     # ---- definitions ----
     def _def(self, node, kind):
@@ -872,6 +892,61 @@ def _graph_lens(modules, imports, heat):
 # interpreter calls them implicitly). Evidence, never proof:
 # reflection, plugins and decorators can hide callers.
 
+# ---- #100: API-surface honesty (encapsulation leaks) ---------------
+# The gap between the intended interface and the real one, measured.
+# L1: an outside module imports an _underscore module (privacy owner
+# = the underscore component's parent package). L2: an outsider does
+# `from m import _name` (owner = m's parent package; top-level
+# modules own their own privacy). L3: m declares a literal __all__
+# and an outsider imports a public name NOT in it. Intra-package
+# reaches are the convention working as intended — not counted.
+# Star imports bypass the name audit and are counted, never ignored.
+
+LEAK_CAP = 100
+
+
+def _api_leaks(imports, name_imports, all_decls, star_imports):
+    def inside(importer, pkg):
+        return pkg is not None and (
+            importer == pkg or importer.startswith(pkg + "."))
+    mod_leaks, name_leaks = {}, {}
+    leak_edges = set()
+    for e in imports:
+        s, d = e["s"], e["d"]
+        parts = d.split(".")
+        for k in range(1, len(parts)):
+            if parts[k].startswith("_"):
+                owner = ".".join(parts[:k])
+                if not inside(s, owner):
+                    mod_leaks.setdefault(d, set()).add(s)
+                    leak_edges.add((s, d))
+                break
+    for s, d, n in name_imports:
+        if s == d:
+            continue
+        owner = d.rsplit(".", 1)[0] if "." in d else None
+        if inside(s, owner):
+            continue
+        if n.startswith("_"):
+            name_leaks.setdefault((d, n, "private"), set()).add(s)
+            leak_edges.add((s, d))
+        elif d in all_decls and n not in all_decls[d]:
+            name_leaks.setdefault((d, n, "undeclared"), set()).add(s)
+            leak_edges.add((s, d))
+    ml = sorted(({"d": d, "srcs": sorted(v)}
+                 for d, v in mod_leaks.items()),
+                key=lambda x: (-len(x["srcs"]), x["d"]))
+    nl = sorted(({"d": d, "n": n, "kind": kind, "srcs": sorted(v)}
+                 for (d, n, kind), v in name_leaks.items()),
+                key=lambda x: (-len(x["srcs"]), x["d"], x["n"]))
+    total = len(ml) + len(nl)
+    return {"modLeaks": ml[:LEAK_CAP], "nameLeaks": nl[:LEAK_CAP],
+            "edges": sorted(list(e) for e in leak_edges),
+            "declared": sorted(all_decls),
+            "stars": star_imports, "total": total,
+            "capped": total > 2 * LEAK_CAP}
+
+
 DEAD_CAP = 500
 
 
@@ -1001,6 +1076,9 @@ def main(argv):
     internal = set(owner)
     modules, imports, calls_raw, errors = [], [], [], []
     imported_fns = set()   # #97: (module, name) importable surface
+    name_imports = []      # #100: (importer, module, name) triples
+    all_decls = {}         # #100: module -> literal __all__
+    star_imports = 0       # #100: audits nothing, counted honestly
     ext_counts = {}
     unresolved = 0
 
@@ -1046,6 +1124,12 @@ def main(argv):
         for a in scan.aliases.values():   # #97: importable surface
             if a[0] == "func":
                 imported_fns.add((a[1], a[2]))
+                if a[2] == "*":
+                    star_imports += 1     # #100: bypasses the audit
+                else:
+                    name_imports.append((emit_id, a[1], a[2]))
+        if scan.dunder_all is not None:
+            all_decls[emit_id] = scan.dunder_all
         for e in scan.external:
             ext_counts[e] = ext_counts.get(e, 0) + 1
         for d in sorted(scan.imports):
@@ -1282,6 +1366,25 @@ def main(argv):
             print(f"dark edges: the run saw {len(dark)} caller→callee "
                   f"pair(s) the parse couldn't — drawn dashed on the map")
 
+    apileaks = _api_leaks(imports, name_imports, all_decls,
+                          star_imports)
+    if apileaks["modLeaks"] or apileaks["nameLeaks"]:
+        print("encapsulation leaks — intended vs real interface "
+              "(intra-package reaches not counted):")
+        for L in apileaks["modLeaks"][:4]:
+            print(f"    {len(L['srcs'])} outside module(s) reach into "
+                  f"{L['d']}: {', '.join(L['srcs'][:4])}"
+                  + (" …" if len(L["srcs"]) > 4 else ""))
+        for L in apileaks["nameLeaks"][:4]:
+            what = ("private name" if L["kind"] == "private"
+                    else "name outside __all__")
+            print(f"    {L['d']}.{L['n']} ({what}) ← "
+                  f"{', '.join(L['srcs'][:4])}"
+                  + (" …" if len(L["srcs"]) > 4 else ""))
+        if apileaks["stars"]:
+            print(f"    ({apileaks['stars']} star-import(s) bypass "
+                  f"the name audit)")
+
     dead = _dead_code(modules, callgraph, imported_fns, heat, n_runs)
     if dead["cands"]:
         c = dead["counts"]
@@ -1325,6 +1428,7 @@ def main(argv):
         "unresolvedCalls": unresolved,
         "callgraph": callgraph,   # #94: def→def, resolved/guessed
         "dead": dead,             # #97: the join, tiered, capped
+        "apileaks": apileaks,     # #100: the leak audit
         "errors": errors,
         "heat": heat,
         "churn": churn,   # #95: git history lens, or null (no repo)

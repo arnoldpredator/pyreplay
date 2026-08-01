@@ -2013,6 +2013,42 @@ dead or invented panel; every cap and truncation is announced.
 
   [![Feature 97 — dead code](screenshots/97-dead-code.png)](screenshots/97-dead-code.png)
 
+### 100. API-surface honesty — encapsulation leaks, measured
+- **Measured:** the gap between the intended interface and the real
+  one. Three leak classes, pure aggregation over what the map
+  already knows: **private-module reaches** — an outside module
+  imports `store._internal` (privacy owner = the underscore
+  component's parent package); **private-name imports** — an
+  outsider does `from m import _name`; **undeclared names** — `m`
+  declares a literal `__all__` and an outsider imports a public name
+  not in it. Intra-package reaches are the convention working as
+  intended — not counted, and the panel says so. A computed
+  `__all__` stays None: no undeclared claims without a literal
+  declaration. Star imports bypass the name audit and are counted,
+  never ignored.
+- **Displayed:** the walls panel's 🔓 audit — "store._internal ← 2
+  outside module(s)", "store.api.extra ∉ __all__" — each row
+  click-spotlights its module; the header gains a **🔓 leaks**
+  toggle that paints every leaking import edge dashed red with 🔓
+  marks in the edge tooltip; the banner counts both kinds; the
+  terminal prints the top leaks.
+- **Why:** the gap between intended and real interfaces is where
+  refactors break the world; measuring it turns "please don't
+  import private stuff" into a number that can go down.
+- **Use case:** the audit reads `←2 store._internal · ←1
+  store.api._prep (private) · ←1 store.api.extra ∉ __all__` — while
+  `store.cli`'s import of its own package's `_internal` correctly
+  doesn't appear, and neither does `solve` (it IS the interface).
+- **Command:** automatic on every map; no leaks = no panel, no
+  toggle. Honesty: measured at package boundaries from static
+  imports only — `importlib`/`getattr` reaches are the trace's job
+  (#119), and star imports are counted as unaudited.
+- **Screenshot** — the audit panel over the map: three leak rows
+  (the ∉ __all__ one amber), the dashed-red leak edge arcing into
+  `store.api`, the 🔓 toggle checked in the header.
+
+  [![Feature 100 — api leaks](screenshots/100-api-leaks.png)](screenshots/100-api-leaks.png)
+
 ## I. The cockpit — heat & the funnel handoff
 
 ### 56. Heat overlay — the trace drawn onto the map

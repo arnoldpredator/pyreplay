@@ -7,7 +7,7 @@ can pick an item and implement it. Features are numbered **#63 onward**, continu
 in FEATURES.md. Fifteen roadmap items have shipped since the list was
 written (63, 64, 65, 70, 77, 79, 80, 98, 101 v1, 103, 104 Tier 1,
 106, 109, 118, 120 v1) — their rows below are struck through;
-**32 remain unbuilt** (plus the stated remainders of 66/74/75/85/88/89/101/104/119/120/126/127/128/132/134).
+**31 remain unbuilt** (plus the stated remainders of 66/74/75/85/88/89/101/104/119/120/126/127/128/132/134).
 
 ## Start here — how to contribute
 
@@ -106,7 +106,7 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
 | 97 | ~~Dead-code evidence (static x dynamic join)~~ **shipped** | M | ★★ |
 | 98 | ~~Per-test chapters in suite traces~~ **shipped** | — | ★★★ |
 | 99 | ~~Startup import-cost view~~ **shipped** | — | ★★ |
-| 100 | Public-API vs actual-use leaks | M | ★★ |
+| 100 | ~~API-surface honesty (encapsulation leaks)~~ **shipped** | M | ★★ |
 | 101 | ~~Chunked trace + keyframes~~ **shipped (v1; windowed replayer remains)** | — | ★★★ |
 | 102 | monitoring-backed cheaper LINE tracing | M | ★★ |
 | 103 | ~~Black-box flight recorder (ring buffer)~~ **shipped** | — | ★★★ |
@@ -707,6 +707,7 @@ software.
   read) — ours lands on the map with jump links.
 
 ### 100. API-surface honesty (encapsulation leaks)
+**Shipped 2026-08-01** — now catalog entry #100 in [FEATURES.md](FEATURES.md): three leak classes (private-module reach / private-name import / name outside a literal __all__), outsider = outside the privacy owner's package, intra-package reaches exempt by design, computed __all__ = honest absence, star imports counted as unaudited; walls 🔓 audit + dashed-red edge toggle + banner + terminal.
 - **What:** per package: what it exports (`__all__`, public names) vs
   what outsiders ACTUALLY import from it (the map knows every import
   edge): a leak list — "7 modules reach into `store._internal`".

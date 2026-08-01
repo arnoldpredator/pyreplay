@@ -170,6 +170,18 @@ on nengo that crowns `ValidationError` (←135 sites from 26 modules)
 and `Signal` (←133), invisible in module counts. Click a row to
 spotlight its module.
 
+**API-surface honesty (#100).** Every package has two interfaces: the
+one it declares (`__all__`, public names) and the one outsiders
+actually use. The map now measures the gap: the walls panel's 🔓
+audit lists every outside reach into `_private` modules, every
+`from m import _name` across a package boundary, and every import of
+a name a literal `__all__` didn't declare — and the 🔓 header toggle
+paints those import edges dashed red. Intra-package reaches don't
+count (that's the convention working), a computed `__all__` makes no
+claims, and star imports are counted as bypassing the audit.
+"Please don't import private stuff" becomes a number that can go
+down.
+
 **Dead-code evidence (#97).** Every map now joins two kinds of
 evidence about every def: does anything reference it statically
 (#94's call graph + the importable surface), and did it ever run

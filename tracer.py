@@ -3181,6 +3181,24 @@ def _write_trace(tr, out, granularity, entry_label, error,
     }
     if extra:
         payload.update(extra)
+    # #130: per-bucket compressibility — gzip bits/event as a
+    # regularity measure. A tight loop is low-entropy; data-dependent
+    # wandering is high; a marked change marks a phase change in the
+    # run. The label is "compressibility", never bare "entropy":
+    # compressed length is an UPPER BOUND on the entropy rate.
+    n_ev = len(tr.events)
+    if n_ev >= 50:
+        nbuck = min(120, n_ev)
+        per_b = n_ev / nbuck
+        buckets = []
+        for b in range(nbuck):
+            lo = int(b * per_b)
+            hi = min(n_ev, int((b + 1) * per_b))
+            raw = json.dumps(tr.events[lo:hi],
+                             separators=(",", ":")).encode("utf-8")
+            comp = gzip.compress(raw, 6)
+            buckets.append([hi - lo, len(raw), len(comp)])
+        payload["compress"] = {"buckets": buckets, "gzip": 6}
     template_path = os.path.join(os.path.dirname(SELF),
                                  "replayer_template.html")
     with open(template_path, encoding="utf-8") as f:

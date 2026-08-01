@@ -401,6 +401,12 @@
   }
   .dbucket { flex: 1; cursor: pointer; background: #20242f; }
   .dbucket:hover { filter: brightness(1.6); }
+  #compress {
+    display: flex; height: 5px; margin: 0 7px 3px;
+    border-radius: 3px; overflow: hidden; cursor: help;
+  }
+  .cbucket { flex: 1; cursor: pointer; }
+  .cbucket:hover { filter: brightness(1.6); }
   #cond { margin-top: 8px; }
   #cond .cexpr { color: var(--dim); font-style: italic; }
   #cond .cvars { display: flex; flex-direction: column; gap: 3px;
@@ -3871,6 +3877,46 @@ renderBmarks();
   }
   const footer = document.querySelector("footer");
   footer.insertBefore(box, footer.firstChild);
+
+  /* #130: the compressibility strip, directly under the density
+     strip — gzip bits/event per bucket as a regularity measure. Dark
+     = regular (a tight loop), bright = data-dependent wandering; a
+     marked change is a phase change in the run. NOT entropy:
+     compressed length is an upper bound on the entropy rate. */
+  const C = DATA.compress;
+  if (C && C.buckets && C.buckets.length) {
+    const bits = C.buckets.map(([n, , comp]) => comp * 8 / n);
+    const blo = Math.min(...bits), bhi = Math.max(...bits);
+    const span = bhi - blo || 1;
+    const totRaw = C.buckets.reduce((a, b) => a + b[1], 0);
+    const totComp = C.buckets.reduce((a, b) => a + b[2], 0);
+    const totN = C.buckets.reduce((a, b) => a + b[0], 0);
+    const cbox = document.createElement("div");
+    cbox.id = "compress";
+    cbox.title = "compressibility — gzip(level " + C.gzip +
+      ") bits/event per bucket, " + (totComp * 8 / totN).toFixed(0) +
+      " overall (ratio " + (totComp / totRaw).toFixed(2) + "). An " +
+      "UPPER BOUND on the entropy rate, never entropy itself. Dark " +
+      "= regular (a tight loop), bright = data-dependent wandering; " +
+      "a marked change = a phase change in the run.";
+    let acc = 0;
+    C.buckets.forEach(([n, raw, comp], k) => {
+      const start = acc;
+      acc += n;
+      const t = (bits[k] - blo) / span;
+      const s2 = document.createElement("span");
+      s2.className = "cbucket";
+      s2.style.background = "hsl(" + (200 - 170 * t).toFixed(0) + " " +
+        (35 + 55 * t).toFixed(0) + "% " + (22 + 34 * t).toFixed(0) +
+        "% / .95)";
+      s2.title = "events " + (start + 1) + "–" + acc + ": " +
+        bits[k].toFixed(0) + " bits/event (gzip upper bound) · " +
+        "ratio " + (comp / raw).toFixed(2) + " — click to jump";
+      s2.onclick = () => { stop(); goto(start); };
+      cbox.appendChild(s2);
+    });
+    box.after(cbox);
+  }
 })();
 
 let stackVisible = true;

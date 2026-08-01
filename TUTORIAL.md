@@ -613,6 +613,16 @@ observed machine ⊆ true machine — a missing edge is never evidence
 of absence. The refund path nobody drew on the whiteboard shows up
 as one red arrow with a pin at the exact moment it happened.
 
+**The compressibility strip.** Under the density strip, every trace
+of ≥50 events wears a second, thinner strip: gzip bits/event per
+bucket — the run's regularity, measured. Dark = a tight loop (low
+entropy), bright = data-dependent wandering, and a marked change in
+brightness is a phase change in the run, findable by eye before you
+know what to look for. Hover for exact bits/event and ratio, click
+to jump. The tooltip's rule, verbatim: gzip length is an upper bound
+on the entropy rate — the strip says "compressibility", never bare
+"entropy".
+
 ## 4e. The replayer grows: chapters, console, query, whyline, schemas (2026-08)
 
 **Per-test chapters.** `python3 tracer.py -m pytest tests/` now

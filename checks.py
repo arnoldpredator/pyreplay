@@ -3191,6 +3191,51 @@ def _():
            f"two runs must merge into ONE machine, counts summed: {rf}")
 
 
+@check("compressibility: the phase change is measurable (#130)")
+def _():
+    src = fixture("phases130.py", (
+        "import hashlib\n"
+        "def tight(n):\n"
+        "    total = 0\n"
+        "    for i in range(n):\n"
+        "        total += i\n"
+        "    return total\n"
+        "def wander(n):\n"
+        "    blob = []\n"
+        "    for i in range(n):\n"
+        "        h = hashlib.sha256(str(i).encode()).hexdigest()\n"
+        "        blob.append(h[: (i * 7) % 40 + 3])\n"
+        "    return len(blob)\n"
+        "print(tight(220))\n"
+        "print(wander(220))\n"))
+    p = run_trace(src)
+    C = p.get("compress")
+    expect(C and C["buckets"], "a 1000-event trace must carry the strip")
+    expect(sum(b[0] for b in C["buckets"]) == len(p["events"]),
+           "the buckets must cover every event exactly once")
+    expect(all(b[2] < b[1] for b in C["buckets"]),
+           "gzip of event JSON must always shrink it")
+    bits = [c * 8 / n for n, _, c in C["buckets"]]
+    half = len(bits) // 2
+    a = sum(bits[:half]) / half
+    b = sum(bits[half:]) / (len(bits) - half)
+    expect(b > a * 1.5,
+           f"the wandering half must cost visibly more bits/event "
+           f"than the tight loop ({a:.0f} vs {b:.0f})")
+    # a tiny trace has no strip — 120 buckets of 0.3 events is noise
+    q = run_trace(os.path.join(HERE, "bubble_sort.py"),
+                  name="c130_tiny")
+    expect(q.get("compress") is None,
+           "under 50 events the strip is honestly absent")
+    with open(os.path.join(HERE, "replayer_template.html"),
+              encoding="utf-8") as fh:
+        tpl = fh.read()
+    expect("upper bound on the entropy rate" in tpl.lower()
+           and 'id = "compress"' in tpl.replace("cbox.id = ", 'id = '),
+           "the strip must exist and call itself an upper bound — "
+           "compressibility, never bare entropy")
+
+
 # ---------------------------------------------------------------- runner
 
 def main():

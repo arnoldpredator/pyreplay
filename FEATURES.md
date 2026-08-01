@@ -461,6 +461,35 @@ dead or invented panel; every cap and truncation is announced.
 
   [![Feature 18 — density strip](screenshots/18-density-strip.png)](screenshots/18-density-strip.png)
 
+### 130. The compressibility strip — the run's regularity, measured
+- **Measured:** at write time the event stream is cut into ≤120
+  buckets and each bucket's JSON is gzipped: **bits per event**, per
+  bucket and overall. A tight loop is low-entropy; data-dependent
+  wandering is high — and a marked change in compressibility marks a
+  **phase change** in the run. Traces under 50 events carry no strip
+  (120 buckets of noise would claim precision that isn't there).
+- **Displayed:** a thin strip directly under the density strip,
+  colored by bits/event normalized to this trace's own range — dark
+  = regular, bright = wandering. Hover any bucket for its exact
+  bits/event and compression ratio; click to jump there. The strip's
+  own tooltip carries the totals and the rule.
+- **Why:** the run's regularity is a real observable no panel showed:
+  where the program settled into a rhythm, and where it started
+  doing something new — visible before you know what to look for.
+- **Use case:** a two-phase script — a tight counting loop, then
+  hash-string juggling: 235 bits/event dark stretch, a bright spike
+  where the first hashes are born, ~499 through the wandering half.
+  The phase boundary is findable by eye from the strip alone.
+- **Command:** automatic in every trace of ≥50 events. Honesty,
+  verbatim in the tooltip: gzip length is an *upper bound on the
+  entropy rate* — the strip says "compressibility", never bare
+  "entropy".
+- **Screenshot** — the two-phase run: the density strip above, the
+  compressibility strip below it — dark loop, bright transition
+  spike, mid-bright wandering.
+
+  [![Feature 130 — compressibility](screenshots/130-compressibility.png)](screenshots/130-compressibility.png)
+
 ### 19. Collapse mode & layout controls
 - **Measured:** at each event the set of just-changed variables is
   known (same diff machinery as highlighting).

@@ -7,7 +7,7 @@ can pick an item and implement it. Features are numbered **#63 onward**, continu
 in FEATURES.md. Fifteen roadmap items have shipped since the list was
 written (63, 64, 65, 70, 77, 79, 80, 98, 101 v1, 103, 104 Tier 1,
 106, 109, 118, 120 v1) — their rows below are struck through;
-**40 remain unbuilt** (plus the stated remainders of 74/75/85/88/89/101/104/119/120/127/128/132).
+**39 remain unbuilt** (plus the stated remainders of 74/75/85/88/89/101/104/119/120/127/128/132).
 
 ## Start here — how to contribute
 
@@ -136,7 +136,7 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
 | 127 | ~~Scaling bench: measured growth exponents~~ **shipped (minimal gen protocol; full #67 remains)** | M | ★★★ |
 | 128 | ~~Prediction gate: commit a claim, get scored~~ **shipped (tour stops await #108)** | M | ★★★ |
 | 129 | ~~Graph lens on the map (centrality, communities)~~ **shipped** | M | ★★ |
-| 130 | Trace compressibility (regularity strip) | S | ★ |
+| 130 | ~~Trace compressibility (regularity strip)~~ **shipped** | S | ★ |
 | 131 | ~~CFG view: the code as a graph, the run as a path~~ **shipped** | M | ★★★ |
 | 132 | ~~Observed state machine (one declared variable)~~ **shipped (row-click binding remains)** | M | ★★ |
 | 133 | ~~Recursion tree view~~ **shipped** | S | ★★ |
@@ -1255,6 +1255,7 @@ per algorithm.
 
 ### 130. Trace compressibility
 *(belongs with Section 6 — scale & interchange)*
+**Shipped 2026-08-01** — now catalog entry #130 in [FEATURES.md](FEATURES.md): ≤120 per-bucket gzip ratios recorded at write time (traces ≥50 events), thin strip under the density strip colored by bits/event over the trace's own range, click-to-jump buckets, totals + the upper-bound honesty in the tooltip verbatim.
 - **What:** report the event stream's compression ratio — bits/event
   overall and per density-strip bucket — as a regularity measure; a
   marked change in compressibility marks a phase change in the run.

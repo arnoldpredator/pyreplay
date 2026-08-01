@@ -3541,6 +3541,63 @@ def _():
            f"bubble sort recurs nowhere: {p4.get('nonterm')}")
 
 
+@check("callgraph: def-to-def resolution, self, guessed (#94)")
+def _():
+    root = os.path.join(TMP, "cg94")
+    os.makedirs(root, exist_ok=True)
+    files = {
+        "alpha.py": ("def f():\n    return 1\n"
+                     "def g():\n    return 2\n"),
+        "beta.py": ("from alpha import f\n"
+                    "import alpha\n"
+                    "def h():\n"
+                    "    f()\n"
+                    "    alpha.g()\n"
+                    "    alpha.missing()\n"
+                    "class Runner:\n"
+                    "    def run(self):\n"
+                    "        self.step()\n"
+                    "        self.gone()\n"
+                    "    def step(self):\n"
+                    "        return h()\n"),
+    }
+    for name, text in files.items():
+        with open(os.path.join(root, name), "w", encoding="utf-8") as fh:
+            fh.write(text)
+    mp = run_map(root, name="map_cg94")
+    cg = mp["callgraph"]
+    ed = {(s, d): k for s, d, n, k in cg["edges"]}
+    expect(ed.get(("beta:h", "alpha:f")) == "direct",
+           f"from-import call must resolve def-to-def: {ed}")
+    expect(ed.get(("beta:h", "alpha:g")) == "direct",
+           "module-attribute call must resolve def-to-def")
+    expect(ed.get(("beta:h", "alpha:missing")) == "guessed",
+           "an internal target without that def is GUESSED, "
+           "never silently resolved")
+    expect(ed.get(("beta:Runner.run", "beta:Runner.step")) == "self",
+           f"self.method() resolves within its own class: {ed}")
+    expect(("beta:Runner.run", "beta:Runner.gone") not in ed,
+           "self.gone() has no such def — unresolved, not guessed "
+           "(inheritance is runtime's job)")
+    expect(ed.get(("beta:Runner.step", "beta:h")) == "direct",
+           "a method calling a module function resolves")
+    expect(cg["resolved"] >= 4 and cg["guessed"] == 1,
+           f"counts: {cg['resolved']}/{cg['guessed']}")
+    expect(mp["unresolvedCalls"] >= 1,
+           "self.gone() lands in the honest unresolved counter")
+    fanin = {d: (n, m) for d, n, m in cg["fanin"]}
+    expect("alpha:f" in fanin and fanin["alpha:f"][1] == 1,
+           f"cross-module fan-in ranks alpha:f: {fanin}")
+    expect("beta:Runner.step" not in fanin,
+           "self edges are intra-module — never cross-module fan-in")
+    with open(os.path.join(HERE, "map_template.html"),
+              encoding="utf-8") as fh:
+        tpl = fh.read()
+    for probe in ("load-bearing functions", "cannot attribute",
+                  "guessed (name not "):
+        expect(probe in tpl, f"walls contract missing: {probe}")
+
+
 # ---------------------------------------------------------------- runner
 
 def main():

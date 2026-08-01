@@ -1944,6 +1944,39 @@ dead or invented panel; every cap and truncation is announced.
 
 ---
 
+### 94. The project-wide call graph — def→def, resolved or labeled
+- **Measured:** the same recorded call sites the map always scanned,
+  kept at FUNCTION resolution instead of module counts: `from x
+  import f; f()` and `x.f()` resolve to `module:def` edges when the
+  name is among the target module's defs; `self.method()` resolves
+  within its own class (same class only — inherited methods are
+  runtime's job and stay unresolved, honestly). Every edge is
+  labeled: **resolved** (`direct`/`self`) or **guessed** (internal
+  module, name not found there — a re-export the parse can't
+  confirm); `obj.method()` and dynamic dispatch stay in the
+  unresolved counter, named as the trace's job (#119).
+- **Displayed:** the walls panel gains **☎ load-bearing functions** —
+  the top defs by cross-module fan-in (call sites × caller modules,
+  resolved edges only), click to spotlight the module — plus the
+  full honesty line (resolved · guessed · module-only · cannot
+  attribute) and a banner count. The full edge list rides the
+  payload (capped at 4000, stated) for anything downstream.
+- **Why:** "who can reach this function from where?" across the
+  whole codebase — the static skeleton the dynamic trace is drawn
+  onto, finished. And function fan-in names different load-bearing
+  walls than module fan-in does.
+- **Use case:** nengo: 3,106 def→def sites resolve; the top
+  functions are `exceptions:ValidationError` (←135 sites from 26
+  modules) and `builder.signal:Signal` (←133) — the validation
+  gate and the core datatype, invisible in module-level counts.
+- **Command:** automatic on every map → walls panel. Honesty: 2,228
+  guessed and 9,550 unattributable sites are COUNTED next to the
+  3,106 resolved — the graph never pretends to be complete.
+- **Screenshot** — nengo's walls: the load-bearing functions ranked,
+  the four-way honesty line beneath.
+
+  [![Feature 94 — call graph](screenshots/94-callgraph.png)](screenshots/94-callgraph.png)
+
 ## I. The cockpit — heat & the funnel handoff
 
 ### 56. Heat overlay — the trace drawn onto the map

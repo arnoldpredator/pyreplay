@@ -159,6 +159,17 @@ startup is pure import cost and nobody knows whose; the data was in
 every fn trace all along. Line traces carry no wall times, so the
 autopsy is honestly absent there.
 
+**The project call graph (#94).** The map now resolves calls at
+FUNCTION level across the whole codebase: from-imports, module
+attributes, and `self.method()` within its own class become
+`module:def → module:def` edges, each labeled resolved or guessed
+(name not found in the target module), with everything the parse
+cannot attribute counted and named as the trace's job. The walls
+panel ranks the **load-bearing functions** by cross-module fan-in —
+on nengo that crowns `ValidationError` (←135 sites from 26 modules)
+and `Signal` (←133), invisible in module counts. Click a row to
+spotlight its module.
+
 **The graph lens (#129) — graph theory over the map's own graphs.**
 The lens select gains *graph (structure)*, available on any map of
 two or more modules: boxes tint violet by **betweenness centrality**

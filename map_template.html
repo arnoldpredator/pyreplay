@@ -362,6 +362,13 @@ function buildNote(allCycles) {
             "is complex AND carries the runtime"
           : " — switch the lens to churn × cx to see it"));
   }
+  if (DATA.callgraph) {
+    bits.push("call graph: " + DATA.callgraph.resolved +
+      " def→def sites resolved" +
+      (DATA.callgraph.guessed
+        ? " · " + DATA.callgraph.guessed + " guessed" : "") +
+      " — the walls panel ranks the load-bearing functions");
+  }
   if (DATA.graphlens && $("lens").value === "graph") {
     const G = DATA.graphlens;
     const nc = new Set(Object.values(G.community || {})).size;
@@ -1746,6 +1753,29 @@ $("walls").onclick = () => {
         " — too few points for any power-law claim; a straight line " +
         "on log-log here proves nothing.</div>";
     }
+  }
+  // #94: the load-bearing FUNCTIONS — cross-module def→def fan-in
+  const CGW = DATA.callgraph;
+  if (CGW && CGW.fanin && CGW.fanin.length) {
+    html += '<div class="wallhead">☎ load-bearing functions — ' +
+      "cross-module callers, def→def (static, resolved only)</div>" +
+      CGW.fanin.map(([d, n, m]) => {
+        const mod = d.split(":", 1)[0];
+        return '<div class="wallrow" data-id="' + esc(mod) +
+          '" title="' + esc(d) + " ← " + n + " call site(s) in " + m +
+          ' module(s) — click to spotlight its module">' +
+          '<span class="win">←' + n + "</span>" + esc(d) + "</div>";
+      }).join("") +
+      '<div class="wallnote">' + CGW.resolved + " def→def call " +
+      "sites resolved · " + CGW.guessed + " guessed (name not " +
+      "found in the target module) · " + CGW.modOnly + " module-" +
+      "level only · plus " + (DATA.unresolvedCalls || 0) +
+      " sites static analysis cannot attribute (obj.method(), " +
+      "dynamic dispatch — the trace's job, #119)." +
+      (CGW.total > CGW.edges.length
+        ? " Edge list capped at " + CGW.edges.length + " of " +
+          CGW.total + "."
+        : "") + "</div>";
   }
   $("wallsbody").innerHTML = html;
   box.style.display = "block";

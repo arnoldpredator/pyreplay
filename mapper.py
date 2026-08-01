@@ -363,6 +363,11 @@ class ModuleScan(ast.NodeVisitor):
                         self.calls.append((src, tgt, None))
                     else:
                         self.calls.append((src, a[1], ".".join(chain[1:])))
+                elif chain[0] == "self" and len(chain) == 2:
+                    # #94: self.method() resolves against the enclosing
+                    # class's own defs post-scan (same class only —
+                    # inherited methods still need runtime, stated)
+                    self.calls.append((src, "@self", chain[1]))
                 else:
                     self.unresolved += 1   # obj.method(): needs runtime
             else:
@@ -946,14 +951,24 @@ def main(argv):
         scan.visit(tree)
         # local-name calls: resolve against this module's own top defs
         top_defs = {d["n"].split(".")[0] for d in scan.defs}
+        all_defs = {d["n"] for d in scan.defs}
         for src_def, dmod, dname in scan.calls:
             if dmod is None:
                 if dname in top_defs:
-                    calls_raw.append((emit_id, src_def, emit_id, dname))
+                    calls_raw.append((emit_id, src_def, emit_id, dname,
+                                      "direct"))
                 else:
                     unresolved += 1     # builtin / external call
+            elif dmod == "@self":
+                cls = (src_def or "").split(".")[0]
+                if cls and f"{cls}.{dname}" in all_defs:
+                    calls_raw.append((emit_id, src_def, emit_id,
+                                      f"{cls}.{dname}", "self"))
+                else:
+                    unresolved += 1     # inherited/dynamic: runtime's
             else:
-                calls_raw.append((emit_id, src_def, dmod, dname))
+                calls_raw.append((emit_id, src_def, dmod, dname,
+                                  "direct"))
         unresolved += scan.unresolved
         for e in scan.external:
             ext_counts[e] = ext_counts.get(e, 0) + 1
@@ -973,11 +988,8 @@ def main(argv):
 
     # aggregate calls per module pair, sample function-level detail
     agg = {}
-    for smod, sdef, dmod, dname in calls_raw:
-        if smod == dmod:
-            key = (smod, dmod)
-        else:
-            key = (smod, dmod)
+    for smod, sdef, dmod, dname, _kind in calls_raw:
+        key = (smod, dmod)
         a = agg.setdefault(key, {"n": 0, "fns": []})
         a["n"] += 1
         if len(a["fns"]) < 8:
@@ -985,6 +997,51 @@ def main(argv):
                             (dname or "<module>"))
     calls = [{"s": s, "d": d, "n": v["n"], "fns": v["fns"]}
              for (s, d), v in sorted(agg.items())]
+
+    # #94: the project-wide FUNCTION call graph — the same recorded
+    # call sites, kept at def→def resolution instead of module counts.
+    # resolved = the target name is among the target module's defs;
+    # guessed = internal module, name unknown there (re-export or
+    # attribute the parse can't confirm); module-only routes and the
+    # per-module unresolved counter stay what they always were.
+    CG_CAP = 4000
+    def_names = {m["id"]: {d["n"] for d in m["defs"]} for m in modules}
+    cg_edges = {}
+    cg_res = cg_guess = cg_modonly = 0
+    for smod, sdef, dmod, dname, kind in calls_raw:
+        if dname is None:
+            cg_modonly += 1
+            continue
+        if dmod in def_names and dname in def_names[dmod]:
+            ekind = kind
+            cg_res += 1
+        elif dmod in def_names:
+            ekind = "guessed"
+            cg_guess += 1
+        else:
+            cg_modonly += 1
+            continue
+        key = (f"{smod}:{sdef or '<module>'}", f"{dmod}:{dname}",
+               ekind)
+        cg_edges[key] = cg_edges.get(key, 0) + 1
+    fanin = {}
+    for (s, d, k), n in cg_edges.items():
+        smod2 = s.split(":", 1)[0]
+        dmod2 = d.split(":", 1)[0]
+        if smod2 != dmod2 and k != "guessed":
+            f = fanin.setdefault(d, {"n": 0, "mods": set()})
+            f["n"] += n
+            f["mods"].add(smod2)
+    edge_list = sorted(cg_edges.items(), key=lambda kv: -kv[1])
+    callgraph = {
+        "edges": [[s, d, n, k] for (s, d, k), n in
+                  edge_list[:CG_CAP]],
+        "total": len(cg_edges), "resolved": cg_res,
+        "guessed": cg_guess, "modOnly": cg_modonly,
+        "fanin": [[d, f["n"], len(f["mods"])] for d, f in
+                  sorted(fanin.items(),
+                         key=lambda kv: (-kv[1]["n"], kv[0]))[:12]],
+    }
 
     # intra-module call graph: which top-level function calls which,
     # WITHIN one file. This is the function-world twin of the class
@@ -999,7 +1056,7 @@ def main(argv):
         kind_of[m["id"]] = {d["n"]: d["k"] for d in m["defs"]}
     INTRA_CAP = 1000
     intra_tmp = {}
-    for smod, sdef, dmod, dname in calls_raw:
+    for smod, sdef, dmod, dname, _kind in calls_raw:
         if smod != dmod or dname not in funcs_of.get(smod, ()):
             continue   # cross-file, or callee is a class/not a top func
         if sdef:
@@ -1174,6 +1231,7 @@ def main(argv):
                                 key=lambda kv: (-kv[1], kv[0]))[:20]),
         "extMissing": ext_missing,
         "unresolvedCalls": unresolved,
+        "callgraph": callgraph,   # #94: def→def, resolved/guessed
         "errors": errors,
         "heat": heat,
         "churn": churn,   # #95: git history lens, or null (no repo)

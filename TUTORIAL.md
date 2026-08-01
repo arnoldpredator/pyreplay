@@ -867,6 +867,15 @@ their original node — no phantom calls), and the 4000-node render cap
 announces itself. Works at both granularities — on an fn-level trace
 of a real codebase it is the whole run's shape in one panel.
 
+**Notes.** Press **N** at any moment and write what you're thinking
+— "HERE the total goes negative, why?" — Enter pins it. The Notes
+panel lists every note jumpable, cream pins mark them on the strip,
+and they persist per trace in your browser. **export sidecar** writes
+them to a JSON file that travels WITH the trace: a teammate imports
+it and your investigation is already pinned to the moments (notes
+outside the trace's range are skipped, never clamped, and a
+mismatched event count warns honestly).
+
 **Forward taint.** The slice's twin: pick a value — a config field,
 an input, a constant you're about to change — press **⇢ taint** on
 its row, and every recorded event it influenced lights the strip:

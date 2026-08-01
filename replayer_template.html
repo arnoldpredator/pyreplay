@@ -581,6 +581,28 @@
     border-radius: 4px; font: inherit; font-size: 10px; padding: 0 5px;
     margin-left: 6px; color: var(--call); cursor: pointer; }
   .prov .provslice:hover { border-color: var(--call); }
+  #nmarks { position: relative; height: 7px; margin: 0 7px 2px; }
+  .nmark { position: absolute; top: 0; width: 4px; height: 7px;
+    background: #efe6c2; border-radius: 2px; cursor: pointer;
+    transform: translateX(-2px); }
+  .nmark:hover { background: #fffbe8; }
+  #notebar { display: none; padding: 5px 14px; background: #2a2415;
+    border-top: 1px solid var(--border); font-size: 12px;
+    color: #efe6c2; }
+  #notebar input { width: 60%; margin-left: 8px; background: #1c1f28;
+    color: var(--text); border: 1px solid var(--border);
+    border-radius: 4px; padding: 3px 8px; font: inherit; }
+  #annbox { border-top: 1px solid var(--border); padding: 6px 10px;
+    font-size: 11px; color: var(--dim); }
+  #annbox summary { cursor: pointer; color: var(--text); }
+  .annrow { padding: 2px 0; cursor: pointer; color: var(--text); }
+  .annrow:hover { color: #efe6c2; }
+  .annrow .annev { color: var(--dim); font-size: 10px;
+    margin-right: 6px; }
+  .annrow .anndel { color: var(--dim); padding: 0 5px; }
+  .annrow .anndel:hover { color: var(--err); }
+  .annctl { margin-top: 5px; }
+  .annctl button { font-size: 10px; padding: 1px 8px; }
   #smarks { position: relative; height: 7px; margin: 0 7px 2px; }
   .smark { position: absolute; top: 0; width: 3px; height: 7px;
     background: var(--call); border-radius: 1px; cursor: pointer; }
@@ -832,6 +854,14 @@
       <div id="seqdiag"></div>
       <div id="seqnote"></div>
     </details>
+    <details id="annbox" title="#107: notes pinned to events — the trace as the notebook; N writes one, the sidecar carries them">
+      <summary>Notes <span id="annstat"></span></summary>
+      <div id="annlist"></div>
+      <div class="annctl"><button id="annexport">export sidecar</button>
+        <button id="annimport">import</button>
+        <input type="file" id="annfile" accept=".json" style="display:none">
+        <span id="annnote" class="anote"></span></div>
+    </details>
     <details id="anatbox" title="#85: what this line IS to the interpreter — the syntax tree above it, the instructions below it">
       <summary>Anatomy <span id="anatname"></span></summary>
       <div id="anatomy"></div>
@@ -846,6 +876,10 @@
   P/Esc exits · motion between events is interpolation —
   only the endpoints are recorded truth</div>
 <footer>
+  <div id="notebar"><span id="notelbl"></span>
+    <input id="noteinput" size="70"
+      placeholder="what matters at this moment? Enter saves · empty deletes · Esc closes">
+  </div>
   <div id="slicebar"></div>
   <div id="taintbar"></div>
   <div id="gatebar">
@@ -5116,6 +5150,135 @@ function jumpBookmark(dir) {
 }
 renderBmarks();
 
+/* #107: annotations — notes pinned to events. A long investigation
+   IS a set of annotated moments; make the trace the notebook.
+   localStorage per trace (the bookmarks pattern) + a JSON sidecar
+   so notes travel with the trace file. */
+const ANN_KEY = "pyreplay-ann:" + DATA.script + ":" + events.length;
+let annotations = {};
+try { annotations = JSON.parse(localStorage.getItem(ANN_KEY) || "{}"); }
+catch (e) {}
+function annSave() {
+  try { localStorage.setItem(ANN_KEY, JSON.stringify(annotations)); }
+  catch (e) {}
+}
+function renderAnn() {
+  let box = document.getElementById("nmarks");
+  if (!box) {
+    box = document.createElement("div");
+    box.id = "nmarks";
+    const footer = document.querySelector("footer");
+    footer.insertBefore(box, footer.firstChild);
+  }
+  const total = Math.max(1, events.length - 1);
+  box.innerHTML = "";
+  const keys = Object.keys(annotations).map(Number)
+    .sort((a, b) => a - b);
+  keys.forEach(j => {
+    const m = document.createElement("span");
+    m.className = "nmark";
+    m.style.left = (j / total * 100) + "%";
+    m.title = "📝 " + annotations[j].t + " (event " + (j + 1) + ")";
+    m.onclick = () => { stop(); goto(j); };
+    box.appendChild(m);
+  });
+  box.style.display = keys.length ? "" : "none";
+  $("annstat").textContent = keys.length ? "· " + keys.length : "";
+  $("annlist").innerHTML = keys.length
+    ? keys.map(j =>
+        '<div class="annrow" data-goto="' + j + '"><span class="annev">ev ' +
+        (j + 1) + "</span> " + esc2(annotations[j].t) +
+        ' <span class="anndel" data-del="' + j +
+        '" title="delete this note">✕</span></div>').join("")
+    : '<div class="anote">no notes — press N at any event; the notes ' +
+      "live in this browser and in the exportable sidecar.</div>";
+}
+function openNote() {
+  const bar = $("notebar");
+  bar.style.display = "block";
+  $("notelbl").textContent = "📝 note @ ev " + (idx + 1) +
+    ((annotations[idx] ? " (editing)" : ""));
+  const inp = $("noteinput");
+  inp.value = annotations[idx] ? annotations[idx].t : "";
+  inp.focus();
+}
+function closeNote() {
+  $("notebar").style.display = "none";
+  $("noteinput").blur();
+}
+$("noteinput").addEventListener("keydown", e => {
+  e.stopPropagation();
+  if (e.key === "Enter") {
+    const txt = $("noteinput").value.trim();
+    if (txt) annotations[idx] = { t: txt, at: annotations[idx]
+      ? annotations[idx].at : new Date().toISOString() };
+    else delete annotations[idx];
+    annSave();
+    renderAnn();
+    closeNote();
+  } else if (e.key === "Escape") closeNote();
+});
+$("annlist").addEventListener("click", e => {
+  const d = e.target.closest("[data-del]");
+  if (d) {
+    delete annotations[d.dataset.del];
+    annSave();
+    renderAnn();
+    return;
+  }
+  const r = e.target.closest("[data-goto]");
+  if (r) { stop(); goto(parseInt(r.dataset.goto, 10)); }
+});
+$("annexport").onclick = () => {
+  const keys = Object.keys(annotations).map(Number)
+    .sort((a, b) => a - b);
+  const blob = new Blob([JSON.stringify({
+    script: DATA.script, events: events.length,
+    notes: keys.map(j => ({ ev: j + 1, text: annotations[j].t,
+                            at: annotations[j].at })),
+  }, null, 1)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "pyreplay-notes_" +
+    DATA.script.replace(/[^A-Za-z0-9_.-]+/g, "_") + ".json";
+  a.click();
+};
+$("annimport").onclick = () => $("annfile").click();
+$("annfile").addEventListener("change", () => {
+  const f = $("annfile").files[0];
+  if (!f) return;
+  const rd = new FileReader();
+  rd.onload = () => {
+    let skipped = 0, loaded = 0;
+    try {
+      const doc = JSON.parse(rd.result);
+      (doc.notes || []).forEach(n => {
+        const j = (n.ev | 0) - 1;   // sidecar evs are 1-based
+        if (j >= 0 && j < events.length && n.text) {
+          annotations[j] = { t: String(n.text),
+                             at: n.at || new Date().toISOString() };
+          loaded++;
+        } else skipped++;
+      });
+      annSave();
+      renderAnn();
+      $("annnote").textContent = loaded + " note(s) imported" +
+        (skipped ? " · " + skipped + " outside this trace's " +
+          "events — skipped, never clamped" : "") +
+        (doc.events && doc.events !== events.length
+          ? " · ⚠ sidecar was written against a " + doc.events +
+            "-event trace (this one has " + events.length +
+            ") — event numbers may not mean the same moments"
+          : "");
+    } catch (err) {
+      $("annnote").textContent = "unreadable sidecar: " + err;
+    }
+    $("annfile").value = "";
+  };
+  rd.readAsText(f);
+});
+renderAnn();
+
 /* density strip: the trace's shape before you scrub it — colored by
    which FILE each region of the run lived in (hue per file) */
 (function () {
@@ -5453,6 +5616,7 @@ document.addEventListener("keydown", e => {
   else if (e.key === "o" || e.key === "O") { stop(); stepOver(); }
   else if (e.key === "u" || e.key === "U") { stop(); stepOut(); }
   else if (e.key === "b" || e.key === "B") toggleBookmark();
+  else if (e.key === "n" || e.key === "N") openNote();   // #107
   else if (e.key === "[") jumpBookmark(-1);
   else if (e.key === "]") jumpBookmark(1);
   else if (e.key === "p" || e.key === "P") togglePresent();

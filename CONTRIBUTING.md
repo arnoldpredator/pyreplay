@@ -7,7 +7,7 @@ can pick an item and implement it. Features are numbered **#63 onward**, continu
 in FEATURES.md. Fifteen roadmap items have shipped since the list was
 written (63, 64, 65, 70, 77, 79, 80, 98, 101 v1, 103, 104 Tier 1,
 106, 109, 118, 120 v1) — their rows below are struck through;
-**25 remain unbuilt** (plus the stated remainders of 66/74/75/85/88/89/101/104/119/120/126/127/128/132/134).
+**24 remain unbuilt** (plus the stated remainders of 66/74/75/85/88/89/101/104/119/120/126/127/128/132/134).
 
 ## Start here — how to contribute
 
@@ -113,7 +113,7 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
 | 104 | ~~Reproducibility capsule~~ **Tier 1 shipped; seeds/replay remain** | M–XL | ★★★ |
 | 105 | Schema spec + import/export bridges | M | ★★ |
 | 106 | ~~Deep links: a URL that opens a moment~~ **shipped** | — | ★★★ |
-| 107 | Notes pinned to events; exportable | M | ★★ |
+| 107 | ~~Notes pinned to events; exportable~~ **shipped** | M | ★★ |
 | 108 | Recorded walkthroughs (executable lessons) | M | ★★ |
 | 109 | ~~Query bar over all events~~ **shipped** | — | ★★★ |
 | 110 | Two traces side by side, cursors synced | M | ★★ |
@@ -812,6 +812,7 @@ software.
 **Shipped 2026-08-01** — now catalog entry #106 in [FEATURES.md](FEATURES.md), with the full measured/displayed/why/use-case record.
 
 ### 107. Annotations — notes pinned to events
+**Shipped 2026-08-01** — now catalog entry #107 in [FEATURES.md](FEATURES.md): N opens the note bar (Enter saves, empty deletes), Notes panel + cream pins, localStorage per trace, JSON sidecar export/import with skip-never-clamp and the event-count mismatch warning.
 - **What:** press `N` at any event: attach a note ("HERE total goes
   negative — why?"); notes listed in a side panel, exported/imported
   as a JSON sidecar so they travel with the trace file.

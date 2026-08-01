@@ -2904,6 +2904,26 @@ def _():
         expect(probe in tpl, f"seq contract missing: {probe}")
 
 
+@check("annotations: notebook contract, sidecar honesty (#107)")
+def _():
+    with open(os.path.join(HERE, "replayer_template.html"),
+              encoding="utf-8") as fh:
+        tpl = fh.read()
+    # renderer-only feature: pin the contract the notebook must keep
+    for probe in ('const ANN_KEY = "pyreplay-ann:" + DATA.script',
+                  "pyreplay-notes_",
+                  "sidecar evs are 1-based",
+                  "skipped, never clamped",
+                  "event numbers may not mean the same moments",
+                  'e.key === "n" || e.key === "N"',
+                  'id="annexport"', 'id="annimport"',
+                  'id="notebar"', "nmark"):
+        expect(probe in tpl, f"annotation contract missing: {probe}")
+    expect(tpl.count("annotations[idx]") >= 3,
+           "the editor must read, create and delete at the CURRENT "
+           "event — the note belongs to the moment")
+
+
 @check("forward taint: data flow, verdicts, control split, kill (#76)")
 def _():
     src = fixture("ft76.py", (

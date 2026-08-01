@@ -571,6 +571,33 @@ dead or invented panel; every cap and truncation is announced.
 
   [![Feature 106 — deep links](screenshots/106-deep-links.png)](screenshots/106-deep-links.png)
 
+### 107. Annotations — the trace as the notebook
+- **Measured:** nothing — a pure replayer medium. Notes live in
+  localStorage keyed to this exact trace (script + event count), and
+  in an exportable JSON sidecar so they travel with the file.
+- **Displayed:** press **N** at any event: the note bar opens
+  (prefilled when a note exists) — Enter saves, empty deletes, Esc
+  closes. The **Notes** panel lists every note, jumpable, with
+  per-row delete; cream pins mark noted moments on the strip.
+  **export sidecar** downloads `pyreplay-notes_<script>.json`
+  (1-based event numbers, timestamps); **import** merges a sidecar —
+  notes outside this trace's event range are skipped, never clamped,
+  and a sidecar written against a different event count warns that
+  its numbers may not mean the same moments.
+- **Why:** a long investigation IS a set of annotated moments; today
+  they live in a text file full of event numbers. The trace should
+  be the notebook — and the sidecar means a teammate opens your
+  trace and your notes are already pinned to the moments.
+- **Use case:** "HERE raw enters — everything after this is
+  downstream" pinned at event 7; "the clip fired — why 10 and not
+  13?" at event 17. Reopen tomorrow (or send both files): the
+  investigation resumes where thinking stopped.
+- **Command:** any trace → **N**. Export/import in the Notes panel.
+- **Screenshot** — two pinned notes, the panel open, the editor
+  mid-thought:
+
+  [![Feature 107 — annotations](screenshots/107-annotations.png)](screenshots/107-annotations.png)
+
 ### 109. The query bar — omniscient search
 - **Measured:** a fixed grammar evaluated over the recorded events —
   `type:` `exc:` `fn:` `file:` `line:` `after:` `before:` `changed:`

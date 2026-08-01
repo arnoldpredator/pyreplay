@@ -84,6 +84,8 @@ class ModuleScan(ast.NodeVisitor):
         self.defs = []
         self.calls = []          # (src_def|None, dst_mod|None, dst_name|None)
         self.unresolved = 0      # calls static analysis cannot attribute
+        self.dynimp = 0          # #119: __import__/import_module call
+        #                          sites — targets unknown until traced
         self._scope = []
         self._bound = [set()]    # names bound per scope ([0] = module),
                                  # so a nested def can't be mistaken for a
@@ -248,6 +250,12 @@ class ModuleScan(ast.NodeVisitor):
     def visit_Call(self, node):
         src = ".".join(self._scope) if self._scope else None
         f = node.func
+        # #119: a dynamic import is the parse's declared blind spot —
+        # flag the SITE now; the target only exists once a run is traced
+        if (isinstance(f, ast.Name) and f.id == "__import__") or \
+                (isinstance(f, ast.Attribute)
+                 and f.attr == "import_module"):
+            self.dynimp += 1
         if isinstance(f, ast.Name):
             a = self.aliases.get(f.id)
             if a is not None and a[0] == "func":
@@ -486,9 +494,28 @@ def load_heat(trace_path, modules):
 
     heat, unmatched = {}, 0
     stacks = {}          # per-thread frames: [mod_id, def_key, t0, child]
+    xstacks = {}         # #119: per-(thread, task) module stacks
+    xmod = {}            # "callerId|calleeId" -> observed call count
     abs_ts = 0
     for i, ev in enumerate(events):
         mod = mod_for(ev.get("f", ""))
+        # ---- #119: cross-module call pairs the run OBSERVED. Per
+        # (thread, task) lane so asyncio interleaving can't fake an
+        # edge; unmatched callees still push (None) so nesting stays
+        # balanced. Direct caller only — a foreign frame in between
+        # means the direct call was foreign, not a module edge.
+        if ev.get("e") in ("call", "return"):
+            lane = (ev.get("t", "main"), ev.get("tk"))
+            xst = xstacks.setdefault(lane, [])
+            if ev["e"] == "call":
+                top = xst[-1] if xst else None
+                mid = mod["id"] if mod else None
+                if top is not None and mid is not None and top != mid:
+                    key = top + "|" + mid
+                    xmod[key] = xmod.get(key, 0) + 1
+                xst.append(mid)
+            elif xst:
+                xst.pop()
         # ---- time attribution (fn traces): stack replay over ALL
         # events, matched or not, so nesting stays balanced
         if kind == "time":
@@ -545,7 +572,7 @@ def load_heat(trace_path, modules):
     total = abs_ts if kind == "time" else len(events)
     return {"trace": os.path.basename(trace_path), "events": len(events),
             "unmatched": unmatched, "mods": heat, "kind": kind,
-            "script": script, "total": max(1, total)}
+            "xmod": xmod, "script": script, "total": max(1, total)}
 
 
 def aggregate_heat(heats):
@@ -576,12 +603,16 @@ def aggregate_heat(heats):
     # counts, the only field both kinds carry)
     total = (sum(h["total"] for h in heats) if kind == "time"
              else sum(h["events"] for h in heats))
+    xmod = {}
+    for h in heats:   # #119: observed pairs sum across workloads too
+        for k, n in h.get("xmod", {}).items():
+            xmod[k] = xmod.get(k, 0) + n
     return {"trace": f"{len(heats)} traces: "
             + ", ".join(h["trace"] for h in heats),
             "events": sum(h["events"] for h in heats),
             "unmatched": sum(h["unmatched"] for h in heats),
             "mods": mods, "kind": kind, "script": heats[0]["script"],
-            "total": max(1, total)}
+            "xmod": xmod, "total": max(1, total)}
 
 
 def main(argv):
@@ -680,6 +711,7 @@ def main(argv):
             if d != mod:
                 imports.append({"s": emit_id, "d": d})
         entry = {"id": emit_id,
+                 "dynimp": scan.dynimp,
                  "path": os.path.relpath(path, root_dir),
                  "pkg": parent_pkg(mod, path),
                  "loc": len(src.splitlines()),
@@ -806,6 +838,26 @@ def main(argv):
                 ext_missing.append(ext_name)
         except Exception:
             pass   # unresolvable finder result: unknown, never claimed
+
+    if heat and heat.get("xmod"):
+        # #119 dark edges: runtime caller→callee pairs with NO static
+        # route (neither an import nor a resolvable call) — the map's
+        # documented blind spot, drawn instead of merely counted.
+        # Honesty: observed in the adopted run(s) only; the absence of
+        # a dark edge is never evidence of absence.
+        static_pairs = {(e["s"], e["d"]) for e in imports}
+        static_pairs |= {(c["s"], c["d"]) for c in calls}
+        dark = []
+        for key, n in sorted(heat["xmod"].items(), key=lambda kv:
+                             (-kv[1], kv[0])):
+            a, _, b = key.partition("|")
+            if (a, b) not in static_pairs:
+                dark.append({"a": a, "b": b, "n": n})
+        heat["darkTotal"] = len(dark)
+        heat["dark"] = dark[:200]   # cap; darkTotal states the truth
+        if dark:
+            print(f"dark edges: the run saw {len(dark)} caller→callee "
+                  f"pair(s) the parse couldn't — drawn dashed on the map")
 
     payload = {
         "root": name,

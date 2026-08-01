@@ -1516,12 +1516,48 @@ dead or invented panel; every cap and truncation is announced.
 
   [![Feature 60 — funnel handoff](screenshots/60-funnel-handoff.png)](screenshots/60-funnel-handoff.png)
 
+### 119. Dark edges — what the run saw that the parse couldn't (v1)
+- **Measured:** while a trace's heat is adopted, every cross-module
+  call the run made is collected (per thread·task lane, direct caller
+  only) and diffed against the static routes — imports AND resolvable
+  call edges. Pairs with no static route are DARK: dispatch tables,
+  callbacks, plugin registries, `importlib` loads. On the AST side,
+  every `__import__` / `import_module` call site is flagged up front
+  ("target unknown until a run is traced"). Aggregates across all
+  adopted traces.
+- **Displayed:** dashed **⚡ dark edges** arcing over the boxes with
+  call counts, on their own toggle beside call routes; the banner
+  counts them (top-200 drawn, the cap stated); flagged modules wear ⚡
+  with the site count in their tooltip. Every dark edge's tooltip
+  repeats the rule: observed in the adopted run(s) — the absence of a
+  dark edge is never evidence of absence.
+- **Why:** the map's documented blind spot is dynamic binding — an
+  event-driven codebase can look disconnected statically while being
+  densely wired at runtime. The overlay makes the map stop
+  under-reporting exactly where under-reporting is most dangerous,
+  and the honesty count ("N calls not statically resolvable") finally
+  becomes a picture.
+- **Use case:** a plugin registry: `core.dispatch` calls
+  `plugins.double` through a dict, so the parse sees core touching
+  plugins never. The trace draws core ⤳ plugins dashed ×1 — and
+  main's `importlib.import_module("…plugins")` shows as its own dark
+  edge, with main flagged ⚡.
+- **Command:** any map with adopted heat — `python3 mapper.py --trace
+  trace_x.html path/`, or auto-heat. fn traces give the cleanest
+  pairs. (Runtime-import reconciliation against static import edges
+  is the roadmap remainder.)
+- **Screenshot** — the registry demo: two dashed dark edges with ⚡
+  counts over the blue static imports, main flagged, the banner
+  counting them.
+
+  [![Feature 119 — dark edges](screenshots/119-dark-edges.png)](screenshots/119-dark-edges.png)
+
 ---
 
 ## J. Infrastructure (no screenshots needed)
 
 ### 61. `checks.py` — the regression suite
-58 data-level checks (no browser): the tracer re-runs the permanent
+60 data-level checks (no browser): the tracer re-runs the permanent
 example suite and the mapper its fixtures, the embedded JSON is
 extracted from each generated HTML (chunked or not), and the honesty
 invariants are asserted in plain Python — windowed-change correctness,
@@ -1533,7 +1569,8 @@ divergence depths, NaN-trip transitions, chart and query machinery,
 deep links, per-test chapters, `--check` exit codes, the black-box
 ring, capsule contents, console-lane attribution, whyline guards,
 boundary schemas, schedule-chaos determinism and honesty labels,
-happens-before edge causality and Perfetto flow pairing.
+happens-before edge causality and Perfetto flow pairing, dark-edge
+diffing with its absence honesty.
 Every subprocess the suite spawns pins its stdin, so
 the result cannot depend on how the suite was invoked. Run before and
 after every change, always.

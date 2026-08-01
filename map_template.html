@@ -85,6 +85,10 @@
   .oexc { fill: var(--err); font-size: 10px; font-weight: 700;
           text-anchor: end; }
   .fheat { fill: #ffd479; font-weight: 700; }
+  .dedge { stroke: #c678dd; stroke-width: 1.7; fill: none;
+           stroke-dasharray: 7 4; opacity: .9; }
+  .dedge.hovoff { opacity: .09; }
+  .dlabel { fill: #c678dd; font-size: 10px; font-weight: 700; }
   .iedge { stroke: #5b81b8; stroke-width: 1.4; fill: none; opacity: .75; }
   .iedge.dimmed { opacity: .08; }
   .iedge.cyc { stroke: var(--err); opacity: .92; }
@@ -182,6 +186,8 @@
   <span id="stats"></span>
   <input id="search" type="search" placeholder="search modules / functions…">
   <label class="toggle"><input type="checkbox" id="showcalls"> call routes</label>
+  <label class="toggle" id="darklbl" style="display:none">
+    <input type="checkbox" id="showdark" checked> dark edges</label>
   <label class="toggle" id="cyclbl" style="display:none"
     title="Paint every import-cycle edge red (clicking a cycle in the
 bottom bar spotlights it even with this off)">
@@ -211,6 +217,11 @@ bottom bar spotlights it even with this off)">
       markerHeight="9" markerUnits="userSpaceOnUse"
       orient="auto-start-reverse">
       <path d="M0,0 L10,5 L0,10 z" fill="#ffd479"/>
+    </marker>
+    <marker id="mdk" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="10"
+      markerHeight="10" markerUnits="userSpaceOnUse"
+      orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#c678dd"/>
     </marker>
     <marker id="mh" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9"
       markerHeight="9" markerUnits="userSpaceOnUse"
@@ -326,12 +337,20 @@ function buildNote(allCycles) {
       Object.keys(h.mods).length + " modules touched" +
       (h.unmatched ? ", " + h.unmatched.toLocaleString() +
         " events outside this map" : "") +
-      ' · <span class="hlegend"></span> 0→100% of run');
+      ' · <span class="hlegend"></span> 0→100% of run' +
+      (h.dark && h.dark.length
+        ? ' · <span style="color:#c678dd">⚡ ' + h.darkTotal +
+          " dark edge(s) — runtime call routes the parse couldn't see" +
+          (h.darkTotal > h.dark.length
+            ? " (top " + h.dark.length + " drawn)" : "") + "</span>"
+        : ""));
   }
   $("note").innerHTML = bits.join(" · ");
 }
 buildNote(false);
 if (DATA.heat) $("heatlbl").style.display = "";
+if (DATA.heat && DATA.heat.dark && DATA.heat.dark.length)
+  $("darklbl").style.display = "";
 
 /* ---------- grouping: modules fold into package boxes ----------
    The unit of layout is the GROUP: a real package (its __init__ plus
@@ -794,6 +813,60 @@ function render() {
     });
   }
 
+  // #119 dark edges: caller→callee pairs the RUN saw where the parse
+  // has no route — dispatch tables, callbacks, plugin registries. The
+  // map's blind spot, drawn instead of merely counted.
+  if (DATA.heat && DATA.heat.dark && DATA.heat.dark.length &&
+      $("showdark").checked) {
+    const dagg = new Map();
+    const sid = s => (s.split(".").pop() || s);
+    DATA.heat.dark.forEach(e => {
+      const a = anchorOf(e.a), b = anchorOf(e.b);
+      if (!a.g || !b.g || a.key === b.key) return;
+      const k = a.key + "→" + b.key;
+      let rec = dagg.get(k);
+      if (!rec) dagg.set(k, rec = { a: a.g, b: b.g, n: 0,
+                                    aKey: a.key, bKey: b.key,
+                                    gid: gidOf(e.a), gd: gidOf(e.b),
+                                    pairs: [] });
+      rec.n += e.n;
+      if (rec.pairs.length < 10)
+        rec.pairs.push(sid(e.a) + " → " + sid(e.b) + " ×" + e.n);
+    });
+    dagg.forEach(rec => {
+      const related = anySel &&
+        (selAnchors.has(rec.aKey) || selAnchors.has(rec.bKey));
+      // rise ABOVE both boxes — call routes dip below; the two layers
+      // must not braid into each other
+      const x1 = rec.a.x + rec.a.w / 2, y1 = rec.a.y,
+            x2 = rec.b.x + rec.b.w / 2, y2 = rec.b.y;
+      const my = Math.min(y1, y2) - 46;
+      let p = '<path class="dedge' +
+        (anySel && !related ? " hovoff" : "") +
+        '" d="M' + x1 + " " + y1 + " C" + x1 + " " + my + " " + x2 +
+        " " + my + " " + x2 + " " + (y2 - 4) +
+        '" marker-end="url(#mdk)"' +
+        ' data-ka="' + esc(rec.aKey) + '" data-kb="' + esc(rec.bKey) +
+        '" data-ga="' + esc(rec.gid) + '" data-gb="' + esc(rec.gd) +
+        '"><title>' +
+        esc("DARK EDGE — observed at runtime, no static route\n" +
+            rec.n + " call(s) in the adopted trace(s)\n" +
+            rec.pairs.join("\n") +
+            "\n(absence of a dark edge is never evidence of absence)") +
+        "</title></path>";
+      if (!anySel || related)
+        p += '<text class="dlabel" x="' + ((x1 + x2) / 2) + '" y="' +
+          (my + 12) + '">⚡' + rec.n + "</text>";
+      if (related) {
+        svgSel += p;
+        relKeys.add(rec.aKey);
+        relKeys.add(rec.bKey);
+      } else {
+        svgEdges += p;
+      }
+    });
+  }
+
   // package boxes: the fold — one box per package, members inside
   // when unfolded, a heat/cycle/error roll-up when folded
   realPkgs.forEach(g => {
@@ -881,7 +954,13 @@ function render() {
         (modShare(mh) / totalEv * 100).toFixed(0) + "%)" : "")) +
       (sccIndex[m.id] !== undefined
         ? ' <tspan fill="#ff6b6b" font-weight="700">⭯</tspan>' : "") +
+      (m.dynimp
+        ? ' <tspan fill="#c678dd" font-weight="700">⚡</tspan>' : "") +
       "</text><title>" + esc(m.path +
+        (m.dynimp
+          ? "\n⚡ " + m.dynimp + " dynamic-import call site(s) — "
+            + "targets unknown until a run is traced (#119)"
+          : "") +
         (sccIndex[m.id] !== undefined
           ? "\n⚠ import cycle with: " + (cp =>
               cp.slice(0, 6).join(", ") +
@@ -1394,6 +1473,7 @@ $("canvas").addEventListener("mouseleave", () => applyHover(null, null));
 $("showcalls").onchange = render;
 $("showcyc").onchange = render;
 $("showheat").onchange = render;
+$("showdark").onchange = render;
 /* one spotlight at a time: search, a cycle, or a walls row — every
    entry point clears the others, and the note-bar link state follows */
 function setCycleSel(i) {

@@ -128,6 +128,17 @@ dispatch tables) — and the bottom note always reports how many calls
 weren't statically resolvable. This is the wide, cheap end of the funnel: map
 first, then aim the microscope.
 
+**Dark edges (#119) — the blind spot, drawn.** When the map adopts a
+trace, every cross-module call the run actually made is diffed against
+the static routes. Pairs with no static route — dispatch tables,
+callbacks, plugin registries, `importlib` — appear as dashed **⚡ dark
+edges** with call counts, on their own toggle; the banner counts them,
+and modules containing `__import__`/`import_module` call sites wear a
+⚡ flag up front ("target unknown until a run is traced"). The old
+honesty note about unresolvable calls becomes a picture — with its own
+honesty rule attached: the absence of a dark edge is never evidence of
+absence, only the adopted runs' testimony.
+
 # pyreplay tracer — user guide
 
 Record a Python program's execution — every line, call, return, and

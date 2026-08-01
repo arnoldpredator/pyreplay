@@ -2303,6 +2303,72 @@ def _():
            "at least one arrow must actually cross lanes")
 
 
+@check("map dark edges: runtime-only routes drawn, statics excluded (#119)")
+def _():
+    # a plugin registry: core calls plugins.double through a dict — no
+    # static route core→plugins exists; main reaches plugins only via
+    # importlib, so main→plugins is dark too (and main gets the ⚡ flag)
+    pkg = os.path.join(TMP, "dyndemo", "dyndemo")
+    os.makedirs(pkg, exist_ok=True)
+    with open(os.path.join(pkg, "__init__.py"), "w") as fh:
+        fh.write("")
+    with open(os.path.join(pkg, "core.py"), "w") as fh:
+        fh.write("REGISTRY = {}\n\n\ndef register(name, fn):\n"
+                 "    REGISTRY[name] = fn\n\n\ndef dispatch(name, x):\n"
+                 "    return REGISTRY[name](x)\n")
+    with open(os.path.join(pkg, "plugins.py"), "w") as fh:
+        fh.write("from dyndemo import core\n\n\ndef double(x):\n"
+                 "    return x * 2\n\n\ncore.register('double', double)\n")
+    root = os.path.join(TMP, "dyndemo")
+    main_py = os.path.join(root, "main.py")
+    with open(main_py, "w") as fh:
+        fh.write("import importlib\n\nfrom dyndemo import core\n\n"
+                 "importlib.import_module('dyndemo.plugins')\n"
+                 "print('answer:', core.dispatch('double', 21))\n")
+    tr = os.path.join(root, "trace_dyn.html")
+    r = subprocess.run([PY, os.path.join(HERE, "tracer.py"),
+                        "--granularity", "fn", "--root", root,
+                        "--out", tr, main_py],
+                       capture_output=True, text=True, cwd=root,
+                       stdin=subprocess.DEVNULL, timeout=120)
+    expect(os.path.exists(tr), f"no trace ({r.stdout} {r.stderr})")
+    mp = run_map(root, "--trace", tr, name="map_dyn")
+    h = mp.get("heat") or {}
+    dark = {(d["a"], d["b"]): d["n"] for d in h.get("dark") or []}
+    expect(("dyndemo.core", "dyndemo.plugins") in dark,
+           f"registry dispatch must be a dark edge: {dark}")
+    expect(("main", "dyndemo.plugins") in dark,
+           f"a dynamic import is a dark edge too: {dark}")
+    static = {(e["s"], e["d"]) for e in mp["imports"]}
+    expect(all(p not in static for p in dark),
+           "a dark edge must never duplicate a static route")
+    flags = {m["id"]: m.get("dynimp", 0) for m in mp["modules"]}
+    expect(flags.get("main", 0) == 1,
+           f"main's importlib call site must be flagged: {flags}")
+    expect(flags.get("dyndemo.core", 0) == 0,
+           "core has no dynamic import — must not be flagged")
+
+
+@check("map dark edges: absent when every observed route is static (#119)")
+def _():
+    tr = os.path.join(TMP, "trace_shop_dyn.html")
+    r = subprocess.run([PY, os.path.join(HERE, "tracer.py"),
+                        "--granularity", "fn", "--out", tr,
+                        os.path.join(HERE, "tinyshop", "main.py")],
+                       capture_output=True, text=True, cwd=TMP,
+                       stdin=subprocess.DEVNULL, timeout=120)
+    expect(os.path.exists(tr), f"no tinyshop trace ({r.stdout} {r.stderr})")
+    mp = run_map(os.path.join(HERE, "tinyshop"), "--trace", tr,
+                 name="map_shop_dyn")
+    h = mp.get("heat") or {}
+    expect(not (h.get("dark") or []),
+           f"tinyshop's routes are all static — dark must be empty, "
+           f"got {h.get('dark')}")
+    expect(h.get("xmod"),
+           "cross-module calls must still be OBSERVED (main→cart etc.) "
+           "— only their darkness is denied")
+
+
 # ---------------------------------------------------------------- runner
 
 def main():

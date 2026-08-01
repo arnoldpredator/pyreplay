@@ -7,7 +7,7 @@ can pick an item and implement it. Features are numbered **#63 onward**, continu
 in FEATURES.md. Fifteen roadmap items have shipped since the list was
 written (63, 64, 65, 70, 77, 79, 80, 98, 101 v1, 103, 104 Tier 1,
 106, 109, 118, 120 v1) — their rows below are struck through;
-**47 remain unbuilt** (plus the stated remainders of 88/101/104/120).
+**46 remain unbuilt** (plus the stated remainders of 88/101/104/119/120).
 
 ## Start here — how to contribute
 
@@ -125,7 +125,7 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
 | 116 | Symbolic "what input reaches this line" | XL | ★ |
 | 117 | Full deterministic record/replay | XL | ★★ |
 | 118 | ~~Console & logging lane synced to the trace~~ **shipped** | — | ★★★ |
-| 119 | Dynamic edges: runtime relations the parse can't see | M | ★★★ |
+| 119 | ~~Dynamic edges: runtime relations the parse can't see~~ **shipped (v1; import reconciliation remains)** | — | ★★★ |
 | 120 | ~~Boundary schemas~~ **shipped (v1; cross-run diff + map rows remain)** | M | ★★★ |
 | 121 | NVTX bridge: Python names on the GPU timeline | M | ★★ |
 | 122 | Shadowing & collision audit | S | ★★ |
@@ -940,6 +940,7 @@ notes the section it thematically belongs to.
 **Shipped 2026-08-01** — now catalog entry #118 in [FEATURES.md](FEATURES.md), with the full measured/displayed/why/use-case record.
 
 ### 119. Dynamic edges — what the run saw that the parse couldn't
+**v1 shipped 2026-08-01** — now catalog entry #119 in [FEATURES.md](FEATURES.md): dark call edges (observed pairs with no static route) drawn dashed with counts, plus static ⚡ flags on `__import__`/`import_module` call sites. What remains: runtime-import reconciliation against the static import edges.
 *(belongs with Section 5 — the map)*
 - **What:** overlay trace-observed relations on the static map:
   caller→callee module pairs from fn traces drawn as distinct "dark

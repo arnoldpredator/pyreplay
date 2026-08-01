@@ -418,8 +418,11 @@ Everything starts with one command over your own script. These are the recorder'
   object instead of a Python callback per executed line.
 - **Command:** `python3 tracer.py --backend monitoring app.py`
   (line is the script default; `--granularity fn` still composes).
-- **Screenshot:** none — the point is what does NOT change: the
-  trace reads the same; only the engine bill does.
+- **Screenshot** — the visible part is the honesty: the engine
+  banner naming itself and its one blind spot, over an
+  otherwise-identical trace:
+
+  [![Feature 17 — monitoring line engine](screenshots/102-monitoring-line.png)](screenshots/102-monitoring-line.png)
 
 ### 18. The reproducibility capsule (Tier 1)
 

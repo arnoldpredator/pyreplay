@@ -21,10 +21,11 @@ small; clone them if you want to reproduce those shots:
 [brian2](https://github.com/brian-team/brian2),
 [pymdp](https://github.com/infer-actively/pymdp). Features 61–62 are
 infrastructure and carry no shot; 64 and 70 are terminal reports and
-101 is plumbing, so those three carry none. Of the 2026-08 additions,
-77, 104 and 109 still await their shots from the next manual pass
-(each needs a click or a typed query); the other nine were captured
-live from the commands their entries give.
+101 is plumbing, so those three carry none. All fifteen 2026-08
+additions that can be seen carry live shots captured from the
+commands their entries give — the three interactive ones (77's click,
+104's Reproduce box, 109's typed query) posed by dispatching the real
+browser events.
 
 The two tools, one contract:
 
@@ -390,7 +391,11 @@ dead or invented panel; every cap and truncation is announced.
 - **Command:** automatic in every trace — open the Reproduce box in
   the viewer. (Seed capture and deterministic replay are this
   feature's roadmap sequels, #104 Tiers 2–3.)
-- **Screenshot** — pending the next manual pass; any trace shows it.
+- **Screenshot** — the Reproduce box open: the exact rerun command
+  (`… < stdin.bin`), cwd, python/platform, the PYTHONHASHSEED
+  warning, and the consumed stdin as a download.
+
+  [![Feature 104 — capsule](screenshots/104-capsule.png)](screenshots/104-capsule.png)
 
 ---
 
@@ -557,7 +562,11 @@ dead or invented panel; every cap and truncation is announced.
   pins every exception cart.py ever raised in the run.
 - **Command:** in any trace: press `/`, type, Enter. Composes with
   deep links (#106) — a queried moment is a shareable URL.
-- **Screenshot** — pending the next manual pass; live in any trace.
+- **Screenshot** — `changed:dist` typed: 7 hits pinned magenta on the
+  scrubber, Enter parked on the fourth change of `dist`, the changed
+  cell highlighted.
+
+  [![Feature 109 — query bar](screenshots/109-query-bar.png)](screenshots/109-query-bar.png)
 
 ## D. Replayer — variables & data structures
 
@@ -886,8 +895,11 @@ dead or invented panel; every cap and truncation is announced.
 - **Command:** any line-granularity trace — click the line number of
   a line that didn't run (under fn granularity the panel says why it
   can't answer).
-- **Screenshot** — pending the next manual pass; live via
-  `python3 tracer.py tinyshop/main.py`, then click a dead line.
+- **Screenshot** — the answer for a dead line: "ran 3× — 0× true, 3×
+  false — the guard chose against this branch", with first/last
+  arrival jumps; the dead line dimmed in the source.
+
+  [![Feature 77 — whyline](screenshots/77-whyline.png)](screenshots/77-whyline.png)
 
 ### 79. NaN/Inf tripwire — where the poison was born
 - **Measured:** with `--trip nan`, the encoder's own bounded output is

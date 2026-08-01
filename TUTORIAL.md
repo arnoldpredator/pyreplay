@@ -582,6 +582,22 @@ mergesort at both granularities: fn measures n^1.0 (calls ARE linear),
 line measures `n*log(n)` CONSISTENT — the bench tells you which cost
 you counted.
 
+**Metamorphic relations (`--relation`).** When you can't say what the
+right answer IS, you still know its symmetries: `sum` doesn't care
+about order, a distance is symmetric, doubling every input doubles
+the total. Declare the symmetry —
+`--relation "' '.join(reversed(x.split())) => out == out0"` — and
+each trial runs the target twice (original stdin, transformed stdin;
+`--gen` generates trials) and checks the relation over the two
+recorded outputs (`out0`/`out`, read from the console lane; `num()`/
+`nums()` parse them). A violation prints both outputs, KEEPS both
+traces and composes the exact `--diverge` command that lands on the
+line where the symmetry broke. Exit 0 iff everything held —
+git-bisect-ready. Honesty: a violation under hash randomization may
+be nondeterminism (the report says to pin PYTHONHASHSEED or measure
+with --runs first), and held trials are an observation, never a
+proof. Conservation laws as tests — no oracle required.
+
 **Invariant mining (⚗).** Every line trace now mines itself: a
 template library (constants, types, signs, lengths, sorted-at-return,
 per-call monotonicity, order pairs among numeric arguments) is checked

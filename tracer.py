@@ -3993,6 +3993,215 @@ def _build_fsm(events, expr, declared):
             "edges": edge_list, "obs": obs, "viol": n_viol}
 
 
+# ---- #126: the metamorphic relations harness ----------------------------
+# The oracle problem's cheapest instrument: the right answer may be
+# unknown, but its SYMMETRIES are not. --relation "T => R" declares an
+# input transform T (an expression over x, the original stdin text)
+# and an output relation R (over out0 = the original run's stdout and
+# out = the transformed run's, both read from the recorded console
+# lane — the faithful channel; tracer chatter never enters it). Each
+# trial runs the target twice and checks R. A violation keeps BOTH
+# traces and composes the --diverge command — the funnel hands you
+# the microscope, it never auto-runs it.
+
+def _parse_relation(spec):
+    t_src, sep, r_src = spec.partition("=>")
+    if not sep or not t_src.strip() or not r_src.strip():
+        raise SystemExit(
+            'error: --relation expects "TRANSFORM => RELATION", e.g. '
+            "\"' '.join(reversed(x.split())) => out == out0\" — "
+            "x is the original stdin text, out0/out the two stdouts")
+    t_src, r_src = t_src.strip(), r_src.strip()
+    try:
+        t_code = compile(t_src, "<relation-T>", "eval")
+        r_code = compile(r_src, "<relation-R>", "eval")
+    except SyntaxError as exc:
+        raise SystemExit(f"error: --relation is not a valid pair of "
+                         f"expressions: {exc}")
+    return {"t": t_src, "r": r_src, "tc": t_code, "rc": r_code}
+
+
+def _rel_ns(extra):
+    def num(s):
+        return float(str(s).strip().split()[0]) if str(s).strip() \
+            else 0.0
+
+    def nums(s):
+        return [float(t) for t in str(s).split()]
+    ns = {"num": num, "nums": nums, "abs": abs, "min": min,
+          "max": max, "len": len, "round": round, "sorted": sorted,
+          "sum": sum, "reversed": reversed, "str": str, "int": int,
+          "float": float, "list": list, "zip": zip,
+          "enumerate": enumerate}
+    ns.update(extra)
+    return ns
+
+
+def _relation_harness(orig_argv, relations, gen_file, trials, seed,
+                      entry_label, granularity, module, script):
+    """Run the target twice per (relation, trial) — original input vs
+    transformed input — and check the declared output relation. Exit
+    0 iff every relation held on every trial (git-bisect-ready)."""
+    genfn = None
+    if gen_file:
+        ns = runpy.run_path(os.path.realpath(gen_file))
+        genfn = ns.get("gen")
+        if not callable(genfn):
+            print("error: --gen file must define gen(value, seed) -> "
+                  "str|bytes (the trial's stdin)")
+            return 2
+    stem = (module.replace(".", "_") if module is not None
+            else os.path.splitext(os.path.basename(script))[0])
+
+    valued = {"--out", "--root", "--export-perfetto", "--include",
+              "--exclude", "--granularity", "--max-events",
+              "--start-at", "--start-count", "--start-when",
+              "--backend", "--trip", "--runs", "--check",
+              "--chaos-schedule", "--sweep", "--gen", "--predict",
+              "--sweep-seed", "--fsm", "--fsm-declare", "--memo",
+              "--relation", "--relation-trials", "--relation-seed"}
+    strip = {"--relation", "--relation-trials", "--relation-seed",
+             "--gen", "--out", "--granularity"}
+    child_flags, i = [], 0
+    while i < len(orig_argv):
+        tok = orig_argv[i]
+        if tok == "-m" or not tok.startswith("--"):
+            child_flags.extend(orig_argv[i:])
+            break
+        step = 2 if tok in valued and i + 1 < len(orig_argv) else 1
+        if tok not in strip:
+            child_flags.extend(orig_argv[i:i + step])
+        i += step
+    child_flags = ["--granularity", granularity] + child_flags
+
+    base_input = None
+    if genfn is None:
+        # the piped stdin is the one trial input (the #63 protocol:
+        # probe before blocking, announce before reading)
+        base_input = b""
+        if not sys.stdin.isatty():
+            try:
+                import select
+                ready, _, _ = select.select([sys.stdin], [], [], 0.5)
+            except Exception:
+                ready = [sys.stdin]
+            if ready:
+                print("pyreplay: reading stdin to EOF (each relation "
+                      "runs the target on it, then on its "
+                      "transform)…", flush=True)
+                try:
+                    base_input = sys.stdin.buffer.read()
+                except Exception:
+                    base_input = b""
+            else:
+                print("pyreplay: stdin open but quiet after 0.5s — "
+                      "trials get EMPTY stdin (pipe input, or use "
+                      "--gen)", flush=True)
+
+    print(f"pyreplay relations: {entry_label} · "
+          f"{len(relations)} relation(s) × {trials} trial(s) · "
+          f"{granularity} granularity"
+          + (f" · gen {os.path.basename(gen_file)} seed {seed}"
+             if genfn else " · input = the piped stdin"), flush=True)
+
+    def run_child(stdin_bytes, out_path):
+        cmd = [sys.executable, SELF, "--out", out_path] + child_flags
+        subprocess.run(cmd, input=stdin_bytes, capture_output=True)
+        if not os.path.exists(out_path):
+            return "", "no trace written", None
+        try:
+            data = _extract_payload(out_path)
+        except Exception as exc:
+            return "", f"unreadable trace ({type(exc).__name__})", None
+        out = "\n".join(ev.get("txt", "")
+                        for ev in data.get("events", [])
+                        if ev.get("e") == "log"
+                        and ev.get("s") == "out").strip()
+        return out, data.get("error"), data
+
+    n_viol = 0
+    hashseed = os.environ.get("PYTHONHASHSEED", "random") or "random"
+    for rel_i, rel in enumerate(relations, 1):
+        for t in range(1, trials + 1):
+            if genfn is not None:
+                try:
+                    raw = genfn(t, seed)
+                except Exception as exc:
+                    print(f"  relation {rel_i} trial {t}: gen() "
+                          f"raised {type(exc).__name__}: {exc} — "
+                          f"counted as a violation")
+                    n_viol += 1
+                    continue
+                x_bytes = raw.encode() if isinstance(raw, str) else raw
+            else:
+                x_bytes = base_input
+            x_text = x_bytes.decode(errors="replace")
+            try:
+                tg = _rel_ns({"x": x_text})
+                tg["__builtins__"] = {}
+                tx = eval(rel["tc"], tg)
+            except Exception as exc:
+                print(f"error: relation {rel_i} transform raised "
+                      f"{type(exc).__name__}: {exc} — fix the "
+                      f"expression (x is the stdin TEXT)")
+                return 2
+            tx_bytes = (tx if isinstance(tx, bytes)
+                        else str(tx).encode())
+            base = f"relation_{stem}_r{rel_i}_t{t}"
+            p_orig = os.path.abspath(base + "_orig.html")
+            p_x = os.path.abspath(base + "_xform.html")
+            out0, err0, _d0 = run_child(x_bytes, p_orig)
+            out1, err1, _d1 = run_child(tx_bytes, p_x)
+            note = ""
+            if err0 or err1:
+                verdict = False
+                note = (f"crashed — original: {err0 or 'clean'} · "
+                        f"transformed: {err1 or 'clean'}")
+            else:
+                try:
+                    rg = _rel_ns({"x": x_text, "tx": str(tx),
+                                  "out0": out0, "out": out1})
+                    rg["__builtins__"] = {}
+                    verdict = bool(eval(rel["rc"], rg))
+                except Exception as exc:
+                    print(f"error: relation {rel_i} check raised "
+                          f"{type(exc).__name__}: {exc} — out0/out "
+                          f"are the two stdout TEXTS")
+                    return 2
+            if verdict:
+                for pth in (p_orig, p_x):
+                    try:
+                        os.remove(pth)
+                    except OSError:
+                        pass
+                print(f"  relation {rel_i} trial {t}: held",
+                      flush=True)
+            else:
+                n_viol += 1
+                print(f"  relation {rel_i} trial {t}: ⚖ VIOLATED "
+                      f"[{rel['t']} => {rel['r']}]"
+                      + (f" — {note}" if note else ""), flush=True)
+                print(f"    out0: {out0[:80]!r}")
+                print(f"    out : {out1[:80]!r}")
+                print(f"    kept: {os.path.basename(p_orig)} + "
+                      f"{os.path.basename(p_x)}")
+                print(f"    next: python3 {os.path.basename(SELF)} "
+                      f"--diverge {os.path.basename(p_orig)} "
+                      f"{os.path.basename(p_x)}")
+    if n_viol:
+        print(f"\n{n_viol} violation(s). The symmetry is the oracle: "
+              f"a broken relation is a bug OR nondeterminism"
+              + (f" — PYTHONHASHSEED is {hashseed}; pin it (or "
+                 f"--runs first) before trusting the verdict"
+                 if hashseed == "random" else "")
+              + ". Input shrinking (#66) is unbuilt — shrink by "
+                "hand or with a smaller --gen value.")
+        return 1
+    print(f"\nall relations held on every trial — an observation "
+          f"over {trials} trial(s), never a proof.")
+    return 0
+
+
 # ---- #134: the subproblem DAG -------------------------------------------
 # Bind ONE memo structure (--memo dp) and the dependency DAG of its
 # table is mined from the trace: a static pass finds every subscript
@@ -4950,7 +5159,12 @@ def _diverge(path_a, path_b):
                 (e.get("g") or {}).get("s"), e.get("t"), e.get("tk"))
 
     def state_tok(e):
-        core = {k: e.get(k) for k in ("ch", "ret", "x") if k in e}
+        # txt/s joined 2026-08-01: the console lane (#118) is recorded
+        # state too — two runs whose only difference is what they
+        # PRINTED must diverge here, not read as identical (found by
+        # #126: a broken relation's kept pair differed only in output)
+        core = {k: e.get(k) for k in ("ch", "ret", "x", "txt", "s")
+                if k in e}
         return _ADDR.sub("0xADDR", json.dumps(core, sort_keys=True))
 
     def first_mismatch(xs, ys):
@@ -5087,6 +5301,9 @@ def main(argv):
     fsm_expr = None      # #132: the ONE declared state name
     fsm_declared = None  # #132: declared transitions, or None
     memo_name = None     # #134: the ONE bound memo structure
+    relations = []       # #126: [{"t","r","tc","rc"}] declared symmetries
+    rel_trials = None    # #126: trials per relation (default by gen)
+    rel_seed = 1234
     watch_list = []      # #72: [(src, code)] watch expressions
     inv_list = []        # #73: [(src, code, names)] invariants
     check = None         # #70: compiled --check expression
@@ -5246,6 +5463,26 @@ def main(argv):
                 return 2
             memo_name = argv[1]
             argv = argv[2:]
+        elif argv[0] == "--relation" and len(argv) >= 2:
+            try:
+                relations.append(_parse_relation(argv[1]))
+            except SystemExit as exc:
+                print(exc)
+                return 2
+            argv = argv[2:]
+        elif argv[0] == "--relation-trials" and len(argv) >= 2:
+            if not argv[1].isdigit() or int(argv[1]) < 1:
+                print("error: --relation-trials expects a positive "
+                      "integer")
+                return 2
+            rel_trials, argv = int(argv[1]), argv[2:]
+        elif argv[0] == "--relation-seed" and len(argv) >= 2:
+            try:
+                rel_seed = int(argv[1])
+            except ValueError:
+                print("error: --relation-seed expects an integer")
+                return 2
+            argv = argv[2:]
         elif argv[0] == "--start-at" and len(argv) >= 2:
             fname, _, lineno = argv[1].rpartition(":")
             if not fname or not lineno.isdigit():
@@ -5280,13 +5517,15 @@ def main(argv):
         # --granularity always wins; --start-at/--start-when need line
         # events, so triggers keep the line default even under -m.
         # --runs also defaults to fn: the harness pays every cost N times.
-        if (module is not None or runs_n or black_box or sweep_spec) \
-                and not (start_at or start_when):
+        if (module is not None or runs_n or black_box or sweep_spec
+                or relations) and not (start_at or start_when):
             granularity = "fn"
             if not doctor:
                 what = ("-m runs" if module is not None
                         else "--runs" if runs_n
-                        else "--sweep" if sweep_spec else "--black-box")
+                        else "--sweep" if sweep_spec
+                        else "--relation" if relations
+                        else "--black-box")
                 print(f"pyreplay: {what} default to --granularity fn "
                       "(call-level overview) — pass --granularity line "
                       "plus --include/--start-at scoping for the line "
@@ -5315,9 +5554,13 @@ def main(argv):
               "a single --export-perfetto file would be ambiguous. Run "
               "the export on a kept representative afterwards.")
         return 2
-    if (gen_file or predict_src) and not sweep_spec:
-        print("error: --gen/--predict belong to --sweep — add "
-              '--sweep "n=..." (the ladder to run them on)')
+    if predict_src and not sweep_spec:
+        print("error: --predict belongs to --sweep — add "
+              '--sweep "n=..." (the ladder to score it on)')
+        return 2
+    if gen_file and not sweep_spec and not relations:
+        print("error: --gen feeds --sweep (a size ladder) or "
+              "--relation (metamorphic trials) — add one of them")
         return 2
     if mine_flag and not runs_n:
         print("error: --mine rides --runs (mine N runs together), or "
@@ -5356,6 +5599,20 @@ def main(argv):
         print("error: --sweep under --chaos-schedule would measure the "
               "chaos, not the algorithm — run the bench unperturbed")
         return 2
+    if relations and (runs_n or sweep_spec):
+        print("error: --relation is its own experiment — run it "
+              "without --runs/--sweep (they answer different "
+              "questions)")
+        return 2
+    if relations and not console:
+        print("error: --relation reads the target's output from the "
+              "recorded console lane — drop --no-console")
+        return 2
+    if (rel_trials is not None or gen_file) and not relations \
+            and not sweep_spec:
+        if rel_trials is not None:
+            print("error: --relation-trials belongs to --relation")
+            return 2
     if backend == "monitoring":
         if MON is None:
             print("error: --backend monitoring needs Python 3.12+ "
@@ -5429,6 +5686,13 @@ def main(argv):
         return _sweep_harness(orig_argv, sweep_spec, gen_file,
                               predict_src, sweep_seed, out, entry_label,
                               granularity, module, script)
+
+    if relations:
+        return _relation_harness(
+            orig_argv, relations, gen_file,
+            rel_trials if rel_trials is not None
+            else (3 if gen_file else 1),
+            rel_seed, entry_label, granularity, module, script)
 
     if out is None:  # default: unique name per entry, never overwrite
         stem = (module.replace(".", "_") if module is not None

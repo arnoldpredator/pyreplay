@@ -54,6 +54,11 @@ python3 tracer.py --black-box server.py         # flight recorder: ring of the L
 python3 tracer.py --sweep "n=8,16,32,64" \
                   --predict "n^2" algo.py       # the doubling experiment: observed
                                                 #    growth exponent + claim verdict
+python3 tracer.py --relation \
+  "' '.join(reversed(x.split())) => out == out0" \
+  --gen gen.py algo.py                          # metamorphic testing: the symmetry
+                                                #    is the oracle; violations keep
+                                                #    both traces, ready to --diverge
 ```
 
 Open the HTML in any browser. No server, no build step, no dependencies.
@@ -97,7 +102,7 @@ your target language). Both are laid out in
 ## Tests
 
 ```bash
-python3 checks.py     # 79 data-level checks — should print all green
+python3 checks.py     # 80 data-level checks — should print all green
 ```
 
 Every feature is pinned by a check. Run it before and after any change; a
@@ -107,7 +112,7 @@ green suite is the contract that keeps contributions honest.
 
 Bug reports, edge cases, more example programs, and **other languages** are
 all very welcome. **[CONTRIBUTING.md](CONTRIBUTING.md) is the place to start** — one file
-with the roadmap of what to build (38 unbuilt features plus a "good first"
+with the roadmap of what to build (37 unbuilt features plus a "good first"
 list), the ground rules, and the event-log schema a new-language backend emits.
 
 ## License

@@ -2346,6 +2346,50 @@ program behavior as a distribution to be measured.
 
   [![Feature 127 — scaling bench](screenshots/127-scaling-bench.png)](screenshots/127-scaling-bench.png)
 
+### 126. Metamorphic relations — the symmetry is the oracle (`--relation`)
+- **Measured:** the oracle problem's cheapest instrument: the right
+  answer may be unknown, but its symmetries are not.
+  `--relation "TRANSFORM => RELATION"` declares an input transform
+  (an expression over `x`, the stdin text) and an output relation
+  (over `out0` and `out`, the two runs' stdouts — read from the
+  recorded **console lane**, the faithful channel; tracer chatter
+  never enters it). Each trial runs the target twice — original
+  input, transformed input — and checks the relation. Inputs come
+  from the piped stdin (one trial) or the `--gen` protocol
+  (`gen(trial, seed)`, N trials). Helpers `num()`/`nums()` parse
+  outputs; a crash on either side is a violation with the crash
+  named.
+- **Displayed:** the terminal verdict per (relation × trial). A
+  violation prints both outputs, KEEPS both traces, and composes the
+  ready-to-paste `--diverge` command — the funnel hands you the
+  microscope, it never auto-runs it. Exit 0 iff everything held
+  (git-bisect-ready). Building this exposed and fixed a #64 gap:
+  console text is now part of diverge's state token, so a pair that
+  differs only in what it *printed* diverges instead of reading as
+  identical.
+- **Why:** the oracle problem is the hard wall of testing numerical
+  and scientific code — you often can't say what the right answer
+  is, but you always know its invariances. Conservation laws as
+  tests: the physicist's instinct, as a flag.
+- **Use case:** `sum` over ints: permutation invariance
+  (`reversed => out == out0`) holds ×3; homogeneity
+  (`double each token => num(out) == 2*num(out0)`) holds ×3. A
+  first-token-wins bug violates all three permutation trials, and
+  the composed diverge lands on the guilty `print` line with deep
+  links into both traces.
+- **Command:** `python3 tracer.py --relation "' '.join(reversed(
+  x.split())) => out == out0" --gen gen.py algo.py` (repeatable;
+  `--relation-trials N`, `--relation-seed`). Honesty: a violation
+  under `PYTHONHASHSEED=random` may be nondeterminism, not
+  asymmetry — the report says to pin it (or `--runs` first); held
+  trials are an observation, never a proof; input shrinking (#66)
+  is unbuilt and says so.
+- **Screenshot** — three violated permutation trials: both outputs
+  per trial, kept pairs, composed diverge commands, and the diverge
+  output below pointing at the exact print that broke the symmetry.
+
+  [![Feature 126 — metamorphic relations](screenshots/126-relations.png)](screenshots/126-relations.png)
+
 ## Appendix A — the manual test plan
 
 Agreed flow: work through the catalog top to bottom, ticking each

@@ -3344,6 +3344,81 @@ def _():
            "--memo at fn granularity refused")
 
 
+@check("relations: the symmetry oracle, kept pairs, diverge (#126)")
+def _():
+    sumpy = fixture("rel126_sum.py", (
+        "import sys\n"
+        "nums = [int(t) for t in sys.stdin.read().split()]\n"
+        "print(sum(nums))\n"))
+    firstpy = fixture("rel126_first.py", (
+        "import sys\n"
+        "nums = [int(t) for t in sys.stdin.read().split()]\n"
+        "print(nums[0] if nums else 0)\n"))
+    gen = fixture("rel126_gen.py", (
+        "import random\n"
+        "def gen(n, seed):\n"
+        "    rng = random.Random(seed * 1000 + n)\n"
+        "    return ' '.join(str(rng.randint(-50, 99))\n"
+        "                    for _ in range(6)) + chr(10)\n"))
+    perm = "' '.join(reversed(x.split())) => out == out0"
+
+    def rel(*args, **kw):
+        return subprocess.run([PY, os.path.join(HERE, "tracer.py"),
+                               *args], capture_output=True, text=True,
+                              cwd=TMP, timeout=600,
+                              **(kw or {"stdin": subprocess.DEVNULL}))
+    r = rel("--relation", perm, "--gen", gen, sumpy)
+    expect(r.returncode == 0 and r.stdout.count(": held") == 3,
+           f"sum is permutation-invariant: 3 trials must hold "
+           f"({r.stdout[-200:]})")
+    expect(not [f for f in os.listdir(TMP)
+                if f.startswith("relation_rel126_sum")],
+           "held trials must leave no kept traces behind")
+    # homogeneity, with a GENEXP transform (pins the eval-globals fix:
+    # helper names must be visible inside generator-expression bodies)
+    r = rel("--relation", "' '.join(str(2 * int(t)) for t in "
+            "x.split()) => num(out) == 2 * num(out0)",
+            "--gen", gen, sumpy)
+    expect(r.returncode == 0 and r.stdout.count(": held") == 3,
+           f"sum is homogeneous — and genexp transforms must "
+           f"evaluate: {r.stdout[-200:]}")
+    # the asymmetric target: violations, kept pairs, composed command
+    r = rel("--relation", perm, "--gen", gen, firstpy)
+    expect(r.returncode == 1 and r.stdout.count("VIOLATED") == 3,
+           f"first-token is order-dependent — all trials violate: "
+           f"{r.stdout[-300:]}")
+    expect("--diverge" in r.stdout and "kept:" in r.stdout,
+           "each violation must keep the pair and compose the "
+           "--diverge command")
+    po = os.path.join(TMP, "relation_rel126_first_r1_t1_orig.html")
+    px = os.path.join(TMP, "relation_rel126_first_r1_t1_xform.html")
+    expect(os.path.exists(po) and os.path.exists(px),
+           "the violated pair must exist on disk")
+    # the composed command WORKS: #64 now sees console text as state
+    d = subprocess.run([PY, os.path.join(HERE, "tracer.py"),
+                        "--diverge", po, px], capture_output=True,
+                       text=True, cwd=TMP,
+                       stdin=subprocess.DEVNULL, timeout=120)
+    expect("STATE diverges" in d.stdout and "log" in d.stdout,
+           f"the pair differs ONLY in printed output — diverge must "
+           f"see the console lane as state: {d.stdout[-300:]}")
+    expect("PYTHONHASHSEED" in r.stdout or
+           os.environ.get("PYTHONHASHSEED", "random") != "random",
+           "a violation under hash randomization must carry the "
+           "nondeterminism caveat")
+    # gates
+    b = rel("--relation", "no arrow here", sumpy)
+    expect(b.returncode == 2 and "TRANSFORM => RELATION" in b.stdout,
+           "a spec without => is refused with the grammar")
+    b = rel("--relation", perm, "--no-console", sumpy)
+    expect(b.returncode == 2 and "console lane" in b.stdout,
+           "--no-console starves the output channel — refused")
+    b = rel("--relation", perm, "--runs", "3", sumpy)
+    expect(b.returncode == 2, "--relation with --runs refused")
+    b = rel("--relation-trials", "3", sumpy)
+    expect(b.returncode == 2, "--relation-trials needs --relation")
+
+
 # ---------------------------------------------------------------- runner
 
 def main():

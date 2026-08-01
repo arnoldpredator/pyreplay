@@ -1748,6 +1748,49 @@ dead or invented panel; every cap and truncation is announced.
 
   [![Feature 55 — dep preflight](screenshots/55-dep-preflight.png)](screenshots/55-dep-preflight.png)
 
+### 129. The graph lens — graph theory over the map's own graphs
+- **Measured:** four instruments, pure stdlib, computed at map time:
+  **betweenness centrality** (Brandes, directed — the modules import
+  paths route THROUGH, not merely INTO); **communities** (label
+  propagation, deterministic sweep, ties to the smallest label —
+  singletons carry none); **percolation** (remove the top-k
+  most-between modules by initial ranking, track the giant
+  component's share of the original module count — the
+  attack-tolerance curve); and the **degree distribution**. When a
+  trace is adopted, betweenness is ALSO computed on the observed
+  call-pair graph — every number names its graph.
+- **Displayed:** lens select → **graph (structure)**: boxes tint
+  violet by betweenness, and each module wears its detected
+  community's border color — compare the borders against the package
+  boxes and "is the architecture real?" becomes a picture (folded
+  packages hide community borders; communities are module-level;
+  said in the banner). The walls panel gains the ⛓ betweenness
+  ranking beside fan-in ("fan-in counts doors, this counts
+  corridors"), the observed-graph ranking when heat is adopted, the
+  💥 dependency-fragility curve, and the degree line.
+- **Why:** the map is a graph analyzed with a fraction of graph
+  theory — fan counts degree, Tarjan finds cycles; bridges, clusters
+  and fragility were invisible. Betweenness routinely crowns a
+  different (and truer) load-bearing wall than fan-in does.
+- **Use case:** nengo: fan-in crowns `nengo.exceptions` (←95 — a
+  leaf everyone politely imports), betweenness crowns `nengo`,
+  `nengo.base`, `nengo.simulator` — the actual corridors. On
+  PyTheus, label propagation puts the tests in the SAME community as
+  the code they test: the package boundary is real, the dependency
+  boundary is not.
+- **Command:** automatic on any map of ≥2 modules → lens
+  **graph (structure)**, walls panel for the rankings. Honesty:
+  percolation states its ranking is initial (not recomputed); the
+  degree line says a straight line on log-log over this few points
+  proves nothing; a single-module map carries no lens, never
+  fiction.
+- **Screenshot** — nengo's walls panel: fan-in top-10 above,
+  betweenness crowning different modules below, the fragility curve
+  sliding 95% → 77% over ten removals, the degree caution in fine
+  print.
+
+  [![Feature 129 — graph lens](screenshots/129-graph-lens.png)](screenshots/129-graph-lens.png)
+
 ---
 
 ## I. The cockpit — heat & the funnel handoff

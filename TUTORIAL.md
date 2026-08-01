@@ -159,6 +159,23 @@ startup is pure import cost and nobody knows whose; the data was in
 every fn trace all along. Line traces carry no wall times, so the
 autopsy is honestly absent there.
 
+**The graph lens (#129) — graph theory over the map's own graphs.**
+The lens select gains *graph (structure)*, available on any map of
+two or more modules: boxes tint violet by **betweenness centrality**
+(Brandes — the modules import paths route THROUGH; fan-in counts
+doors, this counts corridors) and wear their detected **community's**
+border color (label propagation) — compare the borders against the
+package boxes and "is the architecture real?" becomes a picture. The
+walls panel gains the ⛓ betweenness ranking beside fan-in (they
+routinely crown different walls: on nengo, fan-in picks
+`nengo.exceptions`, betweenness picks `nengo.base` and
+`nengo.simulator`), a second ranking on the observed call-pair graph
+when a trace is adopted (each list names its graph), the 💥
+**dependency-fragility curve** (remove the top-k most-between
+modules, initial ranking — watch the giant component collapse; a
+cliff is a wall the fan counts missed), and the degree distribution
+with its caution: this few points prove no power law.
+
 # pyreplay tracer — user guide
 
 Record a Python program's execution — every line, call, return, and

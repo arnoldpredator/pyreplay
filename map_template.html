@@ -44,6 +44,16 @@
     fill: #232838; stroke: #4a5468; stroke-width: 1.4; rx: 6;
   }
   .mod.err rect { stroke: var(--err); stroke-dasharray: 4 3; }
+  /* #129 graph lens: detected-community borders (label propagation).
+     Only module boxes wear them — communities are module-level. */
+  .mod.comm0 rect { stroke: #e06c75; stroke-width: 2.4; }
+  .mod.comm1 rect { stroke: #61afef; stroke-width: 2.4; }
+  .mod.comm2 rect { stroke: #98c379; stroke-width: 2.4; }
+  .mod.comm3 rect { stroke: #e5c07b; stroke-width: 2.4; }
+  .mod.comm4 rect { stroke: #c678dd; stroke-width: 2.4; }
+  .mod.comm5 rect { stroke: #56b6c2; stroke-width: 2.4; }
+  .mod.comm6 rect { stroke: #d19a66; stroke-width: 2.4; }
+  .mod.comm7 rect { stroke: #f2779a; stroke-width: 2.4; }
   .mod:hover rect { stroke: var(--accent); }
   .mod.hit rect { stroke: var(--warn); stroke-width: 2.2; }
   .mod.dimmed { opacity: .22; }
@@ -196,6 +206,7 @@
       <option value="heat">heat</option>
       <option value="churn">churn × cx</option>
       <option value="risk">risk (× heat)</option>
+      <option value="graph">graph (structure)</option>
     </select></label>
   <label class="toggle" id="cyclbl" style="display:none"
     title="Paint every import-cycle edge red (clicking a cycle in the
@@ -351,6 +362,19 @@ function buildNote(allCycles) {
             "is complex AND carries the runtime"
           : " — switch the lens to churn × cx to see it"));
   }
+  if (DATA.graphlens && $("lens").value === "graph") {
+    const G = DATA.graphlens;
+    const nc = new Set(Object.values(G.community || {})).size;
+    bits.unshift('graph lens: <span style="color:#c678dd">tint = ' +
+      "betweenness</span> (Brandes, static import graph, " +
+      G.staticEdges + " edges) · borders = " + nc + " detected " +
+      "communities (label propagation) — compare them against the " +
+      "package boxes: is the architecture real? Folded packages " +
+      "hide community borders (communities are module-level)." +
+      (G.betweenObs
+        ? " Observed-call-pair betweenness is in the walls panel."
+        : ""));
+  }
   if (DATA.heat) {
     const h = DATA.heat;
     bits.unshift('heat: <span style="color:var(--warn)">' +
@@ -378,10 +402,16 @@ buildNote(false);
 if (DATA.heat) $("heatlbl").style.display = "";
 if (DATA.heat && DATA.heat.dark && DATA.heat.dark.length)
   $("darklbl").style.display = "";
-if (DATA.churn) {   // #95: the lens only exists where history does
-  $("lenslbl").style.display = "";
+if (DATA.churn || DATA.graphlens) {   // #95 lenses need history;
+  $("lenslbl").style.display = "";    // #129's graph lens is static
   if (!DATA.heat)
     $("lens").querySelector('option[value="risk"]').disabled = true;
+  if (!DATA.churn) {
+    $("lens").querySelector('option[value="churn"]').disabled = true;
+    $("lens").querySelector('option[value="risk"]').disabled = true;
+  }
+  if (!DATA.graphlens)
+    $("lens").querySelector('option[value="graph"]').disabled = true;
 }
 
 /* ---------- grouping: modules fold into package boxes ----------
@@ -610,8 +640,18 @@ function render() {
   // #95 crime lens: churn × complexity (× heat under "risk"). Scores
   // are normalized by the repo's own maxima — the brightest box is
   // THIS codebase's top offender, not an absolute claim.
-  const lens = DATA.churn ? $("lens").value : "heat";
-  const CH = lens !== "heat" && DATA.churn ? DATA.churn.files : null;
+  const lens = (DATA.churn || DATA.graphlens) ? $("lens").value : "heat";
+  const CH = (lens === "churn" || lens === "risk") && DATA.churn
+    ? DATA.churn.files : null;
+  // #129: the graph lens — tint by betweenness, borders by community
+  const GB = lens === "graph" ? DATA.graphlens : null;
+  let maxB = 1;
+  if (GB) Object.values(GB.between || {}).forEach(b => {
+    if (b > maxB) maxB = b;
+  });
+  const bScore = m => GB ? ((GB.between || {})[m.id] || 0) / maxB : 0;
+  const graphFill = t => "hsl(275 65% 42% / " +
+    (0.15 + 0.75 * Math.sqrt(t)).toFixed(2) + ")";
   let maxC = 1, maxX = 1, maxH = 1;
   if (CH) {
     Object.values(CH).forEach(f => { if (f.c > maxC) maxC = f.c; });
@@ -1002,16 +1042,22 @@ function render() {
     const g = geom[m.id];
     if (!g) return;
     const mh = H ? own(H, m.id) : null;
+    const comm = GB ? (GB.community || {})[m.id] : undefined;
     const cls = "mod" + (m.err ? " err" : "") +
-      (CH ? (crime(m) === 0 ? " cold" : "")
+      (GB ? (bScore(m) === 0 ? " cold" : "")
+          : CH ? (crime(m) === 0 ? " cold" : "")
           : (H && !mh ? " cold" : "")) +
+      (comm !== undefined ? " comm" + (comm % 8) : "") +
       (filtering ? (hits.has(m.id) ? " hit" : " dimmed") : "") +
       (relKeys.has("m:" + m.id) && !(filtering && hits.has(m.id))
         ? " rel" : "");
     svg += '<g class="' + cls + '" data-mod="' + esc(m.id) + '">' +
       '<rect x="' + g.x + '" y="' + g.y + '" width="' + g.w +
       '" height="' + g.h + '" rx="6"' +
-      (CH
+      (GB
+        ? (bScore(m) > 0
+          ? ' style="fill:' + graphFill(bScore(m)) + '"' : "")
+        : CH
         ? (crime(m) > 0
           ? ' style="fill:' + heatFill(crime(m) * totalEv) + '"' : "")
         : mh ? ' style="fill:' + heatFill(modShare(mh)) + '"' : "") +
@@ -1029,6 +1075,12 @@ function render() {
       (m.dynimp
         ? ' <tspan fill="#c678dd" font-weight="700">⚡</tspan>' : "") +
       "</text><title>" + esc(m.path +
+        (GB
+          ? "\n⛓ betweenness " + ((GB.between || {})[m.id] || 0) +
+            " (static import graph)" +
+            (comm !== undefined ? " · community " + (comm + 1) +
+              " (label propagation)" : " · no community (singleton)")
+          : "") +
         (DATA.churn && DATA.churn.files[m.path]
           ? "\n🔥 " + DATA.churn.files[m.path].c + " commit(s) since " +
             DATA.churn.since + " · " + (m.cx || 0) + " decision points" +
@@ -1633,6 +1685,67 @@ $("walls").onclick = () => {
         '<div class="wallrow" data-id="' + esc(id) +
         '"><span class="win">' + fmtCost(us) + "</span>" + esc(id) +
         "</div>").join("");
+  }
+  // #129: graph theory beside the degree counts — every number NAMES
+  // its graph, and betweenness routinely crowns a different (truer)
+  // load-bearing wall than fan-in does
+  const G = DATA.graphlens;
+  if (G && G.between && Object.keys(G.between).length) {
+    const top = o => Object.entries(o)
+      .sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))
+      .slice(0, 8);
+    html += '<div class="wallhead">⛓ betweenness — what everything ' +
+      "routes THROUGH (static import graph, Brandes; fan-in above " +
+      "counts doors, this counts corridors)</div>" +
+      top(G.between).map(([id, b]) =>
+        '<div class="wallrow" data-id="' + esc(id) +
+        '"><span class="win">' + b + "</span>" + esc(id) +
+        "</div>").join("");
+    if (G.betweenObs) {
+      html += '<div class="wallhead">⛓ betweenness — observed call ' +
+        "pairs (adopted runs; a different graph, and it may crown a " +
+        "different wall)</div>" +
+        top(G.betweenObs).map(([id, b]) =>
+          '<div class="wallrow" data-id="' + esc(id) +
+          '"><span class="win">' + b + "</span>" + esc(id) +
+          "</div>").join("");
+    }
+    if (G.percolation && G.percolation.length > 1) {
+      const P = G.percolation;
+      const W = 250, Hh = 70, pad = 6;
+      const sx = k => pad + k / (P.length - 1) * (W - 2 * pad);
+      const sy = gfrac => Hh - pad - gfrac * (Hh - 2 * pad);
+      let svg = '<svg width="' + W + '" height="' + Hh + '">';
+      svg += '<polyline fill="none" stroke="#c678dd" stroke-width="1.6" points="' +
+        P.map((p, i) => sx(i) + "," + sy(p.giant)).join(" ") + '"/>';
+      P.forEach((p, i) => {
+        svg += '<circle cx="' + sx(i) + '" cy="' + sy(p.giant) +
+          '" r="2.6" fill="#c678dd"><title>' +
+          (p.k === 0 ? "intact map" : "top " + p.k + " removed (last: " +
+            esc(p.removed) + ")") + " → giant component " +
+          Math.round(p.giant * 100) + "%</title></circle>";
+      });
+      svg += "</svg>";
+      html += '<div class="wallhead">💥 dependency fragility — remove ' +
+        "the top-k most-between modules (initial ranking), watch the " +
+        "giant component collapse</div>" +
+        '<div style="padding:2px 0">' + svg + '</div>' +
+        '<div class="wallnote">left = intact (' +
+        Math.round(G.percolation[0].giant * 100) + "% connected) · " +
+        "right = top " + (G.percolation.length - 1) + " removed (" +
+        Math.round(G.percolation[G.percolation.length - 1].giant * 100) +
+        "%) — a cliff marks a wall the fan counts may have missed" +
+        "</div>";
+    }
+    if (G.degrees) {
+      const dd = Object.entries(G.degrees)
+        .sort((a, b) => +a[0] - +b[0]);
+      html += '<div class="wallnote" style="margin-top:6px">degree ' +
+        "distribution (undirected imports): " +
+        dd.map(([d, c]) => d + "°×" + c).join(" · ") +
+        " — too few points for any power-law claim; a straight line " +
+        "on log-log here proves nothing.</div>";
+    }
   }
   $("wallsbody").innerHTML = html;
   box.style.display = "block";

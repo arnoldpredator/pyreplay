@@ -3031,6 +3031,56 @@ def _():
            f"--runs 2 --mine must aggregate 10 calls / 2 runs: {rm}")
 
 
+@check("graph lens: betweenness, communities, percolation exact (#129)")
+def _():
+    # two triangles bridged through br: a1→br→b1 is the only corridor
+    root = os.path.join(TMP, "glens")
+    os.makedirs(root, exist_ok=True)
+    files = {"a1.py": "import a2\nimport a3\nimport br\n",
+             "a2.py": "import a3\n", "a3.py": "",
+             "br.py": "import b1\n",
+             "b1.py": "import b2\nimport b3\n",
+             "b2.py": "", "b3.py": ""}
+    for name, text in files.items():
+        with open(os.path.join(root, name), "w", encoding="utf-8") as fh:
+            fh.write(text)
+    mp = run_map(root, name="map_glens")
+    g = mp.get("graphlens")
+    expect(g, "a 7-module map must carry the graph lens")
+    # Brandes, hand-computed: b1 sits on 4 shortest paths, br on 3
+    expect(g["between"].get("b1") == 4.0 and g["between"].get("br") == 3.0,
+           f"betweenness must be exact (b1=4, br=3): {g['between']}")
+    c = g["community"]
+    expect(len(set(c.values())) == 2,
+           f"two triangles = two communities: {c}")
+    expect(c["a1"] == c["a2"] and c["b1"] == c["b2"]
+           and c["a1"] != c["b1"],
+           f"clusters must separate across the bridge: {c}")
+    p = g["percolation"]
+    expect(p[0]["giant"] == 1.0 and p[0]["k"] == 0,
+           f"intact map is fully connected: {p[0]}")
+    expect(p[1]["removed"] == "b1" and p[1]["giant"] == round(4 / 7, 3),
+           f"removing the top-between module must shatter the giant "
+           f"component to 4/7: {p[1]}")
+    expect(g["degrees"] == {"1": 2, "2": 3, "3": 2},
+           f"degree histogram wrong: {g['degrees']}")
+    # honesty + surfaces pinned in the template
+    with open(os.path.join(HERE, "map_template.html"),
+              encoding="utf-8") as fh:
+        tpl = fh.read()
+    for probe in ('value="graph"', ".mod.comm0 rect", "initial ranking",
+                  "static import graph", "proves nothing"):
+        expect(probe in tpl, f"graph-lens contract missing: {probe}")
+    # a one-module map has no graph to analyze — null, never fiction
+    solo = os.path.join(TMP, "glens_solo")
+    os.makedirs(solo, exist_ok=True)
+    with open(os.path.join(solo, "only.py"), "w", encoding="utf-8") as fh:
+        fh.write("x = 1\n")
+    mp2 = run_map(solo, name="map_glens_solo")
+    expect(mp2.get("graphlens") is None,
+           "a single module carries no graph lens (nothing to rank)")
+
+
 # ---------------------------------------------------------------- runner
 
 def main():

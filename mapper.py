@@ -703,6 +703,159 @@ def aggregate_heat(heats):
             "total": max(1, total)}
 
 
+# ---- #129: the graph lens — graph theory over the map's own graphs ------
+# The map IS a graph analyzed with a fraction of graph theory: fan
+# counts degree, Tarjan finds cycles — bridges, clusters and fragility
+# stay invisible. These four instruments close that gap, pure stdlib,
+# comfortable at map scale (Brandes is O(V·E) per source). Every number
+# names its graph: "static import graph" vs "observed call pairs".
+
+def _brandes(nodes, edges):
+    """Betweenness centrality, unweighted, DIRECTED (an import points
+    somewhere on purpose). Returns {node: score} for nodes > 0."""
+    adj = {v: [] for v in nodes}
+    for a, b in edges:
+        if a != b and a in adj and b in adj:
+            adj[a].append(b)
+    cb = {v: 0.0 for v in nodes}
+    for s in nodes:
+        stack = []
+        pred = {v: [] for v in nodes}
+        sigma = {v: 0 for v in nodes}
+        sigma[s] = 1
+        dist = {v: -1 for v in nodes}
+        dist[s] = 0
+        queue = [s]
+        qi = 0
+        while qi < len(queue):
+            v = queue[qi]
+            qi += 1
+            stack.append(v)
+            for w in adj[v]:
+                if dist[w] < 0:
+                    dist[w] = dist[v] + 1
+                    queue.append(w)
+                if dist[w] == dist[v] + 1:
+                    sigma[w] += sigma[v]
+                    pred[w].append(v)
+        delta = {v: 0.0 for v in nodes}
+        while stack:
+            w = stack.pop()
+            for v in pred[w]:
+                delta[v] += sigma[v] / sigma[w] * (1 + delta[w])
+            if w != s:
+                cb[w] += delta[w]
+    return {v: round(c, 2) for v, c in sorted(cb.items()) if c > 0}
+
+
+def _label_prop(ids, und):
+    """Community detection by label propagation — deterministic: fixed
+    sweep order, most-frequent neighbor label, ties to the smallest.
+    Returns {module: community index}; singletons carry no community."""
+    label = {v: v for v in ids}
+    order = sorted(ids)
+    for _ in range(50):
+        changed = False
+        for v in order:
+            if not und[v]:
+                continue
+            counts = {}
+            for w in und[v]:
+                counts[label[w]] = counts.get(label[w], 0) + 1
+            best = sorted(counts.items(),
+                          key=lambda kv: (-kv[1], kv[0]))[0][0]
+            if best != label[v]:
+                label[v] = best
+                changed = True
+        if not changed:
+            break
+    groups = {}
+    for v, lb in label.items():
+        groups.setdefault(lb, []).append(v)
+    out = {}
+    k = 0
+    for lb, members in sorted(groups.items(),
+                              key=lambda kv: (-len(kv[1]), kv[0])):
+        if len(members) < 2:
+            continue
+        for v in members:
+            out[v] = k
+        k += 1
+    return out
+
+
+def _percolate(ids, und, between):
+    """Attack-tolerance curve (Albert–Jeong–Barabási): remove the
+    top-k most-between modules (INITIAL ranking — stated in the
+    panel), track the giant weakly-connected component's share of the
+    ORIGINAL module count. A cliff = a load-bearing wall, measured."""
+    n = len(ids)
+    if n < 3 or not between:
+        return None
+    targets = [v for v, _ in sorted(between.items(),
+                                    key=lambda kv: (-kv[1], kv[0]))]
+    targets = targets[:min(10, n - 2)]
+    removed = set()
+
+    def giant():
+        seen = set()
+        best = 0
+        for v in ids:
+            if v in removed or v in seen:
+                continue
+            comp = 0
+            todo = [v]
+            seen.add(v)
+            while todo:
+                u = todo.pop()
+                comp += 1
+                for w in und[u]:
+                    if w not in removed and w not in seen:
+                        seen.add(w)
+                        todo.append(w)
+            best = max(best, comp)
+        return best
+    curve = [{"k": 0, "removed": None, "giant": round(giant() / n, 3)}]
+    for i, t in enumerate(targets, 1):
+        removed.add(t)
+        curve.append({"k": i, "removed": t,
+                      "giant": round(giant() / n, 3)})
+    return curve
+
+
+def _graph_lens(modules, imports, heat):
+    ids = [m["id"] for m in modules]
+    if len(ids) < 2:
+        return None
+    idset = set(ids)
+    static = [(e["s"], e["d"]) for e in imports
+              if e["s"] in idset and e["d"] in idset]
+    res = {"staticEdges": len(static),
+           "between": _brandes(ids, static)}
+    if heat and heat.get("xmod"):
+        obs = []
+        for key in heat["xmod"]:
+            a, _, b = key.partition("|")
+            if a in idset and b in idset:
+                obs.append((a, b))
+        if obs:
+            res["betweenObs"] = _brandes(ids, obs)
+            res["obsEdges"] = len(obs)
+    und = {v: set() for v in ids}
+    for a, b in static:
+        if a != b:
+            und[a].add(b)
+            und[b].add(a)
+    res["community"] = _label_prop(ids, und)
+    res["percolation"] = _percolate(ids, und, res["between"])
+    degs = {}
+    for v in ids:
+        d = len(und[v])
+        degs[str(d)] = degs.get(str(d), 0) + 1
+    res["degrees"] = degs
+    return res
+
+
 def main(argv):
     out = None
     traces = []
@@ -993,11 +1146,26 @@ def main(argv):
             print(f"dark edges: the run saw {len(dark)} caller→callee "
                   f"pair(s) the parse couldn't — drawn dashed on the map")
 
+    graphlens = _graph_lens(modules, imports, heat)
+    if graphlens:
+        topb = sorted(graphlens["between"].items(),
+                      key=lambda kv: (-kv[1], kv[0]))[:3]
+        if topb:
+            print("graph lens: betweenness (static import graph) — "
+                  + ", ".join(f"{v} {c:g}" for v, c in topb)
+                  + " route the most import paths")
+        ncomm = len(set(graphlens["community"].values()))
+        if ncomm:
+            print(f"graph lens: {ncomm} detected communities (label "
+                  f"propagation) — compare them against the package "
+                  f"boxes on the map")
+
     payload = {
         "root": name,
         "rootPath": root,
         "modules": modules,
         "imports": imports,
+        "graphlens": graphlens,   # #129, or null on tiny maps
         "cycles": cycles,
         "fan": fan,
         "calls": calls,

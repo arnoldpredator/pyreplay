@@ -7,7 +7,7 @@ can pick an item and implement it. Features are numbered **#63 onward**, continu
 in FEATURES.md. Fifteen roadmap items have shipped since the list was
 written (63, 64, 65, 70, 77, 79, 80, 98, 101 v1, 103, 104 Tier 1,
 106, 109, 118, 120 v1) — their rows below are struck through;
-**42 remain unbuilt** (plus the stated remainders of 74/75/85/88/89/101/104/119/120/127/128).
+**41 remain unbuilt** (plus the stated remainders of 74/75/85/88/89/101/104/119/120/127/128).
 
 ## Start here — how to contribute
 
@@ -135,7 +135,7 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
 | 126 | Metamorphic relations harness | S–M | ★★ |
 | 127 | ~~Scaling bench: measured growth exponents~~ **shipped (minimal gen protocol; full #67 remains)** | M | ★★★ |
 | 128 | ~~Prediction gate: commit a claim, get scored~~ **shipped (tour stops await #108)** | M | ★★★ |
-| 129 | Graph lens on the map (centrality, communities) | M | ★★ |
+| 129 | ~~Graph lens on the map (centrality, communities)~~ **shipped** | M | ★★ |
 | 130 | Trace compressibility (regularity strip) | S | ★ |
 | 131 | ~~CFG view: the code as a graph, the run as a path~~ **shipped** | M | ★★★ |
 | 132 | Observed state machine (one declared variable) | M | ★★ |
@@ -1229,6 +1229,7 @@ per algorithm.
 
 ### 129. The graph lens on the map
 *(belongs with Section 5 — the map)*
+**Shipped 2026-08-01** — now catalog entry #129 in [FEATURES.md](FEATURES.md): lens "graph (structure)" — betweenness tint (Brandes, directed) + community borders (deterministic label propagation) on module boxes; walls panel gains the ⛓ betweenness ranking (static AND observed-call-pair graphs, each named), the 💥 percolation fragility curve (initial ranking, stated), and the degree line with the log-log caution.
 - **What:** upgrade the map's analytics from degree to graph theory:
   **betweenness centrality** (Brandes) beside fan-in in the walls
   panel — the modules everything routes *through*, not merely *to*;

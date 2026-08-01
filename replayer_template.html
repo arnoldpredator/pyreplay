@@ -1213,6 +1213,19 @@ if (DATA.nonterm && DATA.nonterm.length) {
     }
   });
 }
+/* #102: the PEP 669 engine's stated blind spot, when it applies */
+if (DATA.engine === "monitoring" && DATA.granularity === "line"
+    && DATA.monComp) {
+  const b = $("banner");
+  b.style.display = "block";
+  const note = document.createElement("div");
+  note.className = "info";
+  note.textContent = "⚙ engine: sys.monitoring (PEP 669) — " +
+    DATA.monComp + " comprehension(s) in scope run within ONE line " +
+    "event each; their per-iteration variables are not re-observed " +
+    "(the settrace engine shows every iteration).";
+  b.appendChild(note);
+}
 /* #123: float hygiene — the equality trap, where it executed; and
    the bound reduction's ordering wobble. Evidence, never proof. */
 if (DATA.floatEq && DATA.floatEq.dyn.length) {

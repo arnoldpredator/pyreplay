@@ -9,7 +9,7 @@ Output defaults to trace_<scriptname>.html in the current directory; if
 that exists, trace_<scriptname>_2.html and so on — nothing is ever
 overwritten. Use --out NAME.html to pick a name (that one DOES overwrite).
     python tracer.py --granularity fn --export-perfetto out.json <script.py>
-    python tracer.py --granularity fn --backend monitoring <script.py>  # 3.12+
+    python tracer.py --backend monitoring <script.py>   # PEP 669 engine, 3.12+ (fn AND line)
     python tracer.py --start-at myfile.py:42 <script.py> [args...]
     python tracer.py --start-at myfile.py:42 --start-count 57 <script.py>
     python tracer.py --start-when "i == 56" <script.py> [args...]
@@ -1841,9 +1841,11 @@ class MonitoringBackend:
     per frame it touches — at the raise, in every frame it unwinds,
     and in the frame that finally handles it."""
 
-    def __init__(self, tracer):
+    def __init__(self, tracer, line_mode=False):
         self.t = tracer
         self.tool = None
+        self.line_mode = line_mode   # #102: LINE via set_local_events
+        self._armed = set()          # code ids already given local LINE
         self._mark = None   # (frame id, exc id) already recorded "exc"
         self._callbacks = None   # (event, fn) pairs, so stop() can detach
 
@@ -1876,11 +1878,17 @@ class MonitoringBackend:
             (E.EXCEPTION_HANDLED, self._handled),
             (E.STOP_ITERATION, self._stopiter),
         )
+        if self.line_mode:
+            # #102: LINE is registered but NOT in the global mask — a
+            # per-code set_local_events arms it only for in-scope code
+            # objects (the whole trick: the stdlib never fires a line)
+            self._callbacks += ((E.LINE, self._line),)
         try:
             mask = 0
             for ev, fn in self._callbacks:
                 MON.register_callback(self.tool, ev, fn)
-                mask |= ev
+                if not (self.line_mode and ev == E.LINE):
+                    mask |= ev
             MON.set_events(self.tool, mask)
         except BaseException:
             self.stop()   # a half-built tool must not leak into the interp
@@ -1911,31 +1919,70 @@ class MonitoringBackend:
     def _skip(self, code):
         return self.t.truncated or self.t._rel(code.co_filename) is None
 
+    def _arm(self, code):
+        # #102: first entry into an in-scope code object switches its
+        # LINE events on — locally, for this code object only
+        if self.line_mode and id(code) not in self._armed:
+            self._armed.add(id(code))
+            try:
+                MON.set_local_events(self.tool, code, MON.events.LINE)
+            except Exception:
+                pass
+
+    def _call_ev(self, frame):
+        if self.line_mode:
+            # through the DISPATCHER, not _record: triggers, --check,
+            # chaos pulses and the snapshot pop are the dispatcher's —
+            # parity with settrace by construction
+            self.t(frame, "call", None)
+        else:
+            self.t._record_fn(frame, "call", None)
+
+    def _exc_ev(self, frame, exc):
+        if self.line_mode:
+            self.t(frame, "exception", (type(exc), exc, None))
+        else:
+            self.t._record_fn(frame, "exception",
+                              (type(exc), exc, None))
+
+    def _line(self, code, line):
+        # only armed (in-scope) code objects ever fire this
+        self.t(sys._getframe(1), "line", None)
+
     def _start(self, code, off):
         if self._skip(code):
             return MON.DISABLE   # this location never fires again
-        self.t._record_fn(sys._getframe(1), "call", None)
+        self._arm(code)
+        self._call_ev(sys._getframe(1))
 
     def _resume(self, code, off):
         if self._skip(code):
             return MON.DISABLE
-        self.t._record_fn(sys._getframe(1), "call", None)
+        self._arm(code)
+        self._call_ev(sys._getframe(1))
 
     def _throw(self, code, off, exc):
         if not self._skip(code):   # throw events can't be DISABLEd
-            self.t._record_fn(sys._getframe(1), "call", None)
+            self._arm(code)
+            self._call_ev(sys._getframe(1))
 
     def _return(self, code, off, retval):
         if self._skip(code):
             return MON.DISABLE
-        self.t._record_fn(sys._getframe(1), "return", retval,
-                          yielding=False)
+        if self.line_mode:
+            self.t(sys._getframe(1), "return", retval)
+        else:
+            self.t._record_fn(sys._getframe(1), "return", retval,
+                              yielding=False)
 
     def _yield(self, code, off, retval):
         if self._skip(code):
             return MON.DISABLE
-        self.t._record_fn(sys._getframe(1), "return", retval,
-                          yielding=True)
+        if self.line_mode:
+            self.t(sys._getframe(1), "return", retval)
+        else:
+            self.t._record_fn(sys._getframe(1), "return", retval,
+                              yielding=True)
 
     def _raise(self, code, off, exc):
         # a genuinely NEW exception being raised here — always an event
@@ -1944,7 +1991,7 @@ class MonitoringBackend:
             return
         frame = sys._getframe(1)
         self._mark = (id(frame), id(exc))
-        self.t._record_fn(frame, "exception", (type(exc), exc, None))
+        self._exc_ev(frame, exc)
 
     def _reraise(self, code, off, exc):
         # the SAME exception re-raised as it propagates through cleanup
@@ -1956,7 +2003,7 @@ class MonitoringBackend:
         frame = sys._getframe(1)
         if self._mark != (id(frame), id(exc)):
             self._mark = (id(frame), id(exc))
-            self.t._record_fn(frame, "exception", (type(exc), exc, None))
+            self._exc_ev(frame, exc)
 
     def _unwind(self, code, off, exc):
         # exceptional exit: settrace shows exception-then-return in
@@ -1966,11 +2013,15 @@ class MonitoringBackend:
             return
         frame = sys._getframe(1)
         if self._mark != (id(frame), id(exc)):
-            self.t._record_fn(frame, "exception", (type(exc), exc, None))
-        # yielding=None (not False): a generator killed while suspended at
-        # a yield must be tagged by the same bytecode inference settrace
-        # uses, or its lifecycle scope reads "e" where settrace says "y".
-        self.t._record_fn(frame, "return", None, yielding=None)
+            self._exc_ev(frame, exc)
+        if self.line_mode:
+            self.t(frame, "return", None)
+        else:
+            # yielding=None (not False): a generator killed while
+            # suspended at a yield must be tagged by the same bytecode
+            # inference settrace uses, or its lifecycle scope reads
+            # "e" where settrace says "y".
+            self.t._record_fn(frame, "return", None, yielding=None)
 
     def _stopiter(self, code, off, exc):
         # the IMPLICIT StopIteration that closes a `yield from` / `await`:
@@ -1984,7 +2035,7 @@ class MonitoringBackend:
             return
         frame = sys._getframe(1)
         self._mark = (id(frame), id(exc))
-        self.t._record_fn(frame, "exception", (type(exc), exc, None))
+        self._exc_ev(frame, exc)
 
     def _handled(self, code, off, exc):
         # the frame that CATCHES a propagated exception gets an exc
@@ -1994,7 +2045,7 @@ class MonitoringBackend:
         frame = sys._getframe(1)
         if self._mark != (id(frame), id(exc)):
             self._mark = (id(frame), id(exc))
-            self.t._record_fn(frame, "exception", (type(exc), exc, None))
+            self._exc_ev(frame, exc)
 
 
 def build_line_vars(source, filename="<unknown>"):
@@ -6622,11 +6673,9 @@ def main(argv):
             print("error: --backend monitoring needs Python 3.12+ "
                   "(PEP 669 sys.monitoring)")
             return 2
-        if granularity != "fn":
-            print("error: --backend monitoring records call-level events "
-                  "only — combine it with --granularity fn (line-level "
-                  "tracing keeps the classic settrace engine)")
-            return 2
+        # #102: line mode rides PEP 669 too — LINE events armed
+        # per-code via set_local_events, so out-of-scope code costs
+        # one PY_START DISABLE instead of a callback per line
     if perfetto and granularity != "fn":
         print("error: --export-perfetto needs --granularity fn — "
               "line traces carry no timestamps (wall times under "
@@ -6859,7 +6908,8 @@ def main(argv):
     error = None
     mon = None
     if backend == "monitoring":
-        mon = MonitoringBackend(tracer)
+        mon = MonitoringBackend(tracer,
+                                line_mode=(granularity == "line"))
         mon.start()   # process-wide: covers every thread by itself
     else:
         threading.settrace(tracer)  # threads started by the target too
@@ -7029,6 +7079,30 @@ def main(argv):
                         src = ls[row["l"] - 1].strip()[:80]
                 print(f"    {row['score']:.2f}  {row['f']}:{row['l']}"
                       + (f"  {src}" if src else ""))
+    if backend == "monitoring" and granularity == "line":
+        # #102 honesty: PEP 709 inlines comprehensions; PEP 669 fires
+        # LINE once per line transition — iteration variables inside a
+        # comprehension are not re-observed by this engine
+        comp_lines = 0
+        for text in tracer.sources.values():
+            try:
+                t2 = ast.parse(text)
+            except SyntaxError:
+                continue
+            comp_lines += sum(1 for nd in ast.walk(t2)
+                              if isinstance(nd, (ast.ListComp,
+                                                 ast.SetComp,
+                                                 ast.DictComp,
+                                                 ast.GeneratorExp)))
+        extra = dict(extra or {})
+        extra["engine"] = "monitoring"
+        extra["monComp"] = comp_lines
+        if comp_lines:
+            print(f"engine note: {comp_lines} comprehension(s) in "
+                  f"scope — under sys.monitoring an inlined "
+                  f"comprehension runs within ONE line event; its "
+                  f"per-iteration variables are not re-observed "
+                  f"(settrace shows every iteration)")
     _write_trace(tracer, out, granularity, entry_label, error,
                  trigger_desc, extra=extra, chunked=chunked_opt,
                  fsm=(fsm_expr, fsm_declared) if fsm_expr else None,

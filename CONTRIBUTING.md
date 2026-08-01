@@ -7,7 +7,7 @@ can pick an item and implement it. Features are numbered **#63 onward**, continu
 in FEATURES.md. Fifteen roadmap items have shipped since the list was
 written (63, 64, 65, 70, 77, 79, 80, 98, 101 v1, 103, 104 Tier 1,
 106, 109, 118, 120 v1) — their rows below are struck through;
-**24 remain unbuilt** (plus the stated remainders of 66/74/75/85/88/89/101/104/119/120/126/127/128/132/134).
+**23 remain unbuilt** (plus the stated remainders of 66/74/75/85/88/89/101/104/119/120/126/127/128/132/134).
 
 ## Start here — how to contribute
 
@@ -108,7 +108,7 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
 | 99 | ~~Startup import-cost view~~ **shipped** | — | ★★ |
 | 100 | ~~API-surface honesty (encapsulation leaks)~~ **shipped** | M | ★★ |
 | 101 | ~~Chunked trace + keyframes~~ **shipped (v1; windowed replayer remains)** | — | ★★★ |
-| 102 | monitoring-backed cheaper LINE tracing | M | ★★ |
+| 102 | ~~monitoring-backed cheaper LINE tracing~~ **shipped** | M | ★★ |
 | 103 | ~~Black-box flight recorder (ring buffer)~~ **shipped** | — | ★★★ |
 | 104 | ~~Reproducibility capsule~~ **Tier 1 shipped; seeds/replay remain** | M–XL | ★★★ |
 | 105 | Schema spec + import/export bridges | M | ★★ |
@@ -748,6 +748,7 @@ software.
   that); Perfetto's trace processor.
 
 ### 102. Cheap LINE tracing via sys.monitoring
+**Shipped 2026-08-01** — now catalog entry #102 in [FEATURES.md](FEATURES.md): line mode on the PEP 669 backend via per-code `set_local_events` (out-of-scope = one DISABLEd PY_START), callbacks routed through the settrace dispatcher for parity by construction (verified event-for-event incl. ch keys/generators/verdicts), the inlined-comprehension blind spot stated in payload+banner, ~2× total where out-of-scope Python dominates.
 - **What:** extend the monitoring backend (shipped fn-only — catalog feature 06) to LINE
   events with surgical enable/disable per code object — line-level
   microscopes at a fraction of settrace's ~100× tax (target ~10–20×).

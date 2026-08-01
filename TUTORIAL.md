@@ -867,6 +867,17 @@ their original node — no phantom calls), and the 4000-node render cap
 announces itself. Works at both granularities — on an fn-level trace
 of a real codebase it is the whole run's shape in one panel.
 
+**The PEP 669 line engine.** On 3.12+, `--backend monitoring` now
+traces lines too: in-scope code objects get LINE events armed
+per-code, out-of-scope code costs one disabled event instead of a
+callback per line — on codebases where most executed Python is not
+yours, total overhead roughly halves. The trace is event-for-event
+identical to the settrace engine with one stated exception, bannered
+when it applies: an inlined comprehension (PEP 709) runs within a
+single line event, so its per-iteration variables are not
+re-observed — switch back to the default engine to watch a
+comprehension iterate.
+
 **Notes.** Press **N** at any moment and write what you're thinking
 — "HERE the total goes negative, why?" — Enter pins it. The Notes
 panel lists every note jumpable, cream pins mark them on the strip,

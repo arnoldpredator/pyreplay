@@ -211,6 +211,39 @@ dead or invented panel; every cap and truncation is announced.
 
   [![Feature 09 — threads](screenshots/09-threads.png)](screenshots/09-threads.png)
 
+### 102. LINE tracing on sys.monitoring — the microscope at engine prices
+- **Measured:** `--backend monitoring` now records line granularity
+  too (3.12+, PEP 669). LINE is registered but kept OUT of the
+  global event mask; the first `PY_START` of each in-scope code
+  object arms it with per-code `set_local_events` — the whole trick:
+  out-of-scope code pays one DISABLEd `PY_START` instead of a
+  callback per line. Line-mode callbacks route through the same
+  dispatcher settrace uses, so triggers, `--check`, chaos pulses and
+  snapshot lifecycle behave identically — parity by construction,
+  verified event-for-event (changed-variable keys, generator
+  suspensions, verdicts included) across generators, exceptions,
+  match, dunder methods, aliasing and threads.
+- **Displayed:** the same trace — plus, when it applies, the
+  engine's one stated blind spot in the banner: *N comprehension(s)
+  in scope run within ONE line event each; their per-iteration
+  variables are not re-observed (the settrace engine shows every
+  iteration).* PEP 709 inlines comprehensions; PEP 669 fires LINE
+  once per line transition. The payload carries `engine` and the
+  comprehension count.
+- **Why:** every line-level feature — verdicts, provenance, the
+  decision table, the CFG weights — gets cheaper exactly where big
+  codebases hurt: the out-of-scope bulk. Honest numbers: with
+  everything in scope the recording tax dominates (engine ~12%
+  faster); where out-of-scope Python dominates, total overhead
+  halves (deepcopy fixture: 7.0× → 3.4× untraced).
+- **Use case:** a line microscope on one module of a large service:
+  the stdlib and site-packages cost one disabled event per code
+  object instead of a Python callback per executed line.
+- **Command:** `python3 tracer.py --backend monitoring app.py`
+  (line is the script default; `--granularity fn` still composes).
+- **Screenshot:** none — the point is what does NOT change: the
+  trace reads the same; only the engine bill does.
+
 ### 101. Chunked traces + keyframes (automatic past 100k events)
 - **Measured:** past 100k events the artifact changes gear: the event
   JSON leaves the single embedded string and moves into gzip+base64

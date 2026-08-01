@@ -801,12 +801,8 @@ def _():
            + "\n".join(diff[:8]))
     expect(sum(e["ts"] for e in p2["events"]) >= 10000,
            "monitoring events must carry the real 10ms sleep")
-    # line granularity keeps the settrace engine — refuse up front
-    r = subprocess.run([PY, os.path.join(HERE, "tracer.py"),
-                        "--backend", "monitoring", fx],
-                       capture_output=True, stdin=subprocess.DEVNULL, text=True, cwd=TMP, timeout=60)
-    expect(r.returncode == 2 and "settrace" in r.stdout,
-           "monitoring at line granularity must be refused")
+    # line granularity rides the PEP 669 engine too since #102 —
+    # its own parity check pins that contract
 
 
 @check("monitoring backend: reraise / stop-iteration parity with settrace")
@@ -2902,6 +2898,61 @@ def _():
                   "narrow the window", "reply arrows omitted",
                   'id="seqscope"'):
         expect(probe in tpl, f"seq contract missing: {probe}")
+
+
+@check("monitoring LINE: settrace parity + the stated comp delta (#102)")
+def _():
+    if not hasattr(sys, "monitoring"):
+        return    # pre-3.12: the engine does not exist here
+    def canon(p):
+        return [(e["e"], e.get("f"), e.get("l"), e.get("fn"),
+                 tuple(sorted((e.get("ch") or {}).keys())),
+                 (e.get("g") or {}).get("s"),
+                 (e.get("cond") or {}).get("r"),
+                 (e.get("cond") or {}).get("i"))
+                for e in p["events"]]
+    # event-for-event parity where no inlined comprehension runs:
+    # generators+exceptions, aliases/mutation, match/except, dunders
+    for fx in ("example_exceptions.py", "example_machinery.py",
+               "example_control.py", "example_dunder.py"):
+        a = run_trace(os.path.join(HERE, fx), name="l102s_" + fx[:12])
+        b = run_trace(os.path.join(HERE, fx), "--backend",
+                      "monitoring", name="l102m_" + fx[:12])
+        ca, cb = canon(a), canon(b)
+        diff = [f"  {x} != {y}" for x, y in zip(ca, cb) if x != y]
+        expect(ca == cb,
+               f"{fx}: engines disagree ({len(ca)} vs {len(cb)}):\n"
+               + "\n".join(diff[:6]))
+    # the DOCUMENTED delta: an inlined comprehension runs within ONE
+    # line event under PEP 669 — drop line events on comprehension
+    # lines from both streams and the engines agree again
+    a = run_trace(os.path.join(HERE, "example_dp.py"), name="l102s_dp")
+    b = run_trace(os.path.join(HERE, "example_dp.py"), "--backend",
+                  "monitoring", name="l102m_dp")
+    import ast as _ast
+    tree = _ast.parse(a["sources"]["example_dp.py"])
+    comp_lines = {nd.lineno for nd in _ast.walk(tree)
+                  if isinstance(nd, (_ast.ListComp, _ast.SetComp,
+                                     _ast.DictComp, _ast.GeneratorExp))}
+    expect(comp_lines, "the fixture must actually hold a comprehension")
+    def strip(p):
+        return [row for row in canon(p)
+                if not (row[0] == "line" and row[2] in comp_lines)]
+    expect(len(canon(a)) > len(canon(b)),
+           "settrace records the iterations the inlined comprehension "
+           "hides from PEP 669 — the delta must exist")
+    expect(strip(a) == strip(b),
+           "outside comprehension lines the engines must agree "
+           "event-for-event")
+    expect(b.get("engine") == "monitoring" and b.get("monComp", 0) >= 1,
+           f"the payload must name the engine and count the "
+           f"comprehensions: {b.get('engine')}/{b.get('monComp')}")
+    with open(os.path.join(HERE, "replayer_template.html"),
+              encoding="utf-8") as fh:
+        tpl = fh.read()
+    for probe in ("not re-observed",
+                  "settrace engine shows every iteration"):
+        expect(probe in tpl, f"engine-note surface missing: {probe}")
 
 
 @check("annotations: notebook contract, sidecar honesty (#107)")

@@ -1130,6 +1130,28 @@ deco(1); deco(2)
            f"decorator must record the FIRST call only: {wd}")
 
 
+@check("deep links: fragment state machinery wired into the artifact")
+def _():
+    # #106 is renderer-side (URL fragment -> viewer state), so the
+    # data-level guard is structural: every generated trace must carry
+    # the read path (applyHash at load + on hashchange) and the write
+    # path (updateHash called from render). Behavior itself is verified
+    # in the browser; this stops the wiring from silently vanishing.
+    fx = fixture("fx_deeplink.py", "x = 1\nx = 2\n")
+    run_trace(fx)                       # writes fx_deeplink.py.html in TMP
+    with open(os.path.join(TMP, "fx_deeplink.py.html"),
+              encoding="utf-8") as fh:
+        html = fh.read()
+    for needle, why in [
+        ("function applyHash", "hash parser missing"),
+        ("function updateHash", "hash writer missing"),
+        ('addEventListener("hashchange"', "hashchange path missing"),
+        ("applyHash(); render();", "load path must parse the hash first"),
+        ("updateHash();", "render must publish state to the fragment"),
+    ]:
+        expect(needle in html, f"deep links: {why} ({needle!r})")
+
+
 # ---------------------------------------------------------------- mapper
 
 @check("map tinyshop: modules, imports, classes, bases")

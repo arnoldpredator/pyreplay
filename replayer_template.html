@@ -1325,6 +1325,7 @@ let idx = 0;
 let highlighted = null;
 let collapsed = false;   // variables panel: show only changing vars
 let historyVar = null;   // label whose life strip is unfolded
+let lastFnq = "?/";      // view-pref qualifier of the last rendered frame
 
 function render() {
   const ev = events[idx];
@@ -1514,6 +1515,7 @@ function render() {
   if (top) {
     const changed = new Set(top.changed);
     const fnq = (top.fn || "?") + "/";
+    lastFnq = fnq;
     // build display rows; object variables get their attributes
     // PROMOTED to first-class rows (g.adj_list …), each with its own
     // view selector — that's where OOP code keeps its data
@@ -1715,6 +1717,7 @@ function render() {
 
   $("counter").textContent = (idx + 1) + " / " + events.length;
   $("scrub").value = idx;
+  updateHash();
 }
 
 /* ---------- transport controls ---------- */
@@ -1970,7 +1973,63 @@ document.addEventListener("keydown", e => {
   else if (e.key === "]") jumpBookmark(1);
 });
 
-if (events.length) render();
+/* deep links: the URL fragment IS the viewer state.
+   #ev=8412&var=dist&view=graph&ov=seen — paste the address into an
+   issue and the reader lands on that event, with that variable's life
+   strip open in that view. Written on every render (debounced,
+   replaceState: the address bar follows without polluting history —
+   and without firing hashchange, so there is no echo loop); read at
+   load and on hashchange (edit the hash of an open trace by hand).
+   An unknown var or view degrades exactly like any stale pref:
+   cells view, no dead panel. */
+let hashTimer = null;
+function updateHash() {
+  if (hashTimer) clearTimeout(hashTimer);
+  hashTimer = setTimeout(() => {
+    let h = "#ev=" + (idx + 1);
+    if (historyVar) {
+      h += "&var=" + encodeURIComponent(historyVar);
+      const view = getViewPref(lastFnq + historyVar);
+      if (view !== "cells") {
+        h += "&view=" + encodeURIComponent(view);
+        if (view === "graph" || view === "edges") {
+          const ov = getPref(lastFnq + historyVar + ":overlay", "");
+          if (ov) h += "&ov=" + encodeURIComponent(ov);
+        }
+      }
+    }
+    if (location.hash !== h) {
+      try { history.replaceState(null, "", h); }
+      catch (e) { location.hash = h; }   // exotic embeddings: hash echo is harmless
+    }
+  }, 150);
+}
+function applyHash() {
+  const raw = location.hash.replace(/^#/, "");
+  if (!raw) return;
+  const p = {};
+  raw.split("&").forEach(part => {
+    const eq = part.indexOf("=");
+    if (eq <= 0) return;
+    try { p[part.slice(0, eq)] = decodeURIComponent(part.slice(eq + 1)); }
+    catch (err) {}   // one malformed escape must not kill the rest
+  });
+  const n = parseInt(p.ev, 10);
+  if (!Number.isNaN(n)) idx = Math.max(0, Math.min(events.length - 1, n - 1));
+  if (p.var !== undefined) historyVar = p.var || null;
+  if (p.var && p.view) {
+    // the pref key is frame-qualified: derive it from the TARGET event
+    const { stack } = computeStacks(idx);
+    const top = stack[stack.length - 1] || {};
+    const fnq = (top.fn || "?") + "/";
+    setViewPref(fnq + p.var, p.view);
+    if (p.ov && (p.view === "graph" || p.view === "edges"))
+      setViewPref(fnq + p.var + ":overlay", p.ov);
+  }
+}
+window.addEventListener("hashchange", () => { stop(); applyHash(); render(); });
+
+if (events.length) { applyHash(); render(); }
 else $("code").innerHTML = '<div class="empty" style="padding:20px">No events recorded.</div>';
 </script>
 </body>

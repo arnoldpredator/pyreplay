@@ -1171,6 +1171,31 @@ def _():
            f"generator poison must mark ONCE across yields: {gseq}")
 
 
+@check("oscilloscope: chart machinery wired into the artifact (#80)")
+def _():
+    # #80 is renderer-side (strip-chart + phase portrait over the change
+    # index); the data-level guard is structural, like #106's: the
+    # artifact must carry the series builder, both plotters, the numeric
+    # eligibility test and the honesty strings (gap/cap/log notes).
+    # Behavior is verified in the browser.
+    fx = fixture("fx_chart.py", "x = 1\nx = 2\n")
+    run_trace(fx, name="fx_chart")
+    with open(os.path.join(TMP, "fx_chart.html"),
+              encoding="utf-8") as fh:
+        html = fh.read()
+    for needle, why in [
+        ("function renderChart", "strip-chart plotter missing"),
+        ("function renderPhase", "phase-portrait plotter missing"),
+        ("function numericAt", "series value reader missing"),
+        ("function chartSeries", "series builder missing"),
+        ("function numericScalar", "chart eligibility test missing"),
+        ("non-numeric gap", "gap honesty note missing"),
+        ("log needs all values > 0", "log honesty note missing"),
+        (":chartvs", "phase partner pref missing"),
+    ]:
+        expect(needle in html, f"oscilloscope: {why} ({needle!r})")
+
+
 @check("deep links: fragment state machinery wired into the artifact")
 def _():
     # #106 is renderer-side (URL fragment -> viewer state), so the

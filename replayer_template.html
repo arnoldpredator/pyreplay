@@ -149,6 +149,16 @@
   .gly.trip { color: #e5c07b; }
   .tripnote { cursor: pointer; text-decoration: underline;
     text-underline-offset: 2px; }
+  .chartbox { margin-top: 3px; }
+  .chartsvg { display: block; background: #171a22;
+    border: 1px solid var(--border); border-radius: 4px; }
+  .chartsvg circle { fill: var(--accent); }
+  .chartsvg circle.cpoint:hover { fill: #cfe2ff; }
+  .chartsvg rect.cnan { fill: #e5c07b; }
+  .chartsvg rect.cinf { fill: var(--err); }
+  .chartsvg text.cgap { fill: var(--dim); font-size: 9px; }
+  .cpoint { cursor: pointer; }
+  .chartcap { color: var(--dim); font-size: 10px; margin-top: 2px; }
   #thread { color: var(--changed-text); margin-left: 8px; }
   #where { color: var(--dim); margin-top: 6px; word-break: break-all; }
   #retval { margin-top: 6px; color: var(--ret); word-break: break-all; }
@@ -703,8 +713,16 @@ function viewOptions(enc) {
           (x.v === "nan" || !Number.isNaN(parseNum(x.v)))))
       opts.push("bars");
   }
+  if (numericScalar(enc)) opts.push("chart");
   opts.push(...graphEligibility(enc));
   return opts;
+}
+/* the oscilloscope accepts any numeric scalar — including numpy-style
+   float subclasses, recognized by their class-name suffix */
+function numericScalar(enc) {
+  return enc && enc.t === "p" && typeof enc.c === "string" &&
+    (enc.c === "int" || enc.c === "float" ||
+     /(?:^|\.)(?:int|uint|float)\d*$/.test(enc.c));
 }
 
 /* ---------- graph view (Tier 2): heuristics OFFER, the user decides.
@@ -1191,6 +1209,208 @@ function renderBars(enc, old) {
   return html + "</span>";
 }
 
+/* ---------- the oscilloscope: value vs event-axis (strip-chart), or
+   value vs value (phase portrait) when a partner variable is chosen.
+   Pure projection of the change index — the series IS the recorded
+   changes, drawn as the step function a variable really is (it holds
+   its value between changes). Non-numeric moments are honest gaps;
+   NaN/Inf get edge ticks, never fake positions. ---------- */
+const CHART_CAP = 2000;   // points drawn; anything older is announced
+
+function numericAt(j, label) {
+  // the numeric value label took at change-event j, or null when that
+  // change wasn't numeric (a rebind to a string, a del, ...)
+  const ev = events[j];
+  if (!ev || !ev.ch) return null;
+  const base = label.split(".")[0];
+  let enc = ev.ch[base];
+  if (!enc) return null;
+  if (label.includes(".")) {
+    if (enc.t !== "obj" || !enc.v) return null;
+    const want = label.slice(base.length + 1);
+    const pair = enc.v.find(p => p && p[0] === want);
+    enc = pair && pair[1];
+    if (!enc) return null;
+  }
+  if (!enc || enc.t !== "p") return null;
+  return parseNum(enc.v);   // may be NaN/±Infinity — drawn as such
+}
+
+function chartSeries(label, fid) {
+  const all = changesFor(label, fid);
+  const cut = Math.max(0, all.length - CHART_CAP);
+  return { cut, pts: all.slice(cut).map(j => ({ j, n: numericAt(j, label) })) };
+}
+
+function svgOpen(h) {
+  return '<svg class="chartsvg" viewBox="0 0 460 ' + h +
+    '" width="100%" height="' + h + '" preserveAspectRatio="none" ' +
+    'xmlns="http://www.w3.org/2000/svg">';
+}
+
+function renderChart(label, fid, partner, wantLog) {
+  const { cut, pts } = chartSeries(label, fid);
+  const finite = pts.filter(p => Number.isFinite(p.n));
+  if (!finite.length)
+    return '<div class="chartbox"><div class="empty">no numeric ' +
+      'values recorded for this variable yet</div></div>';
+  if (partner) return renderPhase(label, fid, partner, cut, pts);
+
+  const W = 460, H = 96, PAD = 6;
+  const j0 = pts[0].j, j1 = pts[pts.length - 1].j;
+  const xOf = j => j1 === j0 ? W / 2
+    : PAD + (j - j0) / (j1 - j0) * (W - 2 * PAD);
+  const logOK = finite.every(p => p.n > 0);
+  const useLog = wantLog && logOK;
+  const yv = v => useLog ? Math.log10(v) : v;
+  let lo = Infinity, hi = -Infinity;
+  finite.forEach(p => { lo = Math.min(lo, yv(p.n)); hi = Math.max(hi, yv(p.n)); });
+  if (hi === lo) { hi += 1; lo -= 1; }
+  const span = hi - lo;
+  const yOf = v => H - PAD - (yv(v) - lo) / span * (H - 2 * PAD);
+
+  let s = svgOpen(H);
+  // exception / trip moments inside the chart's event range, aligned
+  events.forEach((e, i) => {
+    if (i < j0 || i > j1) return;
+    if (e.e === "exc" && e.x && !e.x.soft)
+      s += '<line x1="' + xOf(i) + '" y1="0" x2="' + xOf(i) +
+        '" y2="8" stroke="var(--err)" stroke-width="2"><title>' +
+        escapeHtml(e.x.t) + " — event " + (i + 1) + "</title></line>";
+    else if (e.trip)
+      s += '<line x1="' + xOf(i) + '" y1="0" x2="' + xOf(i) +
+        '" y2="8" stroke="#e5c07b" stroke-width="2"><title>☢ event ' +
+        (i + 1) + "</title></line>";
+  });
+  // the cursor: where the replay stands now
+  const cx = Math.max(PAD, Math.min(W - PAD, xOf(Math.max(j0, Math.min(j1, idx)))));
+  s += '<line x1="' + cx + '" y1="0" x2="' + cx + '" y2="' + H +
+    '" stroke="#3a4051" stroke-width="1"/>';
+  // step polyline segments: hold each value until the next change;
+  // a non-finite point breaks the line (a gap, never an interpolation)
+  let seg = [], segs = [];
+  pts.forEach(p => {
+    if (Number.isFinite(p.n)) seg.push(p);
+    else { if (seg.length) segs.push(seg); seg = []; }
+  });
+  if (seg.length) segs.push(seg);
+  segs.forEach(sg => {
+    let past = "", future = "";
+    for (let k = 0; k < sg.length; k++) {
+      const x = xOf(sg[k].j), y = yOf(sg[k].n);
+      const nxt = k + 1 < sg.length ? xOf(sg[k + 1].j) : null;
+      const piece = (k ? "" : "M" + x + " " + y) +
+        (nxt !== null ? "H" + nxt + "V" + yOf(sg[k + 1].n) : "");
+      if (sg[k].j <= idx) past += piece; else future += piece;
+      // the step crossing the cursor belongs to the past up to it
+    }
+    if (past) s += '<path d="' + past +
+      '" fill="none" stroke="var(--accent)" stroke-width="1.6"/>';
+    if (future) s += '<path d="' + future +
+      '" fill="none" stroke="var(--accent)" stroke-width="1.6" opacity="0.3"/>';
+  });
+  // change points: click = jump to that moment
+  let gaps = 0;
+  pts.forEach(p => {
+    const x = xOf(p.j), dim = p.j > idx ? ' opacity="0.35"' : "";
+    if (Number.isFinite(p.n)) {
+      s += '<circle class="cpoint" data-goto="' + p.j + '" cx="' + x +
+        '" cy="' + yOf(p.n) + '" r="' + (p.j === idx ? 4 : 2.6) + '"' +
+        dim + '><title>' + escapeHtml(String(p.n)) + " — event " +
+        (p.j + 1) + "</title></circle>";
+    } else if (Number.isNaN(p.n)) {
+      s += '<rect class="cpoint cnan" data-goto="' + p.j + '" x="' +
+        (x - 3) + '" y="' + (H / 2 - 3) + '" width="6" height="6"' + dim +
+        '><title>NaN — event ' + (p.j + 1) + "</title></rect>";
+    } else if (p.n === Infinity || p.n === -Infinity) {
+      const ey = p.n > 0 ? PAD : H - PAD;
+      s += '<rect class="cpoint cinf" data-goto="' + p.j + '" x="' +
+        (x - 3) + '" y="' + (ey - 3) + '" width="6" height="6"' + dim +
+        '><title>' + (p.n > 0 ? "+∞" : "−∞") + " — event " + (p.j + 1) +
+        "</title></rect>";
+    } else { gaps++;
+      s += '<text class="cpoint cgap" data-goto="' + p.j + '" x="' + x +
+        '" y="' + (H / 2 + 3) + '" text-anchor="middle"' + dim +
+        '><title>non-numeric here — event ' + (p.j + 1) + "</title>×</text>";
+    }
+  });
+  s += "</svg>";
+  const fmt = v => { const a = Math.abs(v);
+    return (a !== 0 && (a >= 1e6 || a < 1e-4)) ? v.toExponential(2) : String(v); };
+  let cap = '<div class="chartcap">' +
+    (useLog ? "log₁₀ " : "") + "y: " +
+    fmt(useLog ? Math.pow(10, lo) : lo) + " … " +
+    fmt(useLog ? Math.pow(10, hi) : hi) +
+    " · " + pts.length + " changes";
+  if (gaps) cap += " · " + gaps + " non-numeric gap" + (gaps > 1 ? "s" : "");
+  if (cut) cap += " · first " + cut + " changes not drawn (cap " +
+    CHART_CAP + ")";
+  if (wantLog && !logOK) cap += " · log needs all values > 0";
+  return '<div class="chartbox">' + s + cap + "</div></div>";
+}
+
+/* phase portrait: this variable (x) against a partner (y), one sample
+   per change of EITHER, each variable holding its value between its own
+   changes. Time is drawn as opacity — the trajectory fades toward the
+   past; the bright dot is where the replay stands. */
+function renderPhase(label, fid, partner, cutA, ptsA) {
+  const { cut: cutB, pts: ptsB } = chartSeries(partner, fid);
+  const evsAll = [...new Set(
+    [...ptsA.map(p => p.j), ...ptsB.map(p => p.j)])].sort((a, b) => a - b);
+  let ai = -1, bi = -1, samples = [], skipped = 0;
+  evsAll.forEach(j => {
+    while (ai + 1 < ptsA.length && ptsA[ai + 1].j <= j) ai++;
+    while (bi + 1 < ptsB.length && ptsB[bi + 1].j <= j) bi++;
+    const a = ai >= 0 ? ptsA[ai].n : null, b = bi >= 0 ? ptsB[bi].n : null;
+    if (Number.isFinite(a) && Number.isFinite(b))
+      samples.push({ j, a, b });
+    else if (a !== null || b !== null) skipped++;
+  });
+  if (samples.length < 2)
+    return '<div class="chartbox"><div class="empty">phase portrait ' +
+      "needs both variables numeric at overlapping moments (" +
+      samples.length + " usable sample" +
+      (samples.length === 1 ? "" : "s") + ")</div></div>";
+  const W = 460, H = 150, PAD = 10;
+  let alo = Infinity, ahi = -Infinity, blo = Infinity, bhi = -Infinity;
+  samples.forEach(sm => {
+    alo = Math.min(alo, sm.a); ahi = Math.max(ahi, sm.a);
+    blo = Math.min(blo, sm.b); bhi = Math.max(bhi, sm.b);
+  });
+  if (ahi === alo) { ahi += 1; alo -= 1; }
+  if (bhi === blo) { bhi += 1; blo -= 1; }
+  const xOf = v => PAD + (v - alo) / (ahi - alo) * (W - 2 * PAD);
+  const yOf = v => H - PAD - (v - blo) / (bhi - blo) * (H - 2 * PAD);
+  let s = svgOpen(H);
+  let cur = -1;
+  samples.forEach((sm, k) => { if (sm.j <= idx) cur = k; });
+  for (let k = 1; k < samples.length; k++) {
+    const p = samples[k - 1], q = samples[k];
+    const op = k <= cur
+      ? (0.2 + 0.8 * (k / Math.max(1, cur)))   // fade into the past
+      : 0.12;                                   // the unplayed future
+    s += '<line x1="' + xOf(p.a) + '" y1="' + yOf(p.b) + '" x2="' +
+      xOf(q.a) + '" y2="' + yOf(q.b) +
+      '" stroke="var(--accent)" stroke-width="1.4" opacity="' +
+      op.toFixed(3) + '"/>';
+  }
+  samples.forEach((sm, k) => {
+    s += '<circle class="cpoint" data-goto="' + sm.j + '" cx="' +
+      xOf(sm.a) + '" cy="' + yOf(sm.b) + '" r="' +
+      (k === cur ? 4.5 : 2) + '" opacity="' +
+      (k === cur ? 1 : k < cur ? 0.55 : 0.18) + '"><title>(' +
+      escapeHtml(String(sm.a)) + ", " + escapeHtml(String(sm.b)) +
+      ") — event " + (sm.j + 1) + "</title></circle>";
+  });
+  s += "</svg>";
+  let cap = '<div class="chartcap">x: ' + escapeHtml(label) +
+    " · y: " + escapeHtml(partner) + " · " + samples.length + " samples";
+  if (skipped) cap += " · " + skipped + " skipped (non-numeric)";
+  if (cutA || cutB) cap += " · oldest changes beyond the " + CHART_CAP +
+    "-point cap not drawn";
+  return '<div class="chartbox">' + s + cap + "</div></div>";
+}
+
 /* Sets have no positions: diff by MEMBERSHIP. Only elements that were
    not in the set before get marked — never elements that merely moved. */
 function renderSet(enc, old) {
@@ -1635,6 +1855,8 @@ function render() {
     const ovCandidates = displayRows
       .filter(r => r.enc && ["set", "dict", "list", "tuple"].includes(r.enc.t))
       .map(r => r.label);
+    const chartCandidates = displayRows
+      .filter(r => numericScalar(r.enc)).map(r => r.label);
     // a RESUME re-emits the frame's whole live state against an empty
     // snapshot: "changed" there means "fresh info", not a change — no
     // changed highlight, no ↦ rebound glyph (unknown = unmarked)
@@ -1647,7 +1869,7 @@ function render() {
       let view = getViewPref(prefKey);
       if (!opts.includes(view)) view = "cells";
       // overlay: color the graph by another variable (user-chosen)
-      let ov = null, ovsel = "";
+      let ov = null, ovsel = "", chartVs = "";
       if (view === "graph" || view === "edges") {
         const ovName = getPref(prefKey + ":overlay", "");
         const ovRow = ovName && rowByLabel[ovName];
@@ -1661,12 +1883,35 @@ function render() {
               (c === ovName ? " selected" : "") + ">tint: " +
               escapeHtml(c) + "</option>").join("") + "</select>";
       }
+      if (view === "chart") {
+        // partner select (-> phase portrait) + scale select, both riding
+        // the existing .ovsel pref delegate — no new handlers
+        chartVs = getPref(prefKey + ":chartvs", "");
+        if (chartVs && !chartCandidates.includes(chartVs)) chartVs = "";
+        const cands = chartCandidates.filter(c => c !== r.label);
+        if (cands.length)
+          ovsel = '<select class="ovsel" data-key="' +
+            escapeHtml(prefKey + ":chartvs") +
+            '"><option value="">vs time</option>' +
+            cands.map(c => '<option value="' + escapeHtml(c) + '"' +
+              (c === chartVs ? " selected" : "") + ">vs " +
+              escapeHtml(c) + "</option>").join("") + "</select>";
+        if (!chartVs) {
+          const lg = getPref(prefKey + ":chartlog", "");
+          ovsel += '<select class="ovsel" data-key="' +
+            escapeHtml(prefKey + ":chartlog") +
+            '"><option value="">linear</option><option value="1"' +
+            (lg === "1" ? " selected" : "") + ">log</option></select>";
+        }
+      }
       let body;
       try {
         body = view === "grid" ? renderGrid(r.enc, r.old)
              : view === "bars" ? renderBars(r.enc, r.old)
              : view === "graph" ? renderGraph(r.enc, r.old, "graph", ov)
              : view === "edges" ? renderGraph(r.enc, r.old, "edges", ov)
+             : view === "chart" ? renderChart(r.label, eventFrame[idx],
+                 chartVs, getPref(prefKey + ":chartlog", "") === "1")
              : renderValue(r.enc, r.old);
       } catch (err) {
         body = renderValue(r.enc, r.old);   // renderer bug ≠ dead panel
@@ -2054,7 +2299,8 @@ $("vars").addEventListener("click", e => {
     historyVar = historyVar === t.dataset.var ? null : t.dataset.var;
     render();
   } else if (t.classList.contains("vtick")
-             || t.classList.contains("provlink")) {
+             || t.classList.contains("provlink")
+             || t.classList.contains("cpoint")) {
     stop();
     goto(parseInt(t.dataset.goto, 10));
   }

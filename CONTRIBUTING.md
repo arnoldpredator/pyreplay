@@ -1249,7 +1249,7 @@ standalone gate lacks.
 4. **#118** — the console & logging lane: every codebase already emits
    this signal; tie each line to the exact moment (and state) that
    produced it.
-5. **#91** — Whyline queries ("why didn't this line run?"): absence
+5. **#77** — Whyline queries ("why didn't this line run?"): absence
    made debuggable — repeatedly shown to halve debugging time, and
    virtually absent from real tools.
 

@@ -3773,6 +3773,65 @@ def _():
         expect(probe in tpl, f"leak surface missing: {probe}")
 
 
+@check("decision table: guard truth mirror, never-flags (#137)")
+def _():
+    p = run_trace(os.path.join(HERE, "example_control.py"),
+                  name="dc137")
+    events, cfg = p["events"], p["cfg"]["example_control.py"]
+
+    def rows_of(q):
+        # mirror of the viewer's decisionRows: a guard is the LAST
+        # line of any block with a true-edge out; except clauses and
+        # case patterns are the FIRST line of exc/case-edge targets
+        rec = next(r for r in cfg["recs"] if r["q"] == q)
+        lines = set()
+        for s, d, k in rec["edges"]:
+            if k == "true" and rec["blocks"][s]:
+                lines.add(rec["blocks"][s][-1])
+            elif k in ("exc", "case") and rec["blocks"][d]:
+                lines.add(rec["blocks"][d][0])
+        return sorted(lines)
+
+    expect(rows_of("main") == [22, 25, 28, 29],
+           f"main's guards must be the three fors + the if: "
+           f"{rows_of('main')}")
+    expect(rows_of("pick") == [3, 5, 7],
+           f"pick's guards must be the three case patterns: "
+           f"{rows_of('pick')}")
+    expect(rows_of("handle") == [14, 16],
+           f"handle's guards must be the two except clauses: "
+           f"{rows_of('handle')}")
+
+    agg = {}   # line -> [ran, true, false], the viewer's condAgg
+    for ev in events:
+        if ev["e"] != "line":
+            continue
+        a = agg.setdefault(ev["l"], [0, 0, 0])
+        a[0] += 1
+        c = ev.get("cond")
+        if c:
+            a[1 if c["r"] else 2] += 1
+    # hand-traced: for [3,1] runs 2 iters + exhaust; for [] never
+    # enters (the invisible loop = NEVER TRUE); for [5,6,7] breaks
+    # (NEVER FALSE — never exhausted); if v==6 splits 1/1; case _
+    # never runs; the ZeroDivisionError handler matches, TypeError not
+    truth = {22: [3, 2, 1], 25: [1, 0, 1], 28: [2, 2, 0],
+             29: [2, 1, 1], 3: [1, 0, 1], 5: [1, 1, 0],
+             14: [1, 0, 1], 16: [1, 1, 0]}
+    for ln, want in truth.items():
+        expect(agg.get(ln) == want,
+               f"L{ln} ran/true/false must be {want}: {agg.get(ln)}")
+    expect(7 not in agg, "case _ never ran — it must have NO events")
+
+    with open(os.path.join(HERE, "replayer_template.html"),
+              encoding="utf-8") as fh:
+        tpl = fh.read()
+    for probe in ("decisions — observed truth", "never ran",
+                  "never true", "never false", "data-dcev",
+                  "whole guards only", "no verdicts recorded"):
+        expect(probe in tpl, f"decision-table contract missing: {probe}")
+
+
 # ---------------------------------------------------------------- runner
 
 def main():

@@ -823,6 +823,19 @@ if it ran, you jump to its first execution; if it never ran, the
 whyline answers with the guards that said no. The for-else you were
 never sure about, the break that skips it: drawn, with counts.
 
+**The decision table.** Under the CFG, the same panel condenses the
+function's branching into DECISIONS — OBSERVED TRUTH: one row per
+guard — every if/elif/while/for, every except clause, every case
+pattern — with how often it ran, how often it went true, how often
+false, each count a click to its first occurrence. The flags do the
+reading for you: a `for` over an empty list wears **never true** (the
+invisible loop), a loop that always `break`s wears **never false**
+(never exhausted), a case that nothing matched wears **never ran** —
+and clicking that row asks the whyline why not. It reads
+whole guards only: the sub-conditions of `a and b` are not separated
+(that refinement is #86 on the roadmap), and for-rows count
+entered/exhausted rather than true/false.
+
 **The call tree.** The stack panel shows one path; the **Call tree**
 panel shows them all — the run's whole recursion as nested collapsible
 nodes, each frame carrying its arguments and its return value

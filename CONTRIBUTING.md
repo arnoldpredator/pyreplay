@@ -7,7 +7,7 @@ can pick an item and implement it. Features are numbered **#63 onward**, continu
 in FEATURES.md. Fifteen roadmap items have shipped since the list was
 written (63, 64, 65, 70, 77, 79, 80, 98, 101 v1, 103, 104 Tier 1,
 106, 109, 118, 120 v1) — their rows below are struck through;
-**34 remain unbuilt** (plus the stated remainders of 66/74/75/85/88/89/101/104/119/120/126/127/128/132/134).
+**33 remain unbuilt** (plus the stated remainders of 66/74/75/85/88/89/101/104/119/120/126/127/128/132/134).
 
 ## Start here — how to contribute
 
@@ -143,7 +143,7 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
 | 134 | ~~Subproblem DAG (memo dependency view)~~ **shipped (cross-frame edges remain with #75)** | M | ★★ |
 | 135 | ~~Motion layer (tweened transitions, honest)~~ **shipped** | M | ★★ |
 | 136 | Sequence diagram — lifelines from the log | M | ★★★ |
-| 137 | Observed decision table (guard truth summary) | S | ★★ |
+| 137 | ~~Observed decision table (guard truth summary)~~ **shipped** | S | ★★ |
 | 138 | Classic grammar skins: flowchart / structogram | S–M | ★ |
 
 ---
@@ -1470,6 +1470,7 @@ and two small completions:
 
 ### 137. The observed decision table
 *(belongs with Section 2 — deeper causality; sibling of #77/#86)*
+**Shipped 2026-08-01** — now catalog entry #137 in [FEATURES.md](FEATURES.md): DECISIONS — OBSERVED TRUTH in the Anatomy panel — guard rows from the CFG record (true-edge sources, exc/case-edge targets), ran/true/false counts with first-occurrence jumps, never-ran / never-true / never-false flags, never-ran rows hand off to the whyline. Whole-guard rows, said plainly; #86's sub-condition columns remain.
 - **What:** per function, the branching truth summary AS A TABLE:
   one row per guard (the CFG already knows them) — ran N× · true
   T× · false F× — with never-true / never-false flagged and each

@@ -219,6 +219,27 @@
   .ahead { margin: 8px 0 3px; color: var(--accent); font-size: 10px;
     text-transform: uppercase; letter-spacing: .5px; }
   .anote { color: var(--dim); font-style: italic; margin: 3px 0; }
+  /* #137: the observed decision table */
+  .dctab { border-collapse: collapse; margin-top: 3px;
+    font-size: 11px; }
+  .dctab th { text-align: left; color: var(--dim); font-weight: 400;
+    padding: 1px 8px 1px 0; border-bottom: 1px solid var(--border); }
+  .dctab td { padding: 1px 8px 1px 0; vertical-align: top; }
+  .dctab tr.dcr { cursor: pointer; }
+  .dctab tr.dcr:hover td { background: #1c2029; }
+  .dctab tr.cur td { background: var(--changed-bg); }
+  .dcl { color: var(--dim); }
+  .dcg { color: var(--text); max-width: 260px; overflow: hidden;
+    white-space: nowrap; text-overflow: ellipsis; }
+  .dck { color: #c792ea; }
+  .dct { cursor: pointer; text-align: right; }
+  .dct:hover { text-decoration: underline; }
+  .dct.vt { color: #7ee08a; }
+  .dct.vf { color: #e06c75; }
+  .dct.z { color: var(--dim); cursor: default; }
+  .dct.z:hover { text-decoration: none; }
+  .dcnever { color: #e5c07b; }
+  .dcna { color: var(--dim); font-style: italic; }
   .astbox { max-height: 200px; overflow: auto; background: #171a22;
     border: 1px solid var(--border); border-radius: 4px;
     margin-top: 3px; padding: 3px 6px; }
@@ -3312,6 +3333,106 @@ function cfgSvg(rec, curB, rel) {
     '" viewBox="0 0 300 ' + hgt + '">' + parts.join("") + "</svg>";
 }
 
+/* #137: the observed decision table — per function, every guard's
+   truth summary as recorded: ran N× · true T× · false F×, with
+   never-true / never-false flagged and each count a jump to its
+   first occurrence. Whole-guard rows only: sub-line conditions
+   (a and b, ternaries) are #86's territory and are not separated. */
+let condAggCache = null;
+function condAgg() {
+  if (condAggCache) return condAggCache;
+  const agg = {};
+  for (let i = 0; i < events.length; i++) {
+    const ev = events[i];
+    if (ev.e !== "line") continue;
+    const key = ev.f + "|" + ev.l;
+    let a = agg[key];
+    if (!a) a = agg[key] = { ran: 0, t: 0, f: 0,
+                             iR: -1, iT: -1, iF: -1 };
+    a.ran++;
+    if (a.iR < 0) a.iR = i;
+    const c = ev.cond;
+    if (c) {
+      if (c.r) { a.t++; if (a.iT < 0) a.iT = i; }
+      else { a.f++; if (a.iF < 0) a.iF = i; }
+    }
+  }
+  condAggCache = agg;
+  return agg;
+}
+function guardKind(rel, line) {
+  const src = (DATA.sources[rel] || "").split("\n")[line - 1] || "";
+  const t = src.trim();
+  for (const k of ["elif", "if", "while", "for", "except", "case"])
+    if (t === k || t.startsWith(k + " ") || t.startsWith(k + "(")
+        || t.startsWith(k + ":")) return k === "elif" ? "if" : k;
+  return "?";
+}
+function decisionRows(rec, rel) {
+  const lines = new Set();
+  for (const [s, d, k] of rec.edges) {
+    if (k === "true") {
+      const blk = rec.blocks[s];
+      if (blk && blk.length) lines.add(blk[blk.length - 1]);
+    } else if (k === "exc" || k === "case") {
+      const blk = rec.blocks[d];
+      if (blk && blk.length) lines.add(blk[0]);
+    }
+  }
+  return [...lines].sort((a, b) => a - b);
+}
+function decisionTable(rec, rel, curLine) {
+  const rows = decisionRows(rec, rel);
+  if (!rows.length) return "";
+  const agg = condAgg(), src = (DATA.sources[rel] || "").split("\n");
+  const cell = (n, i, cls, tip) =>
+    n ? '<td class="dct ' + cls + '" data-dcev="' + i + '" title="' +
+        tip + ' — click: first occurrence">' + n + "×</td>"
+      : '<td class="dct z">0×</td>';
+  let h = '<div class="ahead" title="#137: the branching truth of ' +
+    'this function, as recorded — not the combinations that could ' +
+    'happen, the ones that did">decisions — observed truth · ' +
+    esc2(rec.q) + "</div>";
+  h += '<table class="dctab"><tr><th></th><th>guard</th>' +
+    "<th>ran</th><th>true</th><th>false</th><th></th></tr>";
+  for (const ln of rows) {
+    const a = agg[rel + "|" + ln] || { ran: 0, t: 0, f: 0,
+                                       iR: -1, iT: -1, iF: -1 };
+    const kind = guardKind(rel, ln);
+    let raw = (src[ln - 1] || "").trim();
+    for (const kw of [kind, "elif"])
+      if (raw.startsWith(kw + " ")) { raw = raw.slice(kw.length + 1); break; }
+    const snip = esc2(raw.slice(0, 30));
+    let flag = "";
+    if (!a.ran) flag = '<span class="dcnever">never ran</span>';
+    else if (!a.t && !a.f)
+      flag = '<span class="dcna" title="verdicts are inferred from ' +
+        "the next event's line; a single-line body (or a guard cut " +
+        'by truncation) leaves them unknowable">' +
+        "no verdicts recorded</span>";
+    else if (!a.t) flag = '<span class="dcnever">never true</span>';
+    else if (!a.f) flag = '<span class="dcnever">never false</span>';
+    h += '<tr class="dcr' + (ln === curLine ? " cur" : "") +
+      '" data-dcl="' + ln + '"><td class="dcl">L' + ln +
+      '</td><td class="dcg"><span class="dck">' + kind + "</span> " +
+      snip + "</td>" +
+      cell(a.ran, a.iR, "", "the guard line executed " + a.ran + "×") +
+      cell(a.t, a.iT, "vt", kind === "for"
+        ? "entered an iteration " + a.t + "×"
+        : "verdict true " + a.t + "×") +
+      cell(a.f, a.iF, "vf", kind === "for"
+        ? "exhausted " + a.f + "×"
+        : "verdict false " + a.f + "×") +
+      "<td>" + flag + "</td></tr>";
+  }
+  h += "</table>";
+  h += '<div class="anote">whole guards only — sub-conditions of ' +
+    "<code>a and b</code> are not separated (sub-line branch " +
+    "verdicts are #86, unbuilt); for-rows read entered/exhausted." +
+    "</div>";
+  return h;
+}
+
 function updateAnatomy() {
   if (!anatBox.open) return;
   const ev = events[idx];
@@ -3379,6 +3500,7 @@ function updateAnatomy() {
       "construction · exception edges leave the try header (any " +
       "line inside may raise); a finally's interception of returns " +
       "is not drawn.</div>";
+    h += decisionTable(crec, ev.f, ev.l);   // #137
   }
   body.innerHTML = h;
   const cur = body.querySelector(".disrow.cur");
@@ -3396,6 +3518,14 @@ anatBox.addEventListener("toggle", () => {
   updateAnatomy();
 });
 $("anatomy").addEventListener("click", e => {
+  const dc = e.target.closest("[data-dcev]");
+  if (dc) { goto(+dc.dataset.dcev); return; }   // #137 first occurrence
+  const dr = e.target.closest(".dcr[data-dcl]");
+  if (dr) {                            // #137 never-ran row → the why
+    const rel = events[idx] && events[idx].f;
+    if (rel) whyline(rel, +dr.dataset.dcl);
+    return;
+  }
   const g = e.target.closest("[data-cfgb]");
   if (!g || g.dataset.un) return;      // unreachable: no path to ask about
   const line = +g.dataset.cfgl;

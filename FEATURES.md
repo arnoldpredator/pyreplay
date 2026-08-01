@@ -1386,6 +1386,41 @@ dead or invented panel; every cap and truncation is announced.
 
   [![Feature 131 — cfg](screenshots/131-cfg.png)](screenshots/131-cfg.png)
 
+### 137. The observed decision table — the function's branching truth
+- **Measured:** per CFG record, the guard rows are derived statically
+  (the last line of every block with a true-edge out; the first line
+  of every exc/case-edge target — if/elif/while/for guards, except
+  clauses, case patterns), and one pass over the recorded events
+  aggregates each guard line's truth: how often the line ran, how
+  often the recorded verdict was true, how often false, and the first
+  occurrence of each.
+- **Displayed:** DECISIONS — OBSERVED TRUTH, a table in the Anatomy
+  panel under the CFG: one row per guard (`L28 for v in [5, 6, 7]: ·
+  2× · 2× · 0×`), counts color-split true/false, the current line's
+  row lit. Flags where they are earned: **never ran**, **never
+  true**, **never false** — and "no verdicts recorded" with the
+  reason when a single-line body makes the next-line inference
+  unknowable. Every non-zero count is a click: jump to its first
+  occurrence. A never-ran row hands off to the whyline.
+- **Why:** the verdicts exist per event and the whyline answers one
+  line at a time; nothing showed a function's WHOLE branching
+  behavior at a glance. Coverage tools count branches; this shows the
+  truth summary inline with the moments — not the combinations that
+  could happen, the ones that did.
+- **Use case:** `for v in []:` wears **never true** — the
+  invisible-loop classic, flagged without stepping; the loop that
+  `break`s wears **never false** — it never exhausted. A `case _`
+  that never matched anything reads **never ran**, one click from
+  "why not?".
+- **Command:** any line-granularity trace → **Anatomy** → DECISIONS.
+  Honesty (stated under the table): whole guards only — the
+  sub-conditions of `a and b` are not separated (sub-line branch
+  verdicts are #86, unbuilt); for-rows read entered/exhausted.
+- **Screenshot** — example_control.py: the empty loop never true, the
+  broken loop never false and lit as current, the if split 1/1:
+
+  [![Feature 137 — decisions](screenshots/137-decisions.png)](screenshots/137-decisions.png)
+
 ## F. Replayer — the interpreter's hidden machinery
 
 ### 33. Generators & coroutines tell the truth

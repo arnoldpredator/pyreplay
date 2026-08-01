@@ -8,13 +8,129 @@ files must sit next to their templates (`replayer_template.html`,
 `map_template.html`); you never open a template directly, only the
 generated files.
 
-This guide is ordered the way you use the tool — record a run, learn
-to read it, then reach for sharper instruments as the questions get
-harder. Part numbers match the feature catalog (FEATURES.md).
+This guide is ordered the way you use the tool — the funnel, wide
+and cheap first: map the codebase (free, nothing executes), record a
+run, heat the map and let it aim you, then descend into the
+replayer's depth as the questions get harder. Part numbers match the
+feature catalog (FEATURES.md).
 
 ---
 
-## Part 1 — Record a run
+## Part 1 — The static map
+
+```bash
+python3 mapper.py path/to/codebase        # -> map_<name>.html
+```
+
+Parses every .py file with `ast` — **nothing is executed** — and draws
+the codebase's geography: modules as boxes arranged by import depth,
+arrows toward dependencies, function/class inventories inside each box
+(click to expand), and toggleable dashed "call routes" showing which
+modules statically call into which (with call-site counts). Drag to
+pan, wheel to zoom, `fit` to frame everything. The search box
+highlights any module or function by name — "where does sleep live?"
+is one keystroke.
+
+**Packages fold** (semantic zoom v2): modules group into package boxes.
+Maps over 50 modules start folded — brian2's 309 modules arrive as 49
+readable boxes. Click a box to unfold its members (they behave exactly
+like normal module boxes inside); `fold pkgs` / `unfold` in the header
+work the whole map. A folded box rolls up what it hides: module count,
+loc, heat share (summed, same palette), ⚠N exceptions, parse errors.
+Edges into hidden modules re-attach to the box and aggregate — thicker
+line, tooltip lists the member-level imports. Search still sees inside:
+matching a function that lives in a folded package lights the box.
+
+**Import cycles** are found statically (strongly connected components)
+and announced three ways: the stats bar counts them, folded boxes
+hiding cycle edges carry a red **⭯N** pip, and the bottom note lists
+every cycle — **click one to spotlight it** (members highlighted, its
+edges red, everything else dimmed). The **cycles checkbox** in the
+header paints *every* cyclic edge red at once; it's off by default
+because a codebase whose core is one big SCC (nengo, brian2) would
+otherwise drown in red — red should mean "look here", not "everywhere".
+
+**Sibling edges hide inside open packages**: imports *between two
+modules of the same package* are the densest noise on a big map, so an
+unfolded package shows them as an honest **⇄N** count in its header
+instead of drawing all N at once. They appear exactly when you care:
+expand a member module (its own edges light up and ride above the
+boxes), search, click a cycle, or flip the cycles toggle.
+Cross-package edges always draw. And **hovering any box** — module
+or package, folded or open — lights its arrows instantly while the
+rest recede; no click needed (click keeps meaning fold/expand).
+
+**Walls** (header button): the top-10 modules by fan-in — how many
+modules import me (←N) vs how many I import (→M). This is how you find
+a codebase's load-bearing walls: in brian2, `brian2/__init__` is
+imported by 164 modules and `utils.logger` by 55. Click a row to
+highlight it on the map.
+
+**Mixed-language projects** (Python + C++/Cython/…): the mapper reads
+only `.py` files — everything else is simply not on the map, and a
+Python file that fails to parse (Python 2, templates) becomes a
+red-dashed "parse error" box instead of killing the run. The Python
+half of a hybrid codebase maps normally.
+
+**Inside a module** (click its box): top-level functions listed, and
+classes drawn as a grid of chips. Click a class chip and its whole
+local ancestry lights up green with inheritance edges — in a monolith
+("2000 lines of base classes + 50 exercise classes in one file") this
+IS the architecture view. A panel shows the selected class's bases and
+methods. Searching a method name highlights every class that defines
+or overrides it — an instant override map.
+
+**The call graph inside one file** (the function-world twin of that
+class view): click a **function name** in an expanded module and it
+focuses — **green** arrows fan out to every function it calls (those
+rows light green), **amber dashed** arrows come in from every function
+that calls it (amber). A green **▸** marks entry points (functions
+called at module level — import time, or under `__main__` when run as a
+script); a **↺** marks recursion. This turns a single 900-line script
+from a dead list into its actual structure. Click the name again to
+clear; click the **`:line`** number instead to get the scoped tracer
+command. Like the map itself it's best-effort static — it catches
+direct calls, not ones made through variables (`obj.method()` and
+dispatch tables) — and the bottom note always reports how many calls
+weren't statically resolvable. This is the wide, cheap end of the funnel: map
+first, then aim the microscope.
+
+**The project call graph (#16).** The map now resolves calls at
+FUNCTION level across the whole codebase: from-imports, module
+attributes, and `self.method()` within its own class become
+`module:def → module:def` edges, each labeled resolved or guessed
+(name not found in the target module), with everything the parse
+cannot attribute counted and named as the trace's job. The walls
+panel ranks the **load-bearing functions** by cross-module fan-in —
+on nengo that crowns `ValidationError` (←135 sites from 26 modules)
+and `Signal` (←133), invisible in module counts. Click a row to
+spotlight its module.
+
+**The graph lens (#15) — graph theory over the map's own graphs.**
+The lens select gains *graph (structure)*, available on any map of
+two or more modules: boxes tint violet by **betweenness centrality**
+(Brandes — the modules import paths route THROUGH; fan-in counts
+doors, this counts corridors) and wear their detected **community's**
+border color (label propagation) — compare the borders against the
+package boxes and "is the architecture real?" becomes a picture. The
+walls panel gains the ⛓ betweenness ranking beside fan-in (they
+routinely crown different walls: on nengo, fan-in picks
+`nengo.exceptions`, betweenness picks `nengo.base` and
+`nengo.simulator`), a second ranking on the observed call-pair graph
+when a trace is adopted (each list names its graph), the 💥
+**dependency-fragility curve** (remove the top-k most-between
+modules, initial ranking — watch the giant component collapse; a
+cliff is a wall the fan counts missed), and the degree distribution
+with its caution: this few points prove no power law.
+
+# pyreplay tracer — user guide
+
+Record a Python program's execution — every line, call, return, and
+variable change — into a single self-contained HTML file you can replay
+in any browser: step forward/back, play at chosen speed, scrub anywhere.
+
+## Part 2 — Record a run
+
 ```bash
 python3 tracer.py path/to/your_script.py
 ```
@@ -153,7 +269,77 @@ loudly — and every reader (`--runs`, `--diverge`, map heat,
 forces; replay needs `DecompressionStream` (Chrome 80+ / Firefox 113+
 / Safari 16.4+).
 
-## Part 2 — Read the replay
+## Part 3 — The cockpit: heat & the funnel
+
+**Heat — the trace drawn onto the map** (the cockpit):
+
+```bash
+python3 tracer.py myapp/main.py                    # 1. record a run
+python3 mapper.py myapp                            # 2. map + heat
+```
+
+**Auto-heat**: the mapper looks for the newest `trace_*.html` (working
+dir + mapped root) whose traced files belong to the codebase being
+mapped, and adopts it automatically — announced on stdout, never
+guessed across codebases. `--trace FILE` picks one explicitly;
+`--no-trace` disables the automation. So the funnel is: trace once,
+and every later map of that codebase carries heat and complete ⌖
+commands by itself.
+
+Modules are tinted on a weather-radar scale by their ABSOLUTE share of
+the run: 0% = no tint, ~5% = faint blue, then teal → green → yellow →
+orange → hard red at 100% (legend in the bottom note; the exact value
+is printed on every box). The bottom note SAYS what the heat measures:
+**EVENT COUNTS** (from a line trace: share of executed lines) or
+**TIME (self)** (from an fn trace: share of real wall time spent in
+the module's own code — where the run's milliseconds actually lived).
+Function rows then show "×calls · cumulative time" with self/cum in
+the tooltip. `--heat-out agg.json` also writes the aggregate as plain
+JSON.
+
+**The funnel handoff**: every module box has a small **⌖** in its
+corner, and every function row is clickable — either composes the
+exact microscope command (`--include` scoped, `--start-at` for a
+specific def, entry script filled in from the trace) in a copy box at
+the bottom right. With no trace loaded the ⌖ still tries hard, honestly:
+a module with an `if __name__ == "__main__"` block gets a **complete**
+command (it runs itself); a library module gets an entry **borrowed
+from a runnable importer** — the map walks the import graph backwards
+and picks the nearest module with a `__main__` guard that imports it
+("entry borrowed from debug — it runs itself and imports this
+module"). Only when nothing runnable reaches the module does the
+`YOUR_SCRIPT.py` placeholder appear, and if pytest-style tests import
+it, the note says so (run them under pytest once, re-map, and
+auto-heat fills everything in). Entry paths are absolute, so commands
+work from wherever your shell is. The map tells you WHERE; the ⌖ writes the HOW. Badges show **#1, #2…** execution
+order and **⚠N** where hard exceptions fired; untouched modules fade —
+one glance answers "which part of this codebase actually executes?". Expand a hot module
+and every function shows **×N** (its event count this run); class
+chips tint by their methods' heat. The `heat` checkbox toggles the
+overlay. Note the honest details: importing a module executes its
+top-level code, so "cold" modules still show a few events, and class
+bodies run at import time — the map shows Python as it really is.
+
+**Dark edges (#39) — the blind spot, drawn.** When the map adopts a
+trace, every cross-module call the run actually made is diffed against
+the static routes. Pairs with no static route — dispatch tables,
+callbacks, plugin registries, `importlib` — appear as dashed **⚡ dark
+edges** with call counts, on their own toggle; the banner counts them,
+and modules containing `__import__`/`import_module` call sites wear a
+⚡ flag up front ("target unknown until a run is traced"). The old
+honesty note about unresolvable calls becomes a picture — with its own
+honesty rule attached: the absence of a dark edge is never evidence of
+absence, only the adopted runs' testimony.
+
+**The startup autopsy (#40).** With an fn trace adopted, the walls
+panel grows a **⚙ startup autopsy**: the time inside each module's
+`<module>` frame — its import cost, cumulative on purpose — ranked
+with click-to-spotlight rows and the total in the banner. Slow CLI
+startup is pure import cost and nobody knows whose; the data was in
+every fn trace all along. Line traces carry no wall times, so the
+autopsy is honestly absent there.
+
+## Part 4 — Read the replay
 
 Open the generated HTML in a browser. Layout:
 Open the generated HTML in a browser. Layout:
@@ -232,7 +418,7 @@ magenta pins on the scrubber, Enter cycles through them. Value tests
 look at recorded CHANGE moments (the facts, never interpolation), and
 a typo'd prefix is reported as a typo, never a silent zero hits.
 
-## Part 3 — Variables & data structures
+## Part 5 — Variables & data structures
 
 Every value is rendered semantically by its shape, and only the
 deepest thing that changed lights up:
@@ -329,7 +515,7 @@ tooltip shows the histogram, and a click lands on the first moment of
 the rarest type — the sneaky None found where it was born, not where
 it exploded. The terminal ranks the unstable names after every run.
 
-## Part 4 — Control flow: what decided
+## Part 6 — Control flow: what decided
 
 Every branching line shows its expression and the recorded verdict
 (see the Event panel notes in Part 2). The instruments below build
@@ -395,7 +581,7 @@ whole guards only: the sub-conditions of `a and b` are not separated
 (the monitoring engine records them — see the sub-line verdicts below), and for-rows count
 entered/exhausted rather than true/false.
 
-**Sub-line verdicts.** Under the monitoring engine (Part 1), the parts of a line get
+**Sub-line verdicts.** Under the monitoring engine (Part 2), the parts of a line get
 their own truth: every ternary test, every `and`/`or` operand, every
 comprehension `if` records a BRANCH event at its exact columns.
 Stepping onto one shows the sub-expression underlined in its verdict
@@ -404,7 +590,7 @@ operand was evaluated fewer times than its guard ran, that difference
 IS the short-circuit, measured. Under the default engine these events
 simply don't exist, and the table says so instead of pretending.
 
-## Part 5 — Causality: where values come from
+## Part 7 — Causality: where values come from
 
 **The backward slice (✂).** The provenance row's "← from a, b" is one
 hop; the **✂ slice** button beside it iterates to closure — every
@@ -442,7 +628,7 @@ Frontiers (slice writes, call-bearing indexes, aliased writes,
 dependencies routed through calls) are counted and stated, never
 guessed.
 
-## Part 6 — The interpreter's hidden machinery
+## Part 8 — The interpreter's hidden machinery
 
 **The interpreter's hidden machinery** (see example_machinery.py):
 - **Generators/coroutines tell the truth**: a suspension shows as a
@@ -471,7 +657,7 @@ through, and the class that actually SUPPLIED the method is lit green
 Serializer". Cooperative `super()` chains show successive suppliers
 walking the chain (see example_mro.py / trace_example_mro.html).
 
-## Part 7 — Truth & alarms
+## Part 9 — Truth & alarms
 
 **Exceptions are first-class events.** Every raise — including ones an
 `except` block catches — appears as a red EXCEPTION badge with the
@@ -573,7 +759,7 @@ recorder), complete encodings, a quiet window; anything else says
 always carry the iterator caveat. Run the suspect with --max-events:
 the cap catches the hang and the trace holds the cycle.
 
-## Part 8 — Concurrency & time
+## Part 10 — Concurrency & time
 
 Tasks are **pseudo-threads**. When your program uses asyncio, every
 event records which task drove it, and the viewer gives each task its
@@ -643,7 +829,7 @@ flags: a coroutine yield releases the loop and ends the stretch. Teal
 pins mark each incident on the strip; the fix is usually
 `await asyncio.to_thread(...)`, and the banner clearing proves it.
 
-## Part 9 — The run at a glance
+## Part 11 — The run at a glance
 
 **The call tree.** The stack panel shows one path; the **Call tree**
 panel shows them all — the run's whole recursion as nested collapsible
@@ -687,7 +873,7 @@ the endpoints are recorded truth. `P` (or 🎬) enters presentation
 mode — chrome hidden, large type, code and data side by side for a
 projector — Esc exits.
 
-## Part 10 — The trace as a notebook
+## Part 12 — The trace as a notebook
 
 **Notes.** Press **N** at any moment and write what you're thinking
 — "HERE the total goes negative, why?" — Enter pins it. The Notes
@@ -729,120 +915,7 @@ JSON. Free navigation is never locked — only committed claims
 count. Try it on a planted-bug trace: the drill turns a bug hunt
 into a score.
 
-## Part 11 — The static map
-
-```bash
-python3 mapper.py path/to/codebase        # -> map_<name>.html
-```
-
-Parses every .py file with `ast` — **nothing is executed** — and draws
-the codebase's geography: modules as boxes arranged by import depth,
-arrows toward dependencies, function/class inventories inside each box
-(click to expand), and toggleable dashed "call routes" showing which
-modules statically call into which (with call-site counts). Drag to
-pan, wheel to zoom, `fit` to frame everything. The search box
-highlights any module or function by name — "where does sleep live?"
-is one keystroke.
-
-**Packages fold** (semantic zoom v2): modules group into package boxes.
-Maps over 50 modules start folded — brian2's 309 modules arrive as 49
-readable boxes. Click a box to unfold its members (they behave exactly
-like normal module boxes inside); `fold pkgs` / `unfold` in the header
-work the whole map. A folded box rolls up what it hides: module count,
-loc, heat share (summed, same palette), ⚠N exceptions, parse errors.
-Edges into hidden modules re-attach to the box and aggregate — thicker
-line, tooltip lists the member-level imports. Search still sees inside:
-matching a function that lives in a folded package lights the box.
-
-**Import cycles** are found statically (strongly connected components)
-and announced three ways: the stats bar counts them, folded boxes
-hiding cycle edges carry a red **⭯N** pip, and the bottom note lists
-every cycle — **click one to spotlight it** (members highlighted, its
-edges red, everything else dimmed). The **cycles checkbox** in the
-header paints *every* cyclic edge red at once; it's off by default
-because a codebase whose core is one big SCC (nengo, brian2) would
-otherwise drown in red — red should mean "look here", not "everywhere".
-
-**Sibling edges hide inside open packages**: imports *between two
-modules of the same package* are the densest noise on a big map, so an
-unfolded package shows them as an honest **⇄N** count in its header
-instead of drawing all N at once. They appear exactly when you care:
-expand a member module (its own edges light up and ride above the
-boxes), search, click a cycle, or flip the cycles toggle.
-Cross-package edges always draw. And **hovering any box** — module
-or package, folded or open — lights its arrows instantly while the
-rest recede; no click needed (click keeps meaning fold/expand).
-
-**Walls** (header button): the top-10 modules by fan-in — how many
-modules import me (←N) vs how many I import (→M). This is how you find
-a codebase's load-bearing walls: in brian2, `brian2/__init__` is
-imported by 164 modules and `utils.logger` by 55. Click a row to
-highlight it on the map.
-
-**Mixed-language projects** (Python + C++/Cython/…): the mapper reads
-only `.py` files — everything else is simply not on the map, and a
-Python file that fails to parse (Python 2, templates) becomes a
-red-dashed "parse error" box instead of killing the run. The Python
-half of a hybrid codebase maps normally.
-
-**Inside a module** (click its box): top-level functions listed, and
-classes drawn as a grid of chips. Click a class chip and its whole
-local ancestry lights up green with inheritance edges — in a monolith
-("2000 lines of base classes + 50 exercise classes in one file") this
-IS the architecture view. A panel shows the selected class's bases and
-methods. Searching a method name highlights every class that defines
-or overrides it — an instant override map.
-
-**The call graph inside one file** (the function-world twin of that
-class view): click a **function name** in an expanded module and it
-focuses — **green** arrows fan out to every function it calls (those
-rows light green), **amber dashed** arrows come in from every function
-that calls it (amber). A green **▸** marks entry points (functions
-called at module level — import time, or under `__main__` when run as a
-script); a **↺** marks recursion. This turns a single 900-line script
-from a dead list into its actual structure. Click the name again to
-clear; click the **`:line`** number instead to get the scoped tracer
-command. Like the map itself it's best-effort static — it catches
-direct calls, not ones made through variables (`obj.method()` and
-dispatch tables) — and the bottom note always reports how many calls
-weren't statically resolvable. This is the wide, cheap end of the funnel: map
-first, then aim the microscope.
-
-**The project call graph (#98).** The map now resolves calls at
-FUNCTION level across the whole codebase: from-imports, module
-attributes, and `self.method()` within its own class become
-`module:def → module:def` edges, each labeled resolved or guessed
-(name not found in the target module), with everything the parse
-cannot attribute counted and named as the trace's job. The walls
-panel ranks the **load-bearing functions** by cross-module fan-in —
-on nengo that crowns `ValidationError` (←135 sites from 26 modules)
-and `Signal` (←133), invisible in module counts. Click a row to
-spotlight its module.
-
-**The graph lens (#97) — graph theory over the map's own graphs.**
-The lens select gains *graph (structure)*, available on any map of
-two or more modules: boxes tint violet by **betweenness centrality**
-(Brandes — the modules import paths route THROUGH; fan-in counts
-doors, this counts corridors) and wear their detected **community's**
-border color (label propagation) — compare the borders against the
-package boxes and "is the architecture real?" becomes a picture. The
-walls panel gains the ⛓ betweenness ranking beside fan-in (they
-routinely crown different walls: on nengo, fan-in picks
-`nengo.exceptions`, betweenness picks `nengo.base` and
-`nengo.simulator`), a second ranking on the observed call-pair graph
-when a trace is adopted (each list names its graph), the 💥
-**dependency-fragility curve** (remove the top-k most-between
-modules, initial ranking — watch the giant component collapse; a
-cliff is a wall the fan counts missed), and the degree distribution
-with its caution: this few points prove no power law.
-
-# pyreplay tracer — user guide
-
-Record a Python program's execution — every line, call, return, and
-variable change — into a single self-contained HTML file you can replay
-in any browser: step forward/back, play at chosen speed, scrub anywhere.
-
-## Part 12 — Architecture audits
+## Part 13 — Architecture audits
 
 **Layering rules.** Drop a `.pyreplay-layers` file at the root and
 the map becomes the architecture's guardian: `layers: ui -> logic ->
@@ -856,7 +929,7 @@ rules would pretend the architecture is safe. In CI,
 `python3 mapper.py --check-layers .` exits 0 when the architecture
 holds, 4 on violations, 2 on a broken rules file.
 
-**API-surface honesty (#100).** Every package has two interfaces: the
+**API-surface honesty (#107).** Every package has two interfaces: the
 one it declares (`__all__`, public names) and the one outsiders
 actually use. The map now measures the gap: the walls panel's 🔓
 audit lists every outside reach into `_private` modules, every
@@ -879,9 +952,9 @@ imports, module-level builtin masks, and the classic import horror — a
 top-level `random.py` — with 👥 pips on the boxes and the stdlib case
 shouted in the terminal.
 
-**Dead-code evidence (#102).** Every map now joins two kinds of
+**Dead-code evidence (#109).** Every map now joins two kinds of
 evidence about every def: does anything reference it statically
-(#98's call graph + the importable surface), and did it ever run
+(#16's call graph + the importable surface), and did it ever run
 (every adopted trace)? Candidates come tiered — [A] no static
 reference at all, [B] importable surface or live-class method
 (obj.method dispatch hides here), [C] statically called but never
@@ -892,7 +965,7 @@ liveness, and the clause rides every surface: evidence, not proof —
 reflection, plugins and decorators can hide callers. Deleting code
 becomes a decision instead of a bet.
 
-**The crime scene (#103) — history as the third axis.** On any mapped
+**The crime scene (#110) — history as the third axis.** On any mapped
 git repo the header grows a **lens** select: *churn × cx* tints every
 module by √(change-frequency × decision-points) over a window the
 banner names (default 12 months; `--churn-since` takes git's own
@@ -903,76 +976,6 @@ is *this* codebase's top offender; the terminal prints the top three
 with the raw numbers. No git history readable → the lens stays
 absent. pyreplay mapped on itself puts `tracer` at 0.93 — no
 surprises, which is exactly the point.
-
-## Part 13 — The cockpit: heat & the funnel
-
-**Heat — the trace drawn onto the map** (the cockpit):
-
-```bash
-python3 tracer.py myapp/main.py                    # 1. record a run
-python3 mapper.py myapp                            # 2. map + heat
-```
-
-**Auto-heat**: the mapper looks for the newest `trace_*.html` (working
-dir + mapped root) whose traced files belong to the codebase being
-mapped, and adopts it automatically — announced on stdout, never
-guessed across codebases. `--trace FILE` picks one explicitly;
-`--no-trace` disables the automation. So the funnel is: trace once,
-and every later map of that codebase carries heat and complete ⌖
-commands by itself.
-
-Modules are tinted on a weather-radar scale by their ABSOLUTE share of
-the run: 0% = no tint, ~5% = faint blue, then teal → green → yellow →
-orange → hard red at 100% (legend in the bottom note; the exact value
-is printed on every box). The bottom note SAYS what the heat measures:
-**EVENT COUNTS** (from a line trace: share of executed lines) or
-**TIME (self)** (from an fn trace: share of real wall time spent in
-the module's own code — where the run's milliseconds actually lived).
-Function rows then show "×calls · cumulative time" with self/cum in
-the tooltip. `--heat-out agg.json` also writes the aggregate as plain
-JSON.
-
-**The funnel handoff**: every module box has a small **⌖** in its
-corner, and every function row is clickable — either composes the
-exact microscope command (`--include` scoped, `--start-at` for a
-specific def, entry script filled in from the trace) in a copy box at
-the bottom right. With no trace loaded the ⌖ still tries hard, honestly:
-a module with an `if __name__ == "__main__"` block gets a **complete**
-command (it runs itself); a library module gets an entry **borrowed
-from a runnable importer** — the map walks the import graph backwards
-and picks the nearest module with a `__main__` guard that imports it
-("entry borrowed from debug — it runs itself and imports this
-module"). Only when nothing runnable reaches the module does the
-`YOUR_SCRIPT.py` placeholder appear, and if pytest-style tests import
-it, the note says so (run them under pytest once, re-map, and
-auto-heat fills everything in). Entry paths are absolute, so commands
-work from wherever your shell is. The map tells you WHERE; the ⌖ writes the HOW. Badges show **#1, #2…** execution
-order and **⚠N** where hard exceptions fired; untouched modules fade —
-one glance answers "which part of this codebase actually executes?". Expand a hot module
-and every function shows **×N** (its event count this run); class
-chips tint by their methods' heat. The `heat` checkbox toggles the
-overlay. Note the honest details: importing a module executes its
-top-level code, so "cold" modules still show a few events, and class
-bodies run at import time — the map shows Python as it really is.
-
-**Dark edges (#108) — the blind spot, drawn.** When the map adopts a
-trace, every cross-module call the run actually made is diffed against
-the static routes. Pairs with no static route — dispatch tables,
-callbacks, plugin registries, `importlib` — appear as dashed **⚡ dark
-edges** with call counts, on their own toggle; the banner counts them,
-and modules containing `__import__`/`import_module` call sites wear a
-⚡ flag up front ("target unknown until a run is traced"). The old
-honesty note about unresolvable calls becomes a picture — with its own
-honesty rule attached: the absence of a dark edge is never evidence of
-absence, only the adopted runs' testimony.
-
-**The startup autopsy (#109).** With an fn trace adopted, the walls
-panel grows a **⚙ startup autopsy**: the time inside each module's
-`<module>` frame — its import cost, cumulative on purpose — ranked
-with click-to-spotlight rows and the total in the banner. Slow CLI
-startup is pure import cost and nobody knows whose; the data was in
-every fn trace all along. Line traces carry no wall times, so the
-autopsy is honestly absent there.
 
 ## Part 14 — The reliability lab
 

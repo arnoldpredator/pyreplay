@@ -52,7 +52,7 @@ design lenses, not quotes:
 
 - **The Hotz lens — machine truth, zero overhead.** Show the actual
   interpreter (bytecode, specializations), cost nothing when idle,
-  attach to anything, never fake a number. → catalog #46/#49/#17,
+  attach to anything, never fake a number. → catalog #69/#49/#17,
   and #10 here.
 - **The Torvalds lens — bisect it, diff it, no magic.** Every bug is
   a difference between a world that works and one that doesn't;
@@ -60,7 +60,7 @@ design lenses, not quotes:
   #112/#114, and #3 here.
 - **The Stroustrup lens — types, invariants, resources.** What holds
   always? What type flows here? Who owns this resource and who
-  closed it? → catalog #42/#66/#67, and #5 here.
+  closed it? → catalog #65/#66/#67, and #5 here.
 
 **Effort:** S = a focused day · M = several days · L = a week+, schema
 touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
@@ -232,7 +232,7 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
   (`.pth`/sitecustomize) so any child Python auto-starts a tracer in
   fn mode writing to a shared session directory; merge aligns per-
   process monotonic clocks via the fork/spawn call's timestamp pair
-  (skew honestly labeled ±). Renderer scales via catalog #14.
+  (skew honestly labeled ±). Renderer scales via catalog #30.
 - **Effort:** XL (bootstrap is fiddly, merge is careful work) —
   arguably the largest single unlock on this list for real codebases.
 - **Prior art:** coverage.py's multiprocessing support; VizTracer's
@@ -339,7 +339,7 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
 - **What:** for a chosen never-taken branch: attempt to solve the
   path condition ("what stdin reaches line 84?") via symbolic
   execution of the guarding expressions.
-- **Why:** catalog #45 answers why a line didn't run; this answers what WOULD
+- **Why:** catalog #68 answers why a line didn't run; this answers what WOULD
   make it run — test-input generation for the untested path.
 - **How:** realistically, an optional bridge to CrossHair (Z3-based,
   exists today) fed with our dataflow; a from-scratch solver is a
@@ -348,14 +348,14 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
 - **Prior art:** CrossHair; KLEE; concolic testing (DART/SAGE).
 
 ### 16. Full deterministic record/replay
-- **What:** catalog #18 Tier 3 completed into rr-class fidelity: every
+- **What:** catalog #34 Tier 3 completed into rr-class fidelity: every
   nondeterminism source intercepted so any recorded run re-executes
   identically — enabling reverse-execution debugging on top of our
   replayer.
 - **Why:** the end-state of the whole field: the recording IS the
   bug, forever. Kept here as the north star and marked honestly:
   CPython offers no cheap path to syscall-level capture; the
-  pure-Python subset (catalog #18 Tier 3) is the realistic 80%.
+  pure-Python subset (catalog #34 Tier 3) is the realistic 80%.
 - **Effort:** XL.
 - **Prior art:** rr (Mozilla), Pernosco, UndoDB — all C/C++-world;
   Python's equivalent does not exist, which is exactly why it's
@@ -386,13 +386,13 @@ original brief)*
 ## Deliberately still rejected
 
 - **Per-algorithm authored scenes** — a view earns its place by
-  generality: shape-recognized (catalog #33's doctrine) or bound by a single
-  declared name (catalog #68, catalog #54). One flag is a binding; an artwork per
+  generality: shape-recognized (catalog #56's doctrine) or bound by a single
+  declared name (catalog #91, catalog #77). One flag is a binding; an artwork per
   algorithm is a museum piece, and museums go stale while the shape
   engine keeps working on code nobody curated. The teaching fleet
-  plus tours (catalog #80) carry the pedagogy without bespoke renderers.
+  plus tours (catalog #103) carry the pedagogy without bespoke renderers.
 - **Viewer-side eval / edit-and-continue** — replay must never
-  pretend to compute; recording-side catalog #40/catalog #66 cover the need honestly.
+  pretend to compute; recording-side catalog #63/catalog #89 cover the need honestly.
 - **3D visualization** — aggregation and filtering, not rendering
   heroics (unchanged since the brief).
 - **Rebuilding samplers/profilers** — py-spy and friends exist; we

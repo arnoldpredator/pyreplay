@@ -1392,6 +1392,30 @@ dead or invented panel; every cap and truncation is announced.
 
   [![Feature 132 — observed FSM](screenshots/132-fsm.png)](screenshots/132-fsm.png)
 
+### 113. Ghost branch — the road not taken
+- **Measured:** nothing new — the arm that was NOT entered, derived
+  from the recorded verdict plus the guards map: the `else` a True
+  skipped, the `then` a False skipped, the loop body at this step's
+  exhaust (the 0-iteration invisible loop included), the handler
+  that didn't match. Extents are transitive — a nested `for`/`if`
+  inside the untaken else belongs to it, proven by its controller
+  chain. `while` guards ghost only their body on False (the exit is
+  not an arm); match cases stay unresolved and the tooltip says so.
+- **Displayed:** with the 👻 toggle on (badges menu, off by
+  default), the untaken arm tints hatched-dim with a small ghost on
+  its line numbers — for exactly one step: the ghost lives while the
+  cursor sits on the deciding event and clears on the next.
+- **Why:** it makes absence visible at the moment of decision — the
+  gentle sibling of the whyline, and for a learner the moment
+  branching *clicks*. Nothing we know of does this.
+- **Use case:** step onto `for v in []:` — the body underneath dims
+  with its ghost: the loop that never ran, seen not inferred.
+- **Command:** any line trace → badges menu → 👻 ghost branch.
+- **Screenshot** — the invisible-loop classic, dimmed at its
+  deciding event:
+
+  [![Feature 113 — ghost branch](screenshots/113-ghost-branch.png)](screenshots/113-ghost-branch.png)
+
 ### 77. The whyline — "why didn't this line run?"
 - **Measured:** a static AST pass stamps every line with its innermost
   controlling construct (then/else/loop/loop-else/except/case/def —

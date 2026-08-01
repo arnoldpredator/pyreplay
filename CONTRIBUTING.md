@@ -7,7 +7,7 @@ can pick an item and implement it. Features are numbered **#63 onward**, continu
 in FEATURES.md. Fifteen roadmap items have shipped since the list was
 written (63, 64, 65, 70, 77, 79, 80, 98, 101 v1, 103, 104 Tier 1,
 106, 109, 118, 120 v1) — their rows below are struck through;
-**22 remain unbuilt** (plus the stated remainders of 66/74/75/85/88/89/101/104/119/120/126/127/128/132/134).
+**21 remain unbuilt** (plus the stated remainders of 66/74/75/85/88/89/101/104/119/120/126/127/128/132/134).
 
 ## Start here — how to contribute
 
@@ -119,7 +119,7 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
 | 110 | Two traces side by side, cursors synced | M | ★★ |
 | 111 | Export a panel as video/GIF | M | ★★ |
 | 112 | ~~Sortable table view for list-of-dicts~~ **shipped** | S | ★★ |
-| 113 | Ghost-highlight the untaken branch | S | ★★ |
+| 113 | ~~Ghost-highlight the untaken branch~~ **shipped** | S | ★★ |
 | 114 | Hear the trace (sonification) | M | ★ |
 | 115 | Text bundle of a trace slice | S | ★★ |
 | 116 | Symbolic "what input reaches this line" | XL | ★ |
@@ -886,6 +886,7 @@ software.
   time.
 
 ### 113. Ghost branch — the road not taken
+**Shipped 2026-08-02** — now catalog entry #113 in [FEATURES.md](FEATURES.md): 👻 toggle (off by default) tints the untaken arm hatched-dim for exactly one step — transitive extents from the guards map, while-guards ghost only on False, match cases honestly unresolved.
 - **What:** at any verdict event, faintly highlight the suite that
   was NOT entered (the else that didn't run, the loop body skipped on
   0 iterations) for exactly one step.

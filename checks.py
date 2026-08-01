@@ -2900,6 +2900,82 @@ def _():
         expect(probe in tpl, f"seq contract missing: {probe}")
 
 
+@check("ghost branch: untaken arms, transitive extent, one step (#113)")
+def _():
+    src = fixture("gh113.py", (
+        "def pick(flag, xs):\n"
+        "    while flag > 3:\n"
+        "        flag -= 1\n"
+        "    if flag == 0:\n"
+        "        a = 1\n"
+        "    else:\n"
+        "        for x in xs:\n"
+        "            if x > 2:\n"
+        "                a = x\n"
+        "        a = 9\n"
+        "    return a\n"
+        "pick(1, [5])\n"))
+    p = run_trace(src)
+    g = p["guards"]["gh113.py"]
+    total = len(p["sources"]["gh113.py"].split("\n"))
+
+    def ghost(l_guard, kind, r):
+        # mirror of the viewer's ghostArmLines
+        want = None
+        if kind == "if":
+            owns_loop = any(v[0] == l_guard and v[1] == "loop"
+                            for v in g.values())
+            want = (None if r else "loop") if owns_loop \
+                else ("else" if r else "then")
+        elif kind == "for" and not r:
+            want = "loop"
+        elif kind == "except" and not r:
+            want = "except"
+        if want is None:
+            return []
+        direct = [int(k) for k, v in g.items()
+                  if v[0] == l_guard and v[1] == want]
+        if not direct:
+            return []
+        lo, hi = min(direct), max(direct)
+
+        def reaches(x):
+            cur, hops = g.get(str(x)), 0
+            while cur and hops < 64:
+                if cur[0] == l_guard and cur[1] == want:
+                    return True
+                cur = g.get(str(cur[0]))
+                hops += 1
+            return False
+        while hi + 1 <= total and reaches(hi + 1):
+            hi += 1
+        return list(range(lo, hi + 1))
+
+    expect(ghost(2, "if", False) == [3],
+           f"a False while-verdict ghosts its body: "
+           f"{ghost(2, 'if', False)}")
+    expect(ghost(2, "if", True) == [],
+           "a True while-verdict ghosts nothing — the exit is not "
+           "an arm")
+    expect(ghost(4, "if", True) == [7, 8, 9, 10],
+           f"the untaken else INCLUDES its nested for and if — "
+           f"transitive extent: {ghost(4, 'if', True)}")
+    expect(ghost(4, "if", False) == [5],
+           f"the untaken then: {ghost(4, 'if', False)}")
+    expect(ghost(7, "for", False) == [8, 9],
+           f"a skipped loop body, nested if included: "
+           f"{ghost(7, 'for', False)}")
+
+    with open(os.path.join(HERE, "replayer_template.html"),
+              encoding="utf-8") as fh:
+        tpl = fh.read()
+    for probe in ('data-mach="ghost"', "ghost: false",
+                  "road not taken", "ghostl",
+                  "for exactly one step",
+                  "ghostedEls.forEach(el => el.classList.remove"):
+        expect(probe in tpl, f"ghost surface missing: {probe}")
+
+
 @check("branch verdicts: columns, semantics, the short-circuit (#86)")
 def _():
     if not hasattr(sys, "monitoring"):

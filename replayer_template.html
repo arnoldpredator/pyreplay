@@ -61,6 +61,10 @@
     color: #4a5060; user-select: none;
   }
   .ln.current { background: var(--hl); }
+  .ln.ghostl { opacity: .45; background:
+    repeating-linear-gradient(45deg, #1c2030 0 8px, #14161c 8px 16px); }
+  .ln.ghostl .no::after { content: "👻"; font-size: 8px;
+    margin-left: 2px; }
   .ln.current .no { color: var(--accent); font-weight: 700; }
   #divider {
     width: 5px; flex-shrink: 0; cursor: col-resize;
@@ -798,6 +802,7 @@
         <label><input type="checkbox" data-mach="mro"> MRO panel</label>
         <label><input type="checkbox" data-mach="dun"> dunder hints</label>
         <label><input type="checkbox" data-mach="fullobj"> full objects in line panel</label>
+        <label title="#113: at a verdict event, faintly tint the arm that was NOT entered — the else that didn't run, the loop body skipped on 0 iterations — for exactly one step (if/while/for/except arms; match cases not resolved)"><input type="checkbox" data-mach="ghost"> &#128123; ghost branch (road not taken)</label>
       </div>
     </details>
   </div>
@@ -2827,7 +2832,8 @@ function computeStacks(idx) {
    glyphs on; the wordier panels (MRO, dunder) off. */
 const MACH_KEY = "pyreplay-mach";
 const MACH_DEFAULTS = { alias: true, cell: true, def: true, imp: true,
-                        mro: false, dun: false, fullobj: false };
+                        mro: false, dun: false, fullobj: false,
+                        ghost: false };   // #113: off by default
 let MACH = { ...MACH_DEFAULTS };
 try { MACH = { ...MACH_DEFAULTS,
                ...JSON.parse(localStorage.getItem(MACH_KEY) || "{}") }; }
@@ -4557,6 +4563,53 @@ function brValText(ev) {
   if (v === null) return "was None";
   return "was not None";
 }
+/* #113: the road not taken — at a verdict event, the lines of the
+   arm that was NOT entered, from the guards map. Transitive: a
+   nested construct inside the untaken arm belongs to it (its
+   controller chain passes through the arm). One step only: cleared
+   on every render, so the ghost lives exactly while the cursor sits
+   on the deciding event. */
+let ghostedEls = [];
+function ghostArmLines(ev) {
+  const g = (DATA.guards || {})[ev.f];
+  if (!g || !ev.cond) return [];
+  const L = ev.l, kind = ev.cond.k || "if", r = ev.cond.r;
+  let want = null;
+  if (kind === "if") {
+    // the branch map labels both if and while "if": a guard that
+    // owns a "loop" arm is a while — False skips its body; a real
+    // if ghosts the arm opposite its verdict
+    const ownsLoop = Object.keys(g).some(x =>
+      g[x][0] === L && g[x][1] === "loop");
+    if (ownsLoop) want = r ? null : "loop";
+    else want = r ? "else" : "then";
+  } else if (kind === "for" && !r) {
+    want = "loop";        // includes the 0-iteration invisible loop
+  } else if (kind === "except" && !r) {
+    want = "except";      // the handler that did not match
+  }
+  if (want === null) return [];
+  const memo = {};
+  const reaches = x => {
+    if (x in memo) return memo[x];
+    let cur = g[String(x)], hops = 0;
+    let ok = false;
+    while (cur && hops++ < 64) {
+      if (cur[0] === L && cur[1] === want) { ok = true; break; }
+      cur = g[String(cur[0])];
+    }
+    return (memo[x] = ok);
+  };
+  const direct = Object.keys(g).filter(x =>
+    g[x][0] === L && g[x][1] === want).map(Number);
+  if (!direct.length) return [];
+  let lo = Math.min(...direct), hi = Math.max(...direct);
+  const total = (DATA.sources[ev.f] || "").split("\n").length;
+  while (hi + 1 <= total && reaches(hi + 1)) hi++;
+  const out = [];
+  for (let x = lo; x <= hi; x++) out.push(x);
+  return out;
+}
 function render() {
   const ev = events[idx];
   if (!ev) return;
@@ -4566,8 +4619,19 @@ function render() {
 
   activateFile(ev.f);
   if (highlighted) highlighted.classList.remove("current", "excl");
+  ghostedEls.forEach(el => el.classList.remove("ghostl"));
+  ghostedEls = [];
   const pane = panes[ev.f];
   const lineEl = pane && pane.lineEls[ev.l - 1];
+  if (MACH.ghost && ev.cond && pane) {
+    for (const gl of ghostArmLines(ev)) {
+      const el = pane.lineEls[gl - 1];
+      if (el) {
+        el.classList.add("ghostl");
+        ghostedEls.push(el);
+      }
+    }
+  }
   if (lineEl) {
     lineEl.classList.add("current");
     if (ev.e === "exc") lineEl.classList.add("excl");

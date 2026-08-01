@@ -867,6 +867,13 @@ their original node — no phantom calls), and the 4000-node render cap
 announces itself. Works at both granularities — on an fn-level trace
 of a real codebase it is the whole run's shape in one panel.
 
+**The ghost branch.** Flip 👻 in the badges menu and every verdict
+moment shows what did NOT happen: the untaken arm dims under a
+hatched wash for exactly that one step — the else skipped, the loop
+body that never ran (`for v in []:` finally *looks* like what it is),
+the handler that didn't match. Nested code inside the untaken arm
+dims with it. It clears the instant you step on.
+
 **Sub-line verdicts.** On that same engine, the parts of a line get
 their own truth: every ternary test, every `and`/`or` operand, every
 comprehension `if` records a BRANCH event at its exact columns.

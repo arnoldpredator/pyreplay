@@ -652,6 +652,10 @@
     border-color: var(--changed-text); background: var(--changed-bg);
     color: var(--changed-text);
   }
+  table.rectab th.thsort { cursor: pointer; user-select: none; }
+  table.rectab th.thsort:hover { color: var(--accent);
+    text-decoration: underline; }
+  table.rectab th.thsort.sorted { color: var(--accent); }
   td.gmore, .gmore {
     color: var(--dim); font-style: italic; font-size: 11px; padding: 0 4px;
   }
@@ -1611,6 +1615,7 @@ function viewOptions(enc) {
           (x.c === "int" || x.c === "float") &&
           (x.v === "nan" || !Number.isNaN(parseNum(x.v)))))
       opts.push("bars");
+    if (tableShape(enc)) opts.push("table");   // #112 records
   }
   if (numericScalar(enc)) opts.push("chart");
   opts.push(...graphEligibility(enc));
@@ -2067,6 +2072,130 @@ function renderGrid(enc, old) {
     html += '<tr><th>…</th><td class="gmore" colspan="' + (ncols || 1) +
       '">' + after + " rows after</td></tr>";
   return html + "</table>";
+}
+
+/* #112: the records table — rows-of-records in their native habitat.
+   Offered when every visible row is a dict with the SAME keys (or a
+   tuple/list of the same length). Column sort is DISPLAY order only:
+   the row headers keep the real indices and the note says so; with a
+   windowed container only the visible rows sort — also said. */
+const TABLE_COL_CAP = 14;
+function tableShape(enc) {
+  if ((enc.t !== "list" && enc.t !== "tuple") || !enc.v ||
+      enc.v.length < 2) return null;
+  const rows = enc.v;
+  if (rows.every(r => r && r.t === "dict" && r.v)) {
+    const keys = rows[0].v.map(p => p[0]);
+    const keySig = JSON.stringify(keys.slice().sort());
+    if (keys.length &&
+        rows.every(r =>
+          JSON.stringify(r.v.map(p => p[0]).sort()) === keySig))
+      return { kind: "dict", keys };
+    return null;
+  }
+  // records-as-tuples: same length AND fully visible — a windowed
+  // row would show absent cells as if they were data; refuse instead
+  if (rows.every(r => r && (r.t === "list" || r.t === "tuple") &&
+                 r.v && r.v.length && r.n === rows[0].n &&
+                 r.v.length === r.n))
+    return { kind: "seq", keys: rows[0].v.map((_, i) => String(i)) };
+  return null;
+}
+function tableCellNum(cell) {
+  if (cell && cell.t === "p" && (cell.c === "int" || cell.c === "float")) {
+    const x = parseNum(cell.v);
+    if (!Number.isNaN(x)) return x;
+  }
+  return null;
+}
+function renderTable(enc, old, prefKey) {
+  const shape = tableShape(enc);
+  if (!shape) return renderValue(enc, old);
+  const off = enc.off || 0;
+  const sameType = old !== undefined && old.t === enc.t;
+  const oldAbs = {};
+  if (sameType) {
+    const oldOff = old.off || 0;
+    old.v.forEach((it, i) => { oldAbs[oldOff + i] = it; });
+  }
+  const chi = enc.chi ? new Set(enc.chi) : null;
+  const keys = shape.keys.slice(0, TABLE_COL_CAP);
+  const cut = shape.keys.length - keys.length;
+  const cellOf = (row, k, ki) => shape.kind === "dict"
+    ? (row.v.find(p => p[0] === k) || [])[1]
+    : row.v[ki];
+  // sort pref: "key|a" / "key|d" / ""
+  const sp = (getPref(prefKey + ":sort", "") || "").split("|");
+  const sortKey = sp[0] || "", sortDir = sp[1] === "d" ? -1 : 1;
+  const rows = enc.v.map((row, i) => ({ row, abs: off + i }));
+  let sorted = false;
+  if (sortKey && keys.indexOf(sortKey) >= 0) {
+    const ki = keys.indexOf(sortKey);
+    rows.sort((a, b) => {
+      const ca = cellOf(a.row, sortKey, ki),
+            cb = cellOf(b.row, sortKey, ki);
+      const na = tableCellNum(ca), nb = tableCellNum(cb);
+      let d;
+      if (na !== null && nb !== null) d = na - nb;
+      else d = String(ca && ca.v !== undefined ? ca.v : "")
+        .localeCompare(String(cb && cb.v !== undefined ? cb.v : ""));
+      return (d || a.abs - b.abs) * sortDir;
+    });
+    sorted = true;
+  }
+  let html = '<table class="grid rectab"' + titleAttr(enc) +
+    "><tr><th></th>";
+  for (const k of keys) {
+    const isS = k === sortKey;
+    html += '<th class="thsort' + (isS ? " sorted" : "") +
+      '" data-tkey="' + escapeHtml(k) + '" title="sort by ' +
+      escapeHtml(k) + ' — display order only, the data is not moved">' +
+      escapeHtml(k) + (isS ? (sortDir > 0 ? " ▲" : " ▼") : "") +
+      "</th>";
+  }
+  if (cut > 0) html += "<th>+" + cut + " cols</th>";
+  html += "</tr>";
+  if (off > 0)
+    html += '<tr><th>…</th><td class="gmore" colspan="' + keys.length +
+      '">' + off + " rows before</td></tr>";
+  for (const { row, abs } of rows) {
+    const st = elemChange(row, abs, old, oldAbs, sameType, chi);
+    const oldRow = st.oldItem &&
+      (st.oldItem.t === row.t) ? st.oldItem : null;
+    let anyMarked = false, tds = "";
+    keys.forEach((k, ki) => {
+      const cell = cellOf(row, k, ki);
+      let ch = false;
+      if (old !== undefined) {
+        if (oldRow) {
+          const oldCell = shape.kind === "dict"
+            ? (oldRow.v.find(p => p[0] === k) || [])[1]
+            : oldRow.v[ki];
+          ch = oldCell === undefined ? st.ch
+            : sig(oldCell) !== sig(cell);
+        } else ch = st.ch;
+      }
+      anyMarked = anyMarked || ch;
+      tds += '<td class="gcell' + (ch ? " changed" : "") + '"' +
+        (cell ? titleAttr(cell) : "") + ">" +
+        (cell ? renderValue(cell) : "·") + "</td>";
+    });
+    const thCh = st.ch && !anyMarked;
+    html += "<tr><th" + (thCh ? ' class="changed"' : "") + ">" + abs +
+      "</th>" + tds + "</tr>";
+  }
+  const after = enc.n - off - enc.v.length;
+  if (after > 0)
+    html += '<tr><th>…</th><td class="gmore" colspan="' + keys.length +
+      '">' + after + " rows after</td></tr>";
+  html += "</table>";
+  if (sorted)
+    html += '<div class="gnote">sorted by ' + escapeHtml(sortKey) +
+      " for DISPLAY — the data order is unchanged " +
+      "(row numbers tell the truth)" +
+      (off > 0 || after > 0 ? "; only the visible window sorts" : "") +
+      ". Click the header to flip or a third time to clear.</div>";
+  return html;
 }
 
 function renderBars(enc, old) {
@@ -4594,6 +4723,7 @@ function render() {
       let body;
       try {
         body = view === "grid" ? renderGrid(r.enc, r.old)
+             : view === "table" ? renderTable(r.enc, r.old, prefKey)
              : view === "bars" ? renderBars(r.enc, r.old)
              : view === "graph" ? renderGraph(r.enc, r.old, "graph", ov)
              : view === "edges" ? renderGraph(r.enc, r.old, "edges", ov)
@@ -5085,6 +5215,22 @@ $("vars").addEventListener("mousedown", e => {
 $("vars").addEventListener("click", e => {
   const t = e.target;
   if (!t.classList) return;
+  const th = t.closest && t.closest(".thsort");
+  if (th) {                     // #112: none -> asc -> desc -> none
+    const row = th.closest(".vrow");
+    const nameEl = row && row.querySelector(".viewsel");
+    if (nameEl) {
+      const prefKey = nameEl.dataset.key + ":sort";
+      const cur = getPref(prefKey, "");
+      const k = th.dataset.tkey;
+      const next = cur === k + "|a" ? k + "|d"
+        : cur === k + "|d" ? "" : k + "|a";
+      try { localStorage.setItem(VIEW_KEY + prefKey, next); }
+      catch (err) {}
+      render();
+    }
+    return;
+  }
   if (t.classList.contains("vprev") || t.classList.contains("vnext")) {
     const list = changesFor(t.dataset.var, eventFrame[idx]);
     let target = null;

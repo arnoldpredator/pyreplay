@@ -855,6 +855,14 @@ their original node — no phantom calls), and the 4000-node render cap
 announces itself. Works at both granularities — on an fn-level trace
 of a real codebase it is the whole run's shape in one panel.
 
+**The records table.** A list of dicts with uniform keys (or of
+same-length tuples) gains a **table** option in its view select: one
+column per key, the changed cell highlighted alone at each event,
+window honesty inherited. Column headers sort — display only: the row
+numbers keep the data's true order and the note under the table says
+so. Query rows, CSV rows, API responses: read them as the table they
+are, while the diff machinery keeps working per cell.
+
 **The sequence diagram.** The **Sequence** panel answers the classic
 onboarding question — who talks to whom, in what order — from the
 same call/return events: lifelines are the modules acting in a

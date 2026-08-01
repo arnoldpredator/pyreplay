@@ -758,6 +758,38 @@ dead or invented panel; every cap and truncation is announced.
 
   [![Feature 23 — alt views](screenshots/23-alt-views.png)](screenshots/23-alt-views.png)
 
+### 112. The records table — rows-of-records in their native habitat
+- **Measured:** nothing new — a `table` view offered by shape: every
+  visible row a dict with the SAME key set (compared exactly), or a
+  tuple of the same, fully visible length. Ragged key sets refuse —
+  no invented columns; windowed inner tuples refuse — an absent cell
+  must never read as data.
+- **Displayed:** a real table beside `cells`/`grid` in the view
+  select: one column per key (capped at 14, the cut announced), one
+  row per record with its true index as the row header, the changed
+  cell highlighted alone — dict rows diff by key against the old
+  row, tuple rows positionally — and the container's `+K rows
+  before/after` windowing honesty inherited. Click a column header
+  to sort: ascending, descending, off. Sorting is DISPLAY order
+  only; the row numbers scramble (the honest tell) and the note
+  under the table says it verbatim — the data order is unchanged,
+  and with a windowed container "only the visible window sorts".
+- **Why:** rows-of-records is THE shape of real program data —
+  query results, CSV rows, API responses — and nested cells render
+  it as noise. A table is its native habitat, and per-cell diffing
+  across time is the part no dataframe viewer has.
+- **Use case:** an orders list where `restock()` mutates one record:
+  at the mutation event the table lights exactly one `qty` cell;
+  sort by price to read the table your way while the row indices
+  keep telling the truth about where the data actually lives.
+- **Command:** trace anything holding a uniform list-of-dicts →
+  the variable's view select gains **table**.
+- **Screenshot** — the restock moment, sorted by price descending:
+  the mutated cell lit, the row indices scrambled, the honesty note
+  under the table:
+
+  [![Feature 112 — records table](screenshots/112-records-table.png)](screenshots/112-records-table.png)
+
 ### 24. Graph view — generic shape recognition
 - **Measured:** five adjacency shapes recognized with zero algorithm
   knowledge: `{node: [neighbors]}`, weighted `{u: {v: w}}` (weights on

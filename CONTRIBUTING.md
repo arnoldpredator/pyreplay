@@ -7,7 +7,7 @@ can pick an item and implement it. Features are numbered **#63 onward**, continu
 in FEATURES.md. Fifteen roadmap items have shipped since the list was
 written (63, 64, 65, 70, 77, 79, 80, 98, 101 v1, 103, 104 Tier 1,
 106, 109, 118, 120 v1) — their rows below are struck through;
-**31 remain unbuilt** (plus the stated remainders of 66/74/75/85/88/89/101/104/119/120/126/127/128/132/134).
+**30 remain unbuilt** (plus the stated remainders of 66/74/75/85/88/89/101/104/119/120/126/127/128/132/134).
 
 ## Start here — how to contribute
 
@@ -118,7 +118,7 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
 | 109 | ~~Query bar over all events~~ **shipped** | — | ★★★ |
 | 110 | Two traces side by side, cursors synced | M | ★★ |
 | 111 | Export a panel as video/GIF | M | ★★ |
-| 112 | Sortable table view for list-of-dicts | S | ★★ |
+| 112 | ~~Sortable table view for list-of-dicts~~ **shipped** | S | ★★ |
 | 113 | Ghost-highlight the untaken branch | S | ★★ |
 | 114 | Hear the trace (sonification) | M | ★ |
 | 115 | Text bundle of a trace slice | S | ★★ |
@@ -866,6 +866,7 @@ software.
   execution state.
 
 ### 112. Records table view
+**Shipped 2026-08-01** — now catalog entry #112 in [FEATURES.md](FEATURES.md): `table` in the view select for uniform list-of-dicts (exact key-set equality) and same-length fully-visible tuples — per-cell diff highlight, 14-column cap announced, sortable headers that reorder DISPLAY only (true indices kept, note verbatim, windowed containers say "only the visible window sorts").
 - **What:** a `table` view for list-of-dicts / list-of-tuples with
   uniform keys: sortable columns, the changed cell highlighted, +K
   windowing rules inherited.

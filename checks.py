@@ -2904,6 +2904,85 @@ def _():
         expect(probe in tpl, f"seq contract missing: {probe}")
 
 
+@check("records table: shape rule, per-cell diff, sort honesty (#112)")
+def _():
+    src = fixture("rec112.py", (
+        "def restock(orders, sku, amount):\n"
+        "    for o in orders:\n"
+        "        if o['sku'] == sku:\n"
+        "            o['qty'] += amount\n"
+        "            o['status'] = 'restocked'\n"
+        "    return orders\n"
+        "\n"
+        "orders = [\n"
+        "    {'sku': 'KB', 'qty': 4, 'status': 'open'},\n"
+        "    {'sku': 'MN', 'qty': 1, 'status': 'open'},\n"
+        "]\n"
+        "restock(orders, 'MN', 5)\n"
+        "ragged = [{'a': 1}, {'b': 2}]\n"
+        "tuples = [(1, 2.5), (3, 4.5)]\n"))
+    p = run_trace(src)
+    events = p["events"]
+
+    def uniform_dicts(enc):
+        # mirror of the viewer's tableShape (dict kind)
+        if enc.get("t") not in ("list", "tuple") or len(enc.get("v") or []) < 2:
+            return None
+        rows = enc["v"]
+        if all(r and r.get("t") == "dict" for r in rows):
+            keys = [pair[0] for pair in rows[0]["v"]]
+            if keys and all(sorted(pair[0] for pair in r["v"]) ==
+                            sorted(keys) for r in rows):
+                return keys
+        return None
+
+    encs = [e["ch"]["orders"] for e in events
+            if "orders" in e.get("ch", {}) and e["fn"] == "restock"]
+    expect(len(encs) >= 3, f"entry + two mutations: {len(encs)}")
+    keys = uniform_dicts(encs[0])
+    expect(keys is not None and len(keys) == 3,
+           f"uniform list-of-dicts must qualify for the table: {keys}")
+
+    def cell_diffs(a, b):
+        out = []
+        for i, (ra, rb) in enumerate(zip(a["v"], b["v"])):
+            da, db = dict(ra["v"]), dict(rb["v"])
+            for k in da:
+                if json.dumps(da[k], sort_keys=True) != \
+                        json.dumps(db.get(k), sort_keys=True):
+                    out.append((i, k))
+        return out
+
+    expect(cell_diffs(encs[0], encs[1]) == [(1, "'qty'")],
+           f"the += must change EXACTLY row 1's qty cell: "
+           f"{cell_diffs(encs[0], encs[1])}")
+    expect(cell_diffs(encs[1], encs[2]) == [(1, "'status'")],
+           f"the assignment must change EXACTLY row 1's status cell: "
+           f"{cell_diffs(encs[1], encs[2])}")
+
+    ragged = next(e["ch"]["ragged"] for e in events
+                  if "ragged" in e.get("ch", {}))
+    expect(uniform_dicts(ragged) is None,
+           "differing key sets must NOT qualify — no invented columns")
+    tuples = next(e["ch"]["tuples"] for e in events
+                  if "tuples" in e.get("ch", {}))
+    rows = tuples["v"]
+    expect(all(r["t"] == "tuple" and len(r["v"]) == r["n"] == 2
+               for r in rows),
+           "records-as-tuples: same length, fully visible — the seq "
+           "kind's precondition")
+
+    with open(os.path.join(HERE, "replayer_template.html"),
+              encoding="utf-8") as fh:
+        tpl = fh.read()
+    for probe in ('opts.push("table")', "thsort",
+                  "for DISPLAY — the data order is unchanged",
+                  "row numbers tell the truth",
+                  "only the visible window sorts",
+                  "TABLE_COL_CAP = 14"):
+        expect(probe in tpl, f"table contract missing: {probe}")
+
+
 @check("grammar skins: NS nesting mirror + flowchart contract (#138)")
 def _():
     p = run_trace(os.path.join(HERE, "example_control.py"),

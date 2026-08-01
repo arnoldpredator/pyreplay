@@ -606,6 +606,25 @@
     background: #efe6c2; border-radius: 2px; cursor: pointer;
     transform: translateX(-2px); }
   .nmark:hover { background: #fffbe8; }
+  #tourbar { display: none; padding: 6px 14px; background: #1d2a3a;
+    border-top: 2px solid var(--accent); font-size: 13px;
+    color: var(--text); }
+  #tourbar #tourpos { color: var(--accent); font-weight: 700;
+    margin-right: 10px; }
+  #tourbar button { margin-left: 6px; padding: 1px 10px; }
+  .tourrow { padding: 2px 0; cursor: pointer; color: var(--text); }
+  .tourrow:hover { color: var(--accent); }
+  .tourrow .annev { color: var(--dim); font-size: 10px;
+    margin-right: 6px; }
+  .tourrow .anndel { color: var(--dim); padding: 0 5px; }
+  .tourrow .anndel:hover { color: var(--err); }
+  #tourbox { border-top: 1px solid var(--border); padding: 6px 10px;
+    font-size: 11px; color: var(--dim); }
+  #tourbox summary { cursor: pointer; color: var(--text); }
+  #tourbox input[type="text"], #tourbox input:not([type]) {
+    background: #1c1f28; color: var(--text);
+    border: 1px solid var(--border); border-radius: 4px;
+    padding: 2px 6px; font: inherit; }
   #notebar { display: none; padding: 5px 14px; background: #2a2415;
     border-top: 1px solid var(--border); font-size: 12px;
     color: #efe6c2; }
@@ -885,6 +904,26 @@
         <input type="file" id="annfile" accept=".json" style="display:none">
         <span id="annnote" class="anote"></span></div>
     </details>
+    <details id="tourbox" title="#108: an ordered walkthrough of THIS trace — stops carry a moment, a view state and a narration; the sidecar makes it a lesson someone else can replay">
+      <summary>Tour <span id="tourstat"></span></summary>
+      <div class="annctl">
+        <input id="tourtitle" size="24" placeholder="tour title">
+      </div>
+      <div class="annctl">
+        <input id="tournote" size="34"
+          placeholder="narration for a stop at THIS moment">
+        <label title="#128: arriving at this stop arms the prediction gate — the learner commits a claim before stepping on"><input type="checkbox" id="tourpredict"> 🔮</label>
+        <button id="touradd">add stop @ here</button>
+      </div>
+      <div id="tourlist"></div>
+      <div class="annctl">
+        <button id="tourplay">▶ play</button>
+        <button id="tourexport">export sidecar</button>
+        <button id="tourimport">import</button>
+        <input type="file" id="tourfile" accept=".json" style="display:none">
+        <span id="tourmsg" class="anote"></span>
+      </div>
+    </details>
     <details id="anatbox" title="#85: what this line IS to the interpreter — the syntax tree above it, the instructions below it">
       <summary>Anatomy <span id="anatname"></span></summary>
       <div id="anatomy"></div>
@@ -899,6 +938,15 @@
   P/Esc exits · motion between events is interpolation —
   only the endpoints are recorded truth</div>
 <footer>
+  <div id="tourbar">
+    <span id="tourpos"></span>
+    <span id="tourtext"></span>
+    <span style="float:right">
+      <button id="tourprev">⟨ prev</button>
+      <button id="tournext">next ⟩</button>
+      <button id="tourexit" title="Esc">✕</button>
+    </span>
+  </div>
   <div id="notebar"><span id="notelbl"></span>
     <input id="noteinput" size="70"
       placeholder="what matters at this moment? Enter saves · empty deletes · Esc closes">
@@ -5666,6 +5714,157 @@ $("annfile").addEventListener("change", () => {
 });
 renderAnn();
 
+/* #108: guided tours — executable lessons. A tour is an ordered
+   list of stops; each stop is a MOMENT (the #106 hash carries event
+   + view state whole) plus a narration, optionally a #128
+   prediction stop. Author mode is just "save current state as
+   stop"; playing one sets the saved hash and the existing restore
+   machinery does the rest. */
+const TOUR_KEY = "pyreplay-tour:" + DATA.script + ":" + events.length;
+let TOURDATA = { title: "", stops: [] };
+try { TOURDATA = { title: "", stops: [],
+  ...JSON.parse(localStorage.getItem(TOUR_KEY) || "{}") }; }
+catch (e) {}
+let tourCur = -1;          // -1 = not playing
+function tourSave() {
+  try { localStorage.setItem(TOUR_KEY, JSON.stringify(TOURDATA)); }
+  catch (e) {}
+}
+function renderTour() {
+  $("tourstat").textContent = TOURDATA.stops.length
+    ? "· " + TOURDATA.stops.length + " stop(s)" : "";
+  $("tourtitle").value = TOURDATA.title || "";
+  $("tourlist").innerHTML = TOURDATA.stops.length
+    ? TOURDATA.stops.map((st, k) =>
+        '<div class="tourrow" data-k="' + k + '"><span class="annev">' +
+        (k + 1) + " · ev " + (st.ev + 1) + "</span>" +
+        (st.predict ? "🔮 " : "") + esc2(st.note || "(no narration)") +
+        ' <span class="anndel" data-del="' + k +
+        '" title="remove this stop">✕</span></div>').join("")
+    : '<div class="anote">no stops — park anywhere, write a line ' +
+      "of narration, press add. Stops save the WHOLE view state " +
+      "(event, variable, view) via the deep-link hash.</div>";
+}
+function drawTourBar() {
+  const bar = $("tourbar");
+  if (tourCur < 0 || !TOURDATA.stops.length) {
+    bar.style.display = "none";
+    return;
+  }
+  const st = TOURDATA.stops[tourCur];
+  $("tourpos").textContent = (TOURDATA.title || "tour") + " — stop " +
+    (tourCur + 1) + "/" + TOURDATA.stops.length;
+  $("tourtext").innerHTML = (st.predict
+    ? '<span style="color:#d38aea">🔮 predict before stepping — ' +
+      "the gate is armed; commit a claim, then step to score it. " +
+      "</span>" : "") + esc2(st.note || "");
+  $("tourprev").disabled = tourCur === 0;
+  $("tournext").textContent =
+    tourCur === TOURDATA.stops.length - 1 ? "finish ⟩" : "next ⟩";
+  bar.style.display = "block";
+}
+function tourGoto(k) {
+  if (!TOURDATA.stops.length) return;
+  if (k >= TOURDATA.stops.length) {   // finished
+    tourCur = -1;
+    drawTourBar();
+    return;
+  }
+  tourCur = Math.max(0, k);
+  const st = TOURDATA.stops[tourCur];
+  stop();
+  if (st.hash && location.hash !== st.hash) {
+    location.hash = st.hash;          // hashchange applies + renders
+  } else {
+    idx = Math.max(0, Math.min(events.length - 1, st.ev));
+    if (st.hash) applyHash();
+    render();
+  }
+  if (st.predict && !gateOn) $("btn-gate").onclick();
+  drawTourBar();
+}
+$("touradd").onclick = () => {
+  const note = $("tournote").value.trim();
+  TOURDATA.title = $("tourtitle").value.trim();
+  TOURDATA.stops.push({ ev: idx, hash: location.hash || "#ev=" +
+    (idx + 1), note, predict: $("tourpredict").checked });
+  TOURDATA.stops.sort((a, b) => a.ev - b.ev);
+  $("tournote").value = "";
+  $("tourpredict").checked = false;
+  tourSave();
+  renderTour();
+};
+$("tourtitle").addEventListener("change", () => {
+  TOURDATA.title = $("tourtitle").value.trim();
+  tourSave();
+  renderTour();
+});
+$("tourlist").addEventListener("click", e => {
+  const d = e.target.closest("[data-del]");
+  if (d) {
+    TOURDATA.stops.splice(+d.dataset.del, 1);
+    tourSave();
+    renderTour();
+    if (tourCur >= TOURDATA.stops.length) tourCur = -1;
+    drawTourBar();
+    return;
+  }
+  const r = e.target.closest("[data-k]");
+  if (r) tourGoto(+r.dataset.k);
+});
+$("tourplay").onclick = () => tourGoto(0);
+$("tourprev").onclick = () => tourGoto(tourCur - 1);
+$("tournext").onclick = () => tourGoto(tourCur + 1);
+$("tourexit").onclick = () => { tourCur = -1; drawTourBar(); };
+$("tourexport").onclick = () => {
+  const doc = { script: DATA.script, events: events.length,
+    title: TOURDATA.title,
+    stops: TOURDATA.stops.map(st => ({ ev: st.ev + 1, hash: st.hash,
+      note: st.note, predict: !!st.predict })) };
+  const blob = new Blob([JSON.stringify(doc, null, 1)],
+    { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "pyreplay-tour_" +
+    DATA.script.replace(/[^A-Za-z0-9_.-]+/g, "_") + ".json";
+  a.click();
+};
+$("tourimport").onclick = () => $("tourfile").click();
+$("tourfile").addEventListener("change", () => {
+  const f = $("tourfile").files[0];
+  if (!f) return;
+  const rd = new FileReader();
+  rd.onload = () => {
+    try {
+      const doc = JSON.parse(rd.result);
+      let skipped = 0;
+      const stops = [];
+      (doc.stops || []).forEach(st => {
+        const j = (st.ev | 0) - 1;    // sidecar evs are 1-based too
+        if (j >= 0 && j < events.length)
+          stops.push({ ev: j, hash: st.hash || "#ev=" + (j + 1),
+            note: String(st.note || ""), predict: !!st.predict });
+        else skipped++;
+      });
+      TOURDATA = { title: String(doc.title || ""), stops };
+      tourSave();
+      renderTour();
+      $("tourmsg").textContent = stops.length + " stop(s) loaded" +
+        (skipped ? " · " + skipped + " outside this trace — " +
+          "skipped, never clamped" : "") +
+        (doc.events && doc.events !== events.length
+          ? " · ⚠ authored against a " + doc.events +
+            "-event trace (this one has " + events.length +
+            ") — stops may not mean the same moments" : "");
+    } catch (err) {
+      $("tourmsg").textContent = "unreadable tour: " + err;
+    }
+    $("tourfile").value = "";
+  };
+  rd.readAsText(f);
+});
+renderTour();
+
 /* density strip: the trace's shape before you scrub it — colored by
    which FILE each region of the run lived in (hue per file) */
 (function () {
@@ -5998,6 +6197,7 @@ document.addEventListener("keydown", e => {
   else if (e.key === "Escape") {
     if (SLICE) exitSlice();
     else if (TAINT) exitTaint();
+    else if (tourCur >= 0) { tourCur = -1; drawTourBar(); }
     else if (document.body.classList.contains("presenting"))
       togglePresent();
   }

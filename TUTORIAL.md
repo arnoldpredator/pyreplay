@@ -867,6 +867,16 @@ their original node — no phantom calls), and the 4000-node render cap
 announces itself. Works at both granularities — on an fn-level trace
 of a real codebase it is the whole run's shape in one panel.
 
+**Guided tours.** Open **Tour**, park at a moment worth teaching,
+set the view you want the learner to see, write one line of
+narration, press *add stop* — repeat, export the sidecar, and hand
+someone a lesson they can replay: each stop restores the exact event
+AND view through the deep link, the narration bar walks them
+stop-by-stop, and a 🔮 prediction stop arms the gate so they commit a
+claim before stepping — a walkthrough with a grade. Try the bundled
+one: trace `bubble_sort.py`, import
+`tours/pyreplay-tour_bubble_sort.py.json`, press ▶ play.
+
 **Type flow.** Every name's observed types are tallied across its
 changes: a row that ever held more than one type wears **⚠τ**, the
 tooltip shows the histogram, and a click lands on the first moment of

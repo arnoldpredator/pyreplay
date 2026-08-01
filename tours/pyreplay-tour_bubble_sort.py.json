@@ -1,0 +1,22 @@
+{
+ "script": "bubble_sort.py",
+ "events": 37,
+ "title": "bubble sort, watched properly",
+ "stops": [
+  {"ev": 5, "hash": "#ev=5&var=nums&view=bars",
+   "note": "The list arrives as bars: 5, 2, 4, 1. Watch the tallest bars drift right — that is the whole algorithm.",
+   "predict": false},
+  {"ev": 9, "hash": "#ev=9&var=nums&view=bars",
+   "note": "First comparison: nums[0]=5 vs nums[1]=2. The verdict above says True — a swap is coming.",
+   "predict": false},
+  {"ev": 11, "hash": "#ev=11&var=nums&view=bars",
+   "note": "The first swap landed: 2, 5, 4, 1. The changed cells glow. Every pass bubbles one more maximum to its place.",
+   "predict": false},
+  {"ev": 20, "hash": "#ev=20&var=nums&view=bars",
+   "note": "A comparison that says False — no swap. Predict the next line before stepping: does j advance, or does the pass end?",
+   "predict": true},
+  {"ev": 34, "hash": "#ev=34&var=nums&view=bars",
+   "note": "bubble_sort returns [1, 2, 4, 5]. Five swaps total — count the amber moments on the strip behind you.",
+   "predict": false}
+ ]
+}

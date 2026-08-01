@@ -634,6 +634,39 @@ dead or invented panel; every cap and truncation is announced.
 
   [![Feature 115 — explain bundle](screenshots/115-explain-bundle.png)](screenshots/115-explain-bundle.png)
 
+### 108. Guided tours — executable lessons
+- **Measured:** nothing — a tour is an ordered list of stops, and a
+  stop is a MOMENT plus the whole view state, captured through the
+  deep-link hash (event, variable, view, overlay) with a line of
+  narration and an optional 🔮 prediction flag.
+- **Displayed:** the Tour panel — author mode is literally "save
+  current state as stop": park anywhere, set the view you want the
+  learner to see, write one line, add. Play mode walks the stops
+  with a narration bar (title — stop k/N, prev/next/finish, Esc
+  exits); playing a stop sets its saved hash and the restore
+  machinery does the rest. A **prediction stop** arms the #128 gate
+  on arrival: the learner commits a claim before stepping, and the
+  walkthrough becomes an exercise with a grade. Sidecars
+  export/import with the #107 contract — 1-based events,
+  out-of-range stops skipped never clamped, event-count mismatches
+  warned. Ships with `tours/pyreplay-tour_bubble_sort.py.json`,
+  five stops over the teaching fleet's bubble sort; the check
+  re-traces it and fails if the lesson drifts stale.
+- **Why:** the project's teaching soul, weaponized: onboarding a
+  codebase becomes handing someone three tours instead of a wiki —
+  and the tour never lies, because every stop is the recorded trace
+  underneath.
+- **Use case:** "watch the first swap land — stop 3/5" opens in
+  bars view at event 11 with the changed bars glowing; stop 4 arms
+  the gate and asks the learner to predict the next line before
+  stepping.
+- **Command:** trace `bubble_sort.py` → open the trace → **Tour →
+  import** the bundled JSON → ▶ play.
+- **Screenshot** — stop 3/5 narrating the first swap over the bars
+  view it restored:
+
+  [![Feature 108 — tours](screenshots/108-tours.png)](screenshots/108-tours.png)
+
 ### 107. Annotations — the trace as the notebook
 - **Measured:** nothing — a pure replayer medium. Notes live in
   localStorage keyed to this exact trace (script + event count), and

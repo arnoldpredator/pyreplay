@@ -2900,6 +2900,50 @@ def _():
         expect(probe in tpl, f"seq contract missing: {probe}")
 
 
+@check("tours: contract, sidecar honesty, bundled tour pinned (#108)")
+def _():
+    with open(os.path.join(HERE, "replayer_template.html"),
+              encoding="utf-8") as fh:
+        tpl = fh.read()
+    for probe in ('const TOUR_KEY = "pyreplay-tour:" + DATA.script',
+                  "pyreplay-tour_",
+                  "sidecar evs are 1-based too",
+                  "skipped, never clamped",
+                  "stops may not mean the same moments",
+                  'tourCur >= 0) { tourCur = -1; drawTourBar(); }',
+                  'if (st.predict && !gateOn) $("btn-gate").onclick()',
+                  "location.hash = st.hash",
+                  'id="tourbar"', 'id="touradd"'):
+        expect(probe in tpl, f"tour contract missing: {probe}")
+
+    # the bundled lesson must stay TRUE: same script, same event
+    # count, every stop inside the trace it narrates
+    tour_path = os.path.join(HERE, "tours",
+                             "pyreplay-tour_bubble_sort.py.json")
+    with open(tour_path, encoding="utf-8") as fh:
+        tour = json.load(fh)
+    expect(tour["script"] == "bubble_sort.py", "tour names its script")
+    p = run_trace(os.path.join(HERE, "bubble_sort.py"), name="tour108")
+    expect(tour["events"] == len(p["events"]),
+           f"the bundled tour was authored against a "
+           f"{tour['events']}-event trace but bubble_sort now "
+           f"records {len(p['events'])} — re-author the stops")
+    evs = [st["ev"] for st in tour["stops"]]
+    expect(evs == sorted(evs) and all(1 <= e <= len(p["events"])
+                                      for e in evs),
+           f"stops ordered and inside the trace: {evs}")
+    expect(all(st["hash"].startswith("#ev=") for st in tour["stops"]),
+           "every stop carries a deep-link hash")
+    expect(sum(1 for st in tour["stops"] if st.get("predict")) == 1,
+           "exactly one prediction stop in the bundled lesson")
+    # the narrated moments are real: stop 3 sits ON a nums change
+    swap_stop = tour["stops"][2]
+    ev = p["events"][swap_stop["ev"] - 1]
+    expect("nums" in ev.get("ch", {}),
+           f"stop 3 narrates the first swap — the event must BE one: "
+           f"{ev}")
+
+
 @check("type-flow: observed histograms, first moments, stability (#82)")
 def _():
     src = fixture("tf82.py", (

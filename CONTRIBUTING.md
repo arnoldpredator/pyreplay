@@ -7,7 +7,7 @@ can pick an item and implement it. Features are numbered **#63 onward**, continu
 in FEATURES.md. Fifteen roadmap items have shipped since the list was
 written (63, 64, 65, 70, 77, 79, 80, 98, 101 v1, 103, 104 Tier 1,
 106, 109, 118, 120 v1) — their rows below are struck through;
-**18 remain unbuilt** (plus the stated remainders of 66/74/75/85/88/89/101/104/119/120/126/127/128/132/134).
+**17 remain unbuilt** (plus the stated remainders of 66/74/75/85/88/89/101/104/119/120/126/127/128/132/134).
 
 ## Start here — how to contribute
 
@@ -114,7 +114,7 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
 | 105 | Schema spec + import/export bridges | M | ★★ |
 | 106 | ~~Deep links: a URL that opens a moment~~ **shipped** | — | ★★★ |
 | 107 | ~~Notes pinned to events; exportable~~ **shipped** | M | ★★ |
-| 108 | Recorded walkthroughs (executable lessons) | M | ★★ |
+| 108 | ~~Recorded walkthroughs (executable lessons)~~ **shipped** | M | ★★ |
 | 109 | ~~Query bar over all events~~ **shipped** | — | ★★★ |
 | 110 | Two traces side by side, cursors synced | M | ★★ |
 | 111 | Export a panel as video/GIF | M | ★★ |
@@ -829,6 +829,7 @@ software.
 - **Prior art:** PDF annotations; Pernosco's shared notes.
 
 ### 108. Guided tours — executable lessons
+**Shipped 2026-08-02** — now catalog entry #108 in [FEATURES.md](FEATURES.md): Tour panel (save-current-state-as-stop authoring, hash-restored playback, narration bar), 🔮 prediction stops arm the #128 gate (its stated remainder, landed), sidecar with the #107 honesty contract, bundled bubble-sort lesson pinned by the check against drift.
 - **What:** an ordered sequence of annotated stops (#107 + #106) saved
   as a tour: the replayer gains "next stop" navigation and a narration
   box — a recorded walkthrough someone else can replay.
@@ -1228,7 +1229,7 @@ per algorithm.
 
 ### 128. The prediction gate
 *(belongs with Section 7 — the replayer as a medium)*
-**Shipped 2026-08-01** — now catalog entry #128 in [FEATURES.md](FEATURES.md): 🔮 gate bar with three claim types (next line / variable value or unchanged / loop total from recorded verdicts), gated step controls with counted unscored skips, per-script localStorage ledger with hit rate by type + streak, JSON sidecar export. What remains: prediction stops inside tours — when #108 exists.
+**Shipped 2026-08-01** — now catalog entry #128 in [FEATURES.md](FEATURES.md): 🔮 gate bar with three claim types (next line / variable value or unchanged / loop total from recorded verdicts), gated step controls with counted unscored skips, per-script localStorage ledger with hit rate by type + streak, JSON sidecar export. The stated remainder (prediction stops inside tours) landed with #108 on 2026-08-02.
 - **What:** a replayer mode in which the next state is hidden behind a
   curtain until you commit a claim — "this verdict is False", "this
   loop runs 7 times", "`total` becomes 42" — which is then scored

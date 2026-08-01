@@ -7,7 +7,7 @@ can pick an item and implement it. Features are numbered **#63 onward**, continu
 in FEATURES.md. Fifteen roadmap items have shipped since the list was
 written (63, 64, 65, 70, 77, 79, 80, 98, 101 v1, 103, 104 Tier 1,
 106, 109, 118, 120 v1) — their rows below are struck through;
-**33 remain unbuilt** (plus the stated remainders of 66/74/75/85/88/89/101/104/119/120/126/127/128/132/134).
+**32 remain unbuilt** (plus the stated remainders of 66/74/75/85/88/89/101/104/119/120/126/127/128/132/134).
 
 ## Start here — how to contribute
 
@@ -142,7 +142,7 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
 | 133 | ~~Recursion tree view~~ **shipped** | S | ★★ |
 | 134 | ~~Subproblem DAG (memo dependency view)~~ **shipped (cross-frame edges remain with #75)** | M | ★★ |
 | 135 | ~~Motion layer (tweened transitions, honest)~~ **shipped** | M | ★★ |
-| 136 | Sequence diagram — lifelines from the log | M | ★★★ |
+| 136 | ~~Sequence diagram — lifelines from the log~~ **shipped** | M | ★★★ |
 | 137 | ~~Observed decision table (guard truth summary)~~ **shipped** | S | ★★ |
 | 138 | Classic grammar skins: flowchart / structogram | S–M | ★ |
 
@@ -1443,6 +1443,7 @@ and two small completions:
 
 ### 136. The sequence diagram — lifelines from the log
 *(belongs with Section 7 — the replayer as a medium)*
+**Shipped 2026-08-01** — now catalog entry #136 in [FEATURES.md](FEATURES.md): the Sequence panel — window select (chapter / frame extent / flanking bookmarks / whole run), module-or-class lifelines caller-first, arrows in event order with the corner honesty, activation bars with exception red and open-at-window-end hollow, imports as module→module arrows, caps 12/400 announced. Rides the #133 projection; zero schema change.
 - **What:** a `seq` view over a WINDOW of the trace (a chapter, a
   selection, or between two bookmarks — a whole run is too tall and
   the cap says so): lifelines = the modules (or classes, where the

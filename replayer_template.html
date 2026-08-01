@@ -341,6 +341,36 @@
   #treelevels { margin: 4px 0; color: var(--dim); font-size: 10px;
     line-height: 1.7; }
   #treelevels b { color: var(--accent); font-weight: 600; }
+  /* #136: the sequence diagram */
+  #seqbox { border-top: 1px solid var(--border); padding: 6px 10px;
+    font-size: 11px; color: var(--dim); }
+  #seqbox summary { cursor: pointer; color: var(--text); }
+  #seqbox #seqstat { color: var(--dim); font-weight: 400; }
+  #seqctl { margin: 4px 0; }
+  #seqctl select { font-size: 10px; padding: 0 2px; }
+  #seqdiag { max-height: 380px; overflow: auto; background: #1c2130;
+    border: 1px solid var(--border); border-radius: 6px;
+    margin-top: 3px; }
+  .sqlife { stroke: #3a4157; stroke-dasharray: 3 3; }
+  .sqhead { fill: var(--text); font-size: 10px; font-weight: 600;
+    text-anchor: middle; }
+  .sqsub { fill: var(--dim); font-size: 8px; text-anchor: middle; }
+  .sqact { fill: #303a55; stroke: #9db0d8; stroke-width: .8; }
+  .sqact.exc { fill: #4a2430; stroke: var(--err); }
+  .sqact.openb { stroke-dasharray: 2 2; fill: #262d42; }
+  .sqar { cursor: pointer; }
+  .sqline { stroke: #93a1c0; stroke-width: 1.3; fill: none; }
+  .sqah { fill: #93a1c0; }
+  .sqdot { fill: var(--dim); }
+  .sqfn { fill: #d6d9e0; font-size: 9px; text-anchor: middle; }
+  .sqar.exc .sqline { stroke: var(--err); }
+  .sqar.exc .sqah, .sqar.exc .sqfn { fill: var(--err); }
+  .sqar:hover .sqline { stroke: var(--accent); stroke-width: 2; }
+  .sqar:hover .sqah { fill: var(--accent); }
+  .sqar.cur .sqline { stroke: var(--changed-text); stroke-width: 2.2; }
+  .sqar.cur .sqah, .sqar.cur .sqfn { fill: var(--changed-text); }
+  .sqcorner { fill: var(--dim); font-size: 8px; font-style: italic;
+    text-anchor: end; }
   #calltree { position: relative; max-height: 340px; overflow: auto;
     background: #171a22; border: 1px solid var(--border);
     border-radius: 4px; padding: 3px 6px; }
@@ -698,6 +728,12 @@
       <summary>Call tree <span id="treestat"></span></summary>
       <div id="treelevels"></div>
       <div id="calltree"></div>
+    </details>
+    <details id="seqbox" title="#136: who talks to whom, in what order — lifelines and arrows projected from the recorded call/return events of a window">
+      <summary>Sequence <span id="seqstat"></span></summary>
+      <div id="seqctl"></div>
+      <div id="seqdiag"></div>
+      <div id="seqnote"></div>
     </details>
     <details id="anatbox" title="#85: what this line IS to the interpreter — the syntax tree above it, the instructions below it">
       <summary>Anatomy <span id="anatname"></span></summary>
@@ -3099,9 +3135,13 @@ function nodeLabel(n) {
     ' <span class="tj" data-goto="' + n.callEv +
     '" title="jump to this call">⤷</span>';
 }
+function ensureTree() {          // shared with #136 — one projection
+  if (!treeData) treeData = buildTree();
+  return treeData;
+}
 function renderTree() {
-  if (treeData) return;
-  treeData = buildTree();
+  if (treeEls) return;
+  ensureTree();
   const { nodes, roots, levels } = treeData;
   $("treelevels").innerHTML = levels.map((lv, d) =>
     "<b>L" + d + "</b> " + lv.calls + "× / " + lv.evs + " ev")
@@ -3187,6 +3227,264 @@ $("calltree").addEventListener("click", e => {
     e.preventDefault();
     stop();
     goto(parseInt(e.target.dataset.goto, 10));
+  }
+});
+
+/* #136: the sequence diagram — the third projection of the same
+   call/return events (the tree keeps identity, the lanes keep
+   interleaving, this keeps the interaction grammar). Lifelines =
+   the modules (or the class, where the MRO machinery knew self)
+   acting in a WINDOW; arrows = the window's call events in order;
+   activation bars = the #133 nesting, redrawn. Time flows DOWN in
+   event order — never wall time. */
+const seqBox = $("seqbox");
+const SEQ_ACTORS = 12, SEQ_ARROWS = 400;
+let seqKey = null, seqScope = null;
+function seqWindow() {
+  // the window: a chapter, the current frame's extent, between the
+  // bookmarks flanking the cursor, or the whole run (caps announce)
+  const t = ensureTree();
+  const scopes = [];
+  if (chapSpans.length) scopes.push("chapter");
+  scopes.push("frame");
+  if (bookmarks.length >= 2) scopes.push("bookmarks");
+  scopes.push("run");
+  if (!seqScope || scopes.indexOf(seqScope) < 0) seqScope = scopes[0];
+  let lo = 0, hi = events.length - 1, label = "whole run";
+  if (seqScope === "chapter") {
+    const sp = chapSpans.find(s => s.s <= idx && idx <= s.t) ||
+      chapSpans[0];
+    lo = sp.s; hi = sp.t;
+    label = "test " + sp.id.split("::").pop();
+  } else if (seqScope === "frame") {
+    let nid = t.nodeAt[idx];
+    if (nid >= 0) {
+      const n = t.nodes[nid];
+      lo = n.callEv;
+      hi = n.retEv >= 0 ? n.retEv : events.length - 1;
+      label = n.fn + "()'s extent";
+    }
+  } else if (seqScope === "bookmarks") {
+    let a = bookmarks[0], b = bookmarks[bookmarks.length - 1];
+    for (let k = 0; k + 1 < bookmarks.length; k++)
+      if (bookmarks[k] <= idx) { a = bookmarks[k]; b = bookmarks[k + 1]; }
+    lo = a; hi = b; label = "bookmarks " + (a + 1) + "–" + (b + 1);
+  }
+  return { scopes, lo, hi, label };
+}
+function seqActorOf(node) {
+  const mro = events[node.callEv].mro;
+  const cls = mro && mro.c && mro.c.length ? mro.c[0] : null;
+  const key = node.lane + "|" + node.f + "|" + (cls || "");
+  return { key, cls, mod: node.f, lane: node.lane };
+}
+function buildSeq(lo, hi) {
+  const t = ensureTree();
+  const actors = new Map();   // key -> {x-index, label pieces}
+  const arrows = [];
+  let dropA = 0, dropAct = 0;
+  const actor = n => {
+    const a = seqActorOf(n);
+    let rec = actors.get(a.key);
+    if (rec === undefined) {
+      if (actors.size >= SEQ_ACTORS) return null;
+      rec = { i: actors.size, cls: a.cls, mod: a.mod, lane: a.lane,
+              excd: false };
+      actors.set(a.key, rec);
+    }
+    return rec;
+  };
+  const excNodes = new Set();
+  for (let i = lo; i <= hi && i < events.length; i++) {
+    if (events[i].e === "exc" && t.nodeAt[i] >= 0)
+      excNodes.add(t.nodeAt[i]);
+  }
+  for (let ni = 0; ni < t.nodes.length; ni++) {
+    const n = t.nodes[ni];
+    if (n.callEv < lo) continue;
+    if (n.callEv > hi) break;      // nodes are in callEv order
+    if (arrows.length >= SEQ_ARROWS) { dropA++; continue; }
+    // caller's lifeline claims its column first: talk reads left→right
+    const src = n.parent >= 0 ? actor(t.nodes[n.parent]) : "entry";
+    const dst = actor(n);
+    if (dst === null || src === null) { dropAct++; continue; }
+    arrows.push({ n, src, dst,
+                  exc: excNodes.has(ni),
+                  open: n.retEv < 0 || n.retEv > hi });
+  }
+  return { actors: [...actors.values()], arrows, dropA, dropAct,
+           multiLane: t.multiLane };
+}
+function seqSvg(sq, lo, hi) {
+  const nA = sq.actors.length;
+  if (!sq.arrows.length)
+    return '<div class="anote">no calls inside this window — ' +
+      "widen the scope.</div>";
+  const sp = Math.max(72, Math.min(130, Math.round(760 / nA)));
+  const x0 = 30, headH = sq.multiLane ? 40 : 26, rowH = 15;
+  const W = x0 + nA * sp + 20;
+  const H = headH + (sq.arrows.length + 1) * rowH + 14;
+  const X = a => x0 + a.i * sp + sp / 2;
+  const parts = [];
+  // lifelines + heads
+  sq.actors.forEach(a => {
+    const x = X(a);
+    const name = a.cls ? a.cls : (a.mod.split("/").pop());
+    parts.push('<line class="sqlife" x1="' + x + '" y1="' + headH +
+      '" x2="' + x + '" y2="' + (H - 8) + '"/>');
+    parts.push('<text class="sqhead" x="' + x + '" y="' +
+      (headH - 12) + '">' + esc2(name.slice(0, 16)) + "</text>");
+    const sub = (a.cls ? a.mod.split("/").pop() + " · " : "") +
+      (sq.multiLane ? a.lane : "");
+    if (sub) parts.push('<text class="sqsub" x="' + x + '" y="' +
+      (headH - 2) + '">' + esc2(sub.slice(0, 22)) + "</text>");
+  });
+  // activation bars first (under the arrows)
+  const rowY = r => headH + (r + 1) * rowH;
+  const active = {};  // actor.i -> stack of open bars' retEv
+  sq.arrows.forEach((ar, r) => {
+    const x = X(ar.dst);
+    let yEnd;
+    if (ar.open) yEnd = H - 8;
+    else {
+      // the bar closes at the LAST drawn arrow row still inside the
+      // frame's extent, or its own row if none follow
+      let r2 = r;
+      for (let k = r + 1; k < sq.arrows.length; k++)
+        if (sq.arrows[k].n.callEv <= ar.n.retEv) r2 = k;
+      yEnd = rowY(r2) + rowH / 2;
+    }
+    const st = active[ar.dst.i] || (active[ar.dst.i] = []);
+    while (st.length && st[st.length - 1] !== null &&
+           st[st.length - 1] < ar.n.callEv)
+      st.pop();                  // those frames returned before this call
+    ar.barX = x + st.length * 3;
+    st.push(ar.open ? null : ar.n.retEv);
+    parts.push('<rect class="sqact' + (ar.exc ? " exc" : "") +
+      (ar.open ? " openb" : "") + '" x="' + (ar.barX - 2.5) +
+      '" y="' + (rowY(r) - 4) + '" width="5" height="' +
+      Math.max(8, yEnd - rowY(r) + 4) + '"' +
+      (ar.exc ? '><title>an exception passed through this ' +
+        "frame</title></rect>" : "/>"));
+  });
+  // arrows (call events, event order = top to bottom)
+  sq.arrows.forEach((ar, r) => {
+    const y = rowY(r);
+    const lbl = ar.n.fn + "(" + fmtArgs(ar.n.args) + ")";
+    const ret = ar.n.retEv >= 0 && ar.n.retEv <= hi
+      ? " → " + treeVal(ar.n.ret)
+      : ar.n.yielded ? " ⇢ suspended" : " (no return in window)";
+    const g0 = '<g class="sqar' + (ar.exc ? " exc" : "") +
+      '" data-goto="' + ar.n.callEv + '" data-row="' + r + '">';
+    if (ar.src === "entry") {
+      const x = X(ar.dst);
+      parts.push(g0 + '<circle class="sqdot" cx="' + (x - 26) +
+        '" cy="' + y + '" r="2.5"/><line class="sqline" x1="' +
+        (x - 24) + '" y1="' + y + '" x2="' + (x - 5) + '" y2="' + y +
+        '"/><polygon class="sqah" points="' + (x - 5) + "," +
+        (y - 3) + " " + (x - 5) + "," + (y + 3) + " " + x + "," + y +
+        '"/><text class="sqfn" x="' + (x - 28) + '" y="' + (y - 3) +
+        '" text-anchor="end">' + esc2(ar.n.fn.slice(0, 24)) +
+        "</text><title>" + esc2(lbl + ret) +
+        " — a call arriving from outside the window's actors" +
+        "</title></g>");
+      return;
+    }
+    const xs = ar.src.i === ar.dst.i ? ar.barX : X(ar.src);
+    const xd = ar.barX !== undefined ? ar.barX : X(ar.dst);
+    if (ar.src.i === ar.dst.i) {
+      // self-call: a small loop on the same lifeline
+      parts.push(g0 + '<path class="sqline" d="M' + xs + " " +
+        (y - 4) + " h18 v8 h-13" + '"/><polygon class="sqah" ' +
+        'points="' + (xs + 10) + "," + (y + 1) + " " + (xs + 10) +
+        "," + (y + 7) + " " + (xs + 3) + "," + (y + 4) +
+        '"/><text class="sqfn" x="' + (xs + 22) + '" y="' + (y + 3) +
+        '">' + esc2(ar.n.fn.slice(0, 20)) + "</text><title>" +
+        esc2(lbl + ret) + "</title></g>");
+      return;
+    }
+    const dir = xd > xs ? 1 : -1;
+    const xe = xd - dir * 4;
+    parts.push(g0 + '<line class="sqline" x1="' + xs + '" y1="' + y +
+      '" x2="' + xe + '" y2="' + y + '"/><polygon class="sqah" ' +
+      'points="' + xe + "," + (y - 3) + " " + xe + "," + (y + 3) +
+      " " + xd + "," + y + '"/><text class="sqfn" x="' +
+      ((xs + xd) / 2) + '" y="' + (y - 3) + '">' +
+      esc2(ar.n.fn.slice(0, Math.max(8, Math.round(sp / 6)))) +
+      "</text><title>" + esc2(lbl + ret) + "</title></g>");
+  });
+  parts.push('<text class="sqcorner" x="' + (W - 6) + '" y="' +
+    (H - 4) + '">time ↓ in EVENT order — not wall time</text>');
+  return '<svg class="sqsvg" width="' + W + '" height="' + H +
+    '" viewBox="0 0 ' + W + " " + H + '">' + parts.join("") +
+    "</svg>";
+}
+function updateSeq() {
+  if (!seqBox.open) return;
+  if (DATA.granularity !== "line" && DATA.granularity !== "fn") return;
+  const { scopes, lo, hi, label } = seqWindow();
+  const key = seqScope + "|" + lo + "|" + hi;
+  if (key !== seqKey) {
+    seqKey = key;
+    const sq = buildSeq(lo, hi);
+    $("seqctl").innerHTML = 'window <select id="seqscope">' +
+      scopes.map(s => '<option value="' + s + '"' +
+        (s === seqScope ? " selected" : "") + ">" + s + "</option>")
+      .join("") + "</select> · " + esc2(label) + " · events " +
+      (lo + 1) + "–" + (hi + 1);
+    $("seqdiag").innerHTML = seqSvg(sq, lo, hi);
+    $("seqstat").textContent = "· " + sq.arrows.length + " calls / " +
+      sq.actors.length + " actors";
+    let note = "lifelines = modules (class where the MRO machinery " +
+      "knew self) · arrows = the window's call events, top to " +
+      "bottom · bars = the frame's extent; returns close them " +
+      "(reply arrows omitted), red = an exception passed through, " +
+      "hollow = still open at the window's end · click an arrow " +
+      "to jump.";
+    if (sq.dropA) note = "⚠ arrow cap " + SEQ_ARROWS + " reached — " +
+      sq.dropA + " later calls not drawn; narrow the window. " + note;
+    if (sq.dropAct) note = "⚠ actor cap " + SEQ_ACTORS + " reached — " +
+      sq.dropAct + " calls among unshown actors not drawn; narrow " +
+      "the window. " + note;
+    $("seqnote").innerHTML = '<div class="anote">' + note + "</div>";
+  }
+  // light the current row: the innermost drawn frame the cursor is in
+  const t = ensureTree();
+  let nid = t.nodeAt[idx];
+  const box = $("seqdiag");
+  box.querySelectorAll(".sqar.cur").forEach(el =>
+    el.classList.remove("cur"));
+  while (nid >= 0) {
+    const el = box.querySelector('.sqar[data-goto="' +
+      t.nodes[nid].callEv + '"]');
+    if (el) {
+      el.classList.add("cur");
+      const y = +el.querySelector("line, path")
+        .getBBox().y;
+      if (y < box.scrollTop + 20 ||
+          y > box.scrollTop + box.clientHeight - 20)
+        box.scrollTop = y - box.clientHeight / 2;
+      break;
+    }
+    nid = t.nodes[nid].parent;
+  }
+}
+seqBox.addEventListener("toggle", () => {
+  seqKey = null;
+  updateSeq();
+});
+$("seqctl").addEventListener("change", e => {
+  if (e.target.id === "seqscope") {
+    seqScope = e.target.value;
+    seqKey = null;
+    updateSeq();
+  }
+});
+$("seqdiag").addEventListener("click", e => {
+  const g = e.target.closest("[data-goto]");
+  if (g) {
+    stop();
+    goto(parseInt(g.dataset.goto, 10));
   }
 });
 
@@ -4089,6 +4387,7 @@ function render() {
   renderConsole();
   updateAnatomy();
   updateTree();
+  updateSeq();                           // #136: the window's conversation
   updateFsm();                           // #132: the token walks the machine
   updateMemo();                          // #134: the table fills causally
   if (gateOn) gateVars();                // #128: claimable names follow

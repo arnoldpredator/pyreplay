@@ -664,6 +664,46 @@ dead or invented panel; every cap and truncation is announced.
 
   [![Feature 133 — call tree](screenshots/133-call-tree.png)](screenshots/133-call-tree.png)
 
+### 136. The sequence diagram — lifelines from the log
+- **Measured:** nothing new — the third projection of the same
+  recorded call/return events (the call tree keeps identity, the
+  lanes keep interleaving, this keeps the interaction grammar). A
+  window is chosen — the chapter under the cursor, the current
+  frame's extent, the span between the bookmarks flanking the
+  cursor, or the whole run — and its call events are projected onto
+  lifelines.
+- **Displayed:** the Sequence panel — lifelines are the modules that
+  act in the window (or the class, where the recorded MRO knew
+  `self`), columns claimed caller-first in order of first
+  appearance; arrows are the window's calls top to bottom in EVENT
+  order (the corner says: not wall time); activation bars redraw the
+  call-tree nesting on the callee's lifeline — returns close them,
+  red means an exception passed through (caught or not), hollow
+  means still open at the window's end. Self-calls are loops;
+  a call arriving from outside the window's actors is a found
+  message (dot + arrow); an import is honestly a module→module
+  arrow, because a module body IS a call. Click any arrow to jump;
+  the cursor lights its innermost drawn arrow live. Caps: 12
+  lifelines, 400 arrows — both announced with dropped counts and
+  the advice to narrow the window.
+- **Why:** the classic onboarding question is "who talks to whom, in
+  what order" — and no other view answers it as a picture. Threads
+  and asyncio tasks come free: a lane is part of the lifeline key,
+  so interleaving draws itself.
+- **Use case:** open a teammate's unfamiliar service, trace one
+  request at fn granularity, set window = whole run: entry →
+  main.py → cart.py → discounts.py reads like the architecture
+  diagram nobody drew — including the four `add()` calls and the
+  2-per-item conversation with the pricing module.
+- **Command:** any trace (fn granularity shows shape best) → open
+  **Sequence** → pick the window. With `-m pytest` + chapters, one
+  diagram per test.
+- **Screenshot** — tinyshop, whole run: the import chain as module
+  arrows, `add ×4`, `total` lit as current, the cart↔discounts
+  exchange with activation bars:
+
+  [![Feature 136 — sequence](screenshots/136-sequence.png)](screenshots/136-sequence.png)
+
 ## D. Replayer — variables & data structures
 
 ### 21. Semantic rendering by type

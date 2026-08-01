@@ -848,6 +848,25 @@ their original node — no phantom calls), and the 4000-node render cap
 announces itself. Works at both granularities — on an fn-level trace
 of a real codebase it is the whole run's shape in one panel.
 
+**The sequence diagram.** The **Sequence** panel answers the classic
+onboarding question — who talks to whom, in what order — from the
+same call/return events: lifelines are the modules acting in a
+window (or the class, where the recorded MRO knew `self`), arrows
+are the window's calls top to bottom in event order (the corner
+reminds you: not wall time), and activation bars redraw the call
+nesting — returns close them, red means an exception passed through,
+hollow means still open at the window's end. Pick the window in the
+select: the current test's chapter, the current frame's extent, the
+span between your flanking bookmarks, or the whole run — with the
+caps (12 lifelines, 400 arrows) announcing what a too-wide window
+would hide. Imports draw as `<module>` → `<module>` arrows, because
+a module body IS a call the tracer recorded; self-calls loop; a call
+arriving from outside the window's actors enters as a dot ("found
+message"). Click any arrow to jump. On tinyshop at fn granularity
+the whole-run diagram — entry → main → cart → discounts, `add ×4`,
+then the 2-per-item pricing conversation — is the architecture
+diagram nobody drew.
+
 **Motion & presentation.** Press ▶ Play and changes *glide*: a swap's
 two cells slide past each other, a queue advances, graph nodes drift
 to their new places — FLIP tweens over the diff the views already

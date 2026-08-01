@@ -2817,6 +2817,93 @@ def _():
            "arguments must ride every call event (the tree's labels)")
 
 
+@check("seq diagram: actor order, cross-module arrows, exc marks (#136)")
+def _():
+    def project(p):
+        # mirror of the viewer's ensureTree + buildSeq (whole run)
+        nodes, stacks, saved = [], {}, {}
+        node_at = []
+        for i, ev in enumerate(p["events"]):
+            lane = (ev.get("t") or "main", ev.get("tk") or "")
+            st = stacks.setdefault(lane, [])
+            if ev["e"] == "call":
+                gm = ev.get("g")
+                if gm and gm.get("s") == "r" and gm.get("i") in saved:
+                    st.append(saved.pop(gm["i"]))
+                    node_at.append(st[-1])
+                    continue
+                nodes.append({"f": ev["f"], "fn": ev["fn"],
+                              "parent": st[-1] if st else -1,
+                              "call_ev": i, "exc": False})
+                st.append(len(nodes) - 1)
+                node_at.append(st[-1])
+                continue
+            node_at.append(st[-1] if st else -1)
+            if ev["e"] == "return" and st:
+                gm = ev.get("g")
+                if gm and gm.get("s") == "y":
+                    saved[gm["i"]] = st[-1]
+                st.pop()
+        for i, ev in enumerate(p["events"]):
+            if ev["e"] == "exc" and node_at[i] >= 0:
+                nodes[node_at[i]]["exc"] = True
+        actors, arrows = [], []
+        for n in nodes:   # caller claims its lifeline first
+            src = (nodes[n["parent"]]["f"] if n["parent"] >= 0
+                   else "(entry)")
+            for a in (src, n["f"]):
+                if a != "(entry)" and a not in actors:
+                    actors.append(a)
+            arrows.append((src, n["f"], n["fn"], n["exc"]))
+        return actors, arrows
+
+    p = run_trace(os.path.join(HERE, "tinyshop", "main.py"),
+                  "--granularity", "fn", name="seq136")
+    actors, arrows = project(p)
+    expect(actors == ["main.py", "cart.py", "discounts.py"],
+           f"lifelines must appear caller-first, in first-appearance "
+           f"order: {actors}")
+    expect(("main.py", "cart.py", "<module>", False) in arrows,
+           "an import IS a call: main's import of cart must be a "
+           "module-to-module arrow")
+    adds = [a for a in arrows if a[:3] == ("main.py", "cart.py", "add")]
+    expect(len(adds) == 4, f"four add() arrows main->cart: {len(adds)}")
+    cross = [a for a in arrows
+             if a[:2] == ("cart.py", "discounts.py")]
+    expect(("cart.py", "discounts.py", "<module>", False) in cross,
+           "cart imports discounts: that module arrow belongs to cart")
+    expect(len(cross) == 9,
+           f"total()'s 4 items ask discounts twice each, plus the "
+           f"import arrow — 9 cart->discounts: {len(cross)}")
+
+    p2 = run_trace(os.path.join(HERE, "example_exceptions.py"),
+                   name="seq136exc")
+    _, arrows2 = project(p2)
+    marked = {a[2] for a in arrows2 if a[3]}
+    expect("risky_lookup" in marked and "main" in marked,
+           f"frames an exception passed through must wear the mark "
+           f"(caught or not): {marked}")
+    expect("squares" not in marked,
+           "the clean generator must NOT wear the exception mark")
+
+    p3 = run_trace(os.path.join(HERE, "example_mro.py"), name="seq136mro")
+    mro_calls = [e for e in p3["events"] if e["e"] == "call"
+                 and e.get("mro") and e["fn"] == "payload"]
+    expect(mro_calls and all(e["mro"]["c"][0] == "Exporter"
+                             for e in mro_calls),
+           "class lifelines ride the recorded mro: payload's self is "
+           "an Exporter in every recorded chain")
+
+    with open(os.path.join(HERE, "replayer_template.html"),
+              encoding="utf-8") as fh:
+        tpl = fh.read()
+    for probe in ("time ↓ in EVENT order — not wall time",
+                  "SEQ_ACTORS = 12, SEQ_ARROWS = 400",
+                  "narrow the window", "reply arrows omitted",
+                  'id="seqscope"'):
+        expect(probe in tpl, f"seq contract missing: {probe}")
+
+
 @check("motion layer: honesty legend + play-only gating (#135)")
 def _():
     with open(os.path.join(HERE, "replayer_template.html"),

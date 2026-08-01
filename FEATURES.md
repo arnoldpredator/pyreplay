@@ -567,6 +567,41 @@ dead or invented panel; every cap and truncation is announced.
 
   [![Feature 109 — query bar](screenshots/109-query-bar.png)](screenshots/109-query-bar.png)
 
+### 128. The prediction gate — commit before you look
+- **Measured:** nothing new — every claim type is scored against data
+  the trace already holds: the next event's line (control flow), the
+  change index (values), the recorded loop verdicts (iteration
+  totals, the #77 counts). Renderer-only, zero schema change.
+- **Displayed:** toggle 🔮 and the gate bar arms: three claim types —
+  **next line** (which line executes next? Enter commits, the step
+  reveals), **variable shows / unchanged** (the value as the panel
+  would display it), **this loop runs N×** (stand on a for/while
+  header; scored from the recorded verdicts immediately, no
+  stepping). Each verdict comes back as ✓/✗ with both sides stated:
+  "✗ claimed L6 — recorded L5". The step controls are gated — a bare
+  step nudges "commit a claim first — or take the step unscored"
+  (skips are counted, honestly). The ledger (hit rate by claim type,
+  streak) lives per script in localStorage; export downloads the
+  JSON sidecar; free navigation is never locked.
+- **Why:** passive replay teaches little; the mismatch between a
+  committed prediction and the recorded truth is where understanding
+  is generated. The gate turns the replayer from a microscope into a
+  laboratory — predict-observe-explain as a mode, a planted-bug hunt
+  into a scored drill.
+- **Use case:** bubble sort, cursor on the inner `for` header. Claim
+  "this loop runs 4×" — ✗, the recorded verdicts say 3× (`range(n -
+  1 - i)`, and *that* is how the off-by-one lesson sticks). Claim
+  the next line after a comparison — ✓ or ✗ tells you whether you
+  actually predicted the branch.
+- **Command:** any trace → 🔮 in the header. Honesty: claims are
+  scored against recorded truth only; peeking is your business —
+  only committed claims count.
+- **Screenshot** — the gate bar mid-session: loop claim just scored
+  ("✓ claimed 3× — the recorded verdicts say 3×"), ledger reading
+  line 1/1 · loop 1/1 · streak 2.
+
+  [![Feature 128 — prediction gate](screenshots/128-prediction-gate.png)](screenshots/128-prediction-gate.png)
+
 ### 133. The call tree — the recurrence, drawn
 - **Measured:** nothing new — a pure projection of recorded
   call/return nesting. Each call event opens a node carrying the

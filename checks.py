@@ -2903,6 +2903,61 @@ def _():
            f"{rbad.stdout[:120]}")
 
 
+@check("prediction gate: loop-claim truth mirror + gate contract (#128)")
+def _():
+    p = run_trace(os.path.join(HERE, "bubble_sort.py"), name="gate128")
+    events = p["events"]
+    # frame ids, the viewer's way: call pushes, return pops, per lane
+    fids, stacks, nxt = [], {}, [0]
+    for ev in events:
+        st = stacks.setdefault(ev.get("t", "main"), [])
+        if ev["e"] == "call":
+            st.append(nxt[0])
+            nxt[0] += 1
+        fids.append(st[-1] if st else -1)
+        if ev["e"] == "return" and st:
+            st.pop()
+
+    def loop_total(i0):
+        # mirror of the viewer's gateCommitLoop scan
+        fid, line = fids[i0], events[i0]["l"]
+        trues = 0
+        for j in range(i0, len(events)):
+            if fids[j] != fid:
+                continue
+            e2 = events[j]
+            c = e2.get("cond")
+            if e2["l"] == line and c and c.get("k") in ("for", "while"):
+                if c["r"] is False:
+                    return c.get("i", trues) if c["k"] == "for" else trues
+                trues += 1
+            if e2["e"] == "return":
+                break
+        return None
+    entries = {}   # line -> totals at each FRESH entry (i == 1)
+    for i, ev in enumerate(events):
+        c = ev.get("cond")
+        if c and c.get("k") == "for" and c.get("r") and c.get("i") == 1:
+            entries.setdefault(ev["l"], []).append(loop_total(i))
+    # bubble_sort([5,2,4,1]): outer for runs 4x; inner entries run 3,2,1
+    # (the 4th outer pass enters range(-1+4-... n-1-i = 0) -> i=1 never
+    # fires, so only three fresh inner entries exist)
+    expect(entries.get(3) == [4],
+           f"outer for total must be 4: {entries.get(3)}")
+    expect(entries.get(4) == [3, 2, 1],
+           f"inner for totals must be 3,2,1: {entries.get(4)}")
+    with open(os.path.join(HERE, "replayer_template.html"),
+              encoding="utf-8") as fh:
+        tpl = fh.read()
+    expect(tpl.count("#128: claims before steps") == 2,
+           "BOTH forward-step paths (button + ArrowRight) must be "
+           "gate-guarded")
+    for probe in ('id="gatebar"', "pyreplay-gate:", "step unscored",
+                  "pyreplay-predictions.json",
+                  "only committed claims count"):
+        expect(probe in tpl, f"gate contract missing: {probe}")
+
+
 # ---------------------------------------------------------------- runner
 
 def main():

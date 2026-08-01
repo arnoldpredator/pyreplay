@@ -306,6 +306,31 @@
     font-size: 16px; }
   body.presenting .drow { font-size: 15px; }
   body.presenting #code { font-size: 15px; line-height: 1.75; }
+  #gatebar { display: none; padding: 5px 14px; background: #241d2e;
+    border-top: 1px solid var(--border); font-size: 11.5px;
+    color: var(--dim); align-items: center; gap: 12px;
+    flex-wrap: wrap; }
+  body.gated #gatebar { display: flex; }
+  #gatebar .gtitle { color: #d38aea; font-weight: 700; }
+  #gatebar .gclaim { display: inline-flex; align-items: center;
+    gap: 5px; }
+  #gatebar input[type="text"], #gatebar input:not([type]),
+  #gatebar select {
+    background: #171a22; color: var(--text); border: 1px solid
+    var(--border); border-radius: 4px; font: inherit; padding: 1px 5px; }
+  #gatebar button { background: var(--panel); color: var(--text);
+    border: 1px solid var(--border); border-radius: 4px;
+    cursor: pointer; font: inherit; padding: 1px 8px; }
+  #gatebar button:hover { border-color: #d38aea; }
+  #gatetoast { color: var(--text); }
+  #gatetoast.hit { color: var(--call); }
+  #gatetoast.miss { color: var(--err); }
+  #gatestats { color: var(--dim); margin-left: auto; }
+  #gatebar.nudge { animation: gnudge .35s; }
+  @keyframes gnudge {
+    0%, 100% { background: #241d2e; }
+    50% { background: #3d2b52; } }
+  #btn-gate.on { border-color: #d38aea; color: #d38aea; }
   #presnote { display: none; position: fixed; right: 12px;
     bottom: 10px; color: var(--dim); font-size: 11px; z-index: 9;
     background: rgba(23,26,34,.92); padding: 3px 10px;
@@ -521,6 +546,7 @@
     </select>
     <button id="btn-last" title="Jump to end (End)">End &#9197;</button>
     <button id="btn-present" title="Presentation mode (P): chrome hidden, large type, play + motion — Esc exits">&#127916;</button>
+    <button id="btn-gate" title="#128 prediction gate: commit a claim about the NEXT state before stepping — scored against the recorded truth. Free navigation stays allowed; only committed claims count.">&#128302;</button>
     <details id="machmenu" title="Which interpreter-machinery hints to show — the data is always recorded; these only change the display">
       <summary>badges</summary>
       <div class="machbox">
@@ -595,6 +621,27 @@
   only the endpoints are recorded truth</div>
 <footer>
   <div id="slicebar"></div>
+  <div id="gatebar">
+    <span class="gtitle">&#128302; predict, then step</span>
+    <span class="gclaim">next line
+      <input id="g-line" size="4" inputmode="numeric"
+        title="which source line executes next? Enter commits, then the step reveals"></span>
+    <span class="gclaim"><select id="g-var" title="claim a variable's next state"></select>
+      shows <input id="g-val" size="9"
+        placeholder="value as shown">
+      <label title="claim it does NOT change on the next event"><input
+        type="checkbox" id="g-nochange"> unchanged</label>
+      <button id="g-valgo">commit &#9166;</button></span>
+    <span class="gclaim">this loop runs
+      <input id="g-loop" size="3" inputmode="numeric"
+        title="stand on a for/while header and claim its total iterations for THIS entry — scored from the recorded verdicts, no stepping">&#215;
+      <button id="g-loopgo">score</button></span>
+    <button id="g-skip" title="advance one event without a claim — counted as skipped">step unscored</button>
+    <span id="gatetoast"></span>
+    <span id="gatestats"></span>
+    <button id="g-export" title="download this script's ledger as JSON (the #107 sidecar pattern)">export</button>
+    <button id="g-reset" title="clear this script's ledger">reset</button>
+  </div>
   <div id="qbar">
     <input id="query" type="search" spellcheck="false"
       placeholder="query events — x=42 · count>10 · type:exc · exc:KeyError · fn:push · file:cart · changed:total · mut:items · after:5000 · trip · bare word = source text · space = AND ( / focuses · Enter = next hit )">
@@ -2342,6 +2389,193 @@ function togglePresent() {
 }
 $("btn-present").onclick = togglePresent;
 
+/* #128: the prediction gate — commit a claim about the NEXT state,
+   then the step scores it against the recorded truth. Renderer-only:
+   every claim type rides data the trace already holds (next event's
+   line; the change index; the loop verdicts #77 counts). The gate
+   never locks navigation — only committed claims are scored; a step
+   without one is counted as skipped, honestly. Ledger per script in
+   localStorage, exportable as a JSON sidecar. */
+const GATE_KEY = "pyreplay-gate:" + DATA.script;
+let gateOn = false;
+function gateLedger() {
+  try { return JSON.parse(localStorage.getItem(GATE_KEY)) || {}; }
+  catch (e) { return {}; }
+}
+function gateSave(L) {
+  try { localStorage.setItem(GATE_KEY, JSON.stringify(L)); }
+  catch (e) {}
+}
+function gateStats() {
+  const L = gateLedger();
+  const parts = ["line", "value", "loop"].filter(k => L[k]).map(k =>
+    k + " " + L[k].hit + "/" + (L[k].hit + L[k].miss));
+  if (L.skipped) parts.push("skipped " + L.skipped);
+  $("gatestats").textContent = parts.join(" · ") +
+    ((L.streak || 0) >= 2 ? " · streak " + L.streak : "");
+}
+function gateScore(type, hit) {
+  const L = gateLedger();
+  const t = L[type] || (L[type] = { hit: 0, miss: 0 });
+  if (hit) t.hit++; else t.miss++;
+  L.streak = hit ? (L.streak || 0) + 1 : 0;
+  gateSave(L);
+  gateStats();
+}
+function gateToast(msg, hit) {
+  const t = $("gatetoast");
+  t.textContent = msg;
+  t.className = hit === undefined ? "" : hit ? "hit" : "miss";
+}
+function gateVars() {
+  // the claimable names: the CURRENT frame's variables, as displayed
+  const { stack } = computeStacks(idx);
+  const top = stack[stack.length - 1];
+  const names = top && top.vars ? Object.keys(top.vars) : [];
+  const sel = $("g-var");
+  const keep = sel.value;
+  sel.innerHTML = names.map(n =>
+    '<option' + (n === keep ? " selected" : "") + ">" +
+    esc2(n) + "</option>").join("");
+}
+function gateNudge() {
+  const b = $("gatebar");
+  b.classList.remove("nudge");
+  void b.offsetWidth;               // restart the animation
+  b.classList.add("nudge");
+  gateToast("commit a claim first — or take the step unscored", undefined);
+}
+function gateGuard() {
+  // true = the step is intercepted (gate armed, nothing committed)
+  if (!gateOn) return false;
+  gateNudge();
+  return true;
+}
+function gateAdvance() {            // a committed claim's reveal step
+  stop();
+  goto(idx + 1);
+}
+$("btn-gate").onclick = () => {
+  gateOn = !gateOn;
+  document.body.classList.toggle("gated", gateOn);
+  $("btn-gate").classList.toggle("on", gateOn);
+  if (gateOn) { gateVars(); gateStats();
+    gateToast("claims are scored against the recorded truth — free " +
+      "navigation stays allowed; only committed claims count."); }
+};
+$("g-line").addEventListener("keydown", e => {
+  if (e.key !== "Enter") return;
+  const claim = parseInt(e.target.value, 10);
+  if (!claim) { gateToast("type a line number, then Enter"); return; }
+  if (idx + 1 >= events.length) { gateToast("at the end — nothing left "
+    + "to predict"); return; }
+  gateAdvance();
+  const got = events[idx].l;
+  const hit = got === claim;
+  gateScore("line", hit);
+  gateToast((hit ? "✓" : "✗") + " claimed L" + claim +
+    " — recorded L" + got, hit);
+  e.target.value = "";
+});
+function gateCommitValue() {
+  const name = $("g-var").value;
+  if (!name) { gateToast("no variables in this frame to claim"); return; }
+  const noch = $("g-nochange").checked;
+  const claim = $("g-val").value.trim();
+  if (!noch && !claim) {
+    gateToast("type the value as the panel would show it (42 · " +
+      "list[4] · 'x') — or tick unchanged");
+    return;
+  }
+  if (idx + 1 >= events.length) { gateToast("at the end"); return; }
+  gateAdvance();
+  const { stack } = computeStacks(idx);
+  const top = stack[stack.length - 1];
+  const enc = top && top.vars ? top.vars[name] : undefined;
+  const shown = enc === undefined ? "(gone)" : treeVal(enc);
+  const changed = !!(events[idx].ch && (name in events[idx].ch));
+  const hit = noch ? !changed : shown === claim;
+  gateScore("value", hit);
+  gateToast((hit ? "✓ " : "✗ ") + name + (noch
+    ? (changed ? " CHANGED — it shows " + shown
+               : " unchanged, as claimed")
+    : " — claimed " + claim + " · recorded " + shown), hit);
+  $("g-val").value = "";
+  $("g-nochange").checked = false;
+}
+$("g-valgo").onclick = gateCommitValue;
+$("g-val").addEventListener("keydown", e => {
+  if (e.key === "Enter") gateCommitValue();
+});
+function gateCommitLoop() {
+  const n = parseInt($("g-loop").value, 10);
+  if (isNaN(n)) { gateToast("type the total iteration count you "
+    + "expect for THIS entry of the loop"); return; }
+  const ev = events[idx];
+  const k = ev.cond && ev.cond.k;
+  if (k !== "for" && k !== "while") {
+    gateToast("stand ON a for/while header line first (its verdict " +
+      "badge shows there) — then claim its total");
+    return;
+  }
+  const fid = eventFrame[idx], line = ev.l;
+  let total = null, trues = 0;
+  for (let j = idx; j < events.length; j++) {
+    if (eventFrame[j] !== fid) continue;
+    const e2 = events[j];
+    if (e2.l === line && e2.cond
+        && (e2.cond.k === "for" || e2.cond.k === "while")) {
+      if (e2.cond.r === false) {
+        total = e2.cond.k === "for"
+          ? (e2.cond.i !== undefined ? e2.cond.i : trues) : trues;
+        break;
+      }
+      trues++;
+    }
+    if (e2.e === "return") break;
+  }
+  if (total === null) {
+    gateToast("not scorable: this loop never reported exhaustion in " +
+      "this frame (break / return / exception ended it) — no claim " +
+      "charged");
+    return;
+  }
+  const hit = total === n;
+  gateScore("loop", hit);
+  gateToast((hit ? "✓" : "✗") + " claimed " + n + "× — the recorded " +
+    "verdicts say " + total + "×", hit);
+  $("g-loop").value = "";
+}
+$("g-loopgo").onclick = gateCommitLoop;
+$("g-loop").addEventListener("keydown", e => {
+  if (e.key === "Enter") gateCommitLoop();
+});
+$("g-skip").onclick = () => {
+  if (idx + 1 >= events.length) return;
+  const L = gateLedger();
+  L.skipped = (L.skipped || 0) + 1;
+  L.streak = 0;
+  gateSave(L);
+  gateAdvance();
+  gateStats();
+  gateToast("stepped unscored (counted)");
+};
+$("g-export").onclick = () => {
+  const blob = new Blob([JSON.stringify(
+    { script: DATA.script, ledger: gateLedger() }, null, 2)],
+    { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "pyreplay-predictions.json";
+  a.click();
+  URL.revokeObjectURL(a.href);
+};
+$("g-reset").onclick = () => {
+  gateSave({});
+  gateStats();
+  gateToast("ledger cleared");
+};
+
 /* #133: the call tree — not lanes, not a flame chart: the run's
    recursion as the tree it is, every node a frame carrying its
    arguments and return value, the cursor descending live. A pure
@@ -3298,6 +3532,7 @@ function render() {
   renderConsole();
   updateAnatomy();
   updateTree();
+  if (gateOn) gateVars();                // #128: claimable names follow
   motionKeys();                          // #135: identity for the NEXT diff
   if (msnap) motionPlay(msnap);
   $("counter").textContent = (idx + 1) + " / " + events.length;
@@ -3349,7 +3584,10 @@ function stepOut() {
 }
 ctl("btn-first", () => { stop(); goto(0); });
 ctl("btn-prev",  () => { stop(); sliceStep(-1); });   // #75: walks the
-ctl("btn-next",  () => { stop(); sliceStep(1); });    // slice when on
+ctl("btn-next",  () => {
+  if (gateGuard()) return;          // #128: claims before steps
+  stop(); sliceStep(1);
+});    // slice when on
 ctl("btn-over",  () => { stop(); stepOver(); });
 ctl("btn-out",   () => { stop(); stepOut(); });
 ctl("btn-last",  () => { stop(); goto(events.length - 1); });
@@ -3630,7 +3868,10 @@ document.addEventListener("keydown", e => {
     if (e.key === "Escape") e.target.blur();   // recover the transport
     return;
   }
-  if (e.key === "ArrowRight") { stop(); sliceStep(1); }
+  if (e.key === "ArrowRight") {
+    if (gateGuard()) return;        // #128: claims before steps
+    stop(); sliceStep(1);
+  }
   else if (e.key === "ArrowLeft") { stop(); sliceStep(-1); }
   else if (e.key === "Escape") {
     if (SLICE) exitSlice();

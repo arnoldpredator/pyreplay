@@ -684,6 +684,19 @@ the endpoints are recorded truth. `P` (or 🎬) enters presentation
 mode — chrome hidden, large type, code and data side by side for a
 projector — Esc exits.
 
+**The prediction gate (🔮).** Passive replay teaches little — the
+gate makes you commit first. Arm it and the step controls ask for a
+claim before they reveal: which line executes next (Enter commits,
+the step scores it), what a variable will show (or that it won't
+change), how many times the loop you're standing on runs (scored
+from the recorded verdicts on the spot). Every verdict states both
+sides — "✗ claimed L6 — recorded L5" — and the mismatch is the
+lesson. The ledger tracks hit rate by claim type and your streak,
+per script; skipped steps are counted too; export downloads the
+JSON. Free navigation is never locked — only committed claims
+count. Try it on a planted-bug trace: the drill turns a bug hunt
+into a score.
+
 ## 4f. Recording for real life: the black box, the capsule, the chunks (2026-08)
 
 **The flight recorder (`--black-box`).** Recording becomes a ring

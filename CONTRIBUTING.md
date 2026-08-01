@@ -7,7 +7,7 @@ can pick an item and implement it. Features are numbered **#63 onward**, continu
 in FEATURES.md. Fifteen roadmap items have shipped since the list was
 written (63, 64, 65, 70, 77, 79, 80, 98, 101 v1, 103, 104 Tier 1,
 106, 109, 118, 120 v1) — their rows below are struck through;
-**44 remain unbuilt** (plus the stated remainders of 75/85/88/89/101/104/119/120/127).
+**43 remain unbuilt** (plus the stated remainders of 75/85/88/89/101/104/119/120/127/128).
 
 ## Start here — how to contribute
 
@@ -134,7 +134,7 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
 | 125 | Mutation-survivor forensics | M | ★★★ |
 | 126 | Metamorphic relations harness | S–M | ★★ |
 | 127 | ~~Scaling bench: measured growth exponents~~ **shipped (minimal gen protocol; full #67 remains)** | M | ★★★ |
-| 128 | Prediction gate: commit a claim, get scored | M | ★★★ |
+| 128 | ~~Prediction gate: commit a claim, get scored~~ **shipped (tour stops await #108)** | M | ★★★ |
 | 129 | Graph lens on the map (centrality, communities) | M | ★★ |
 | 130 | Trace compressibility (regularity strip) | S | ★ |
 | 131 | ~~CFG view: the code as a graph, the run as a path~~ **shipped** | M | ★★★ |
@@ -1204,6 +1204,7 @@ per algorithm.
 
 ### 128. The prediction gate
 *(belongs with Section 7 — the replayer as a medium)*
+**Shipped 2026-08-01** — now catalog entry #128 in [FEATURES.md](FEATURES.md): 🔮 gate bar with three claim types (next line / variable value or unchanged / loop total from recorded verdicts), gated step controls with counted unscored skips, per-script localStorage ledger with hit rate by type + streak, JSON sidecar export. What remains: prediction stops inside tours — when #108 exists.
 - **What:** a replayer mode in which the next state is hidden behind a
   curtain until you commit a claim — "this verdict is False", "this
   loop runs 7 times", "`total` becomes 42" — which is then scored

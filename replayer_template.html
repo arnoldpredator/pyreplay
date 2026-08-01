@@ -212,6 +212,35 @@
   #repro button { background: var(--panel); color: var(--text);
     border: 1px solid var(--border); border-radius: 4px;
     cursor: pointer; padding: 1px 7px; margin: 2px 6px 2px 0; }
+  #anatbox { border-top: 1px solid var(--border); padding: 6px 10px;
+    font-size: 11px; color: var(--dim); }
+  #anatbox summary { cursor: pointer; color: var(--text); }
+  #anatbox #anatname { color: var(--dim); font-weight: 400; }
+  .ahead { margin: 8px 0 3px; color: var(--accent); font-size: 10px;
+    text-transform: uppercase; letter-spacing: .5px; }
+  .anote { color: var(--dim); font-style: italic; margin: 3px 0; }
+  .astbox { max-height: 200px; overflow: auto; background: #171a22;
+    border: 1px solid var(--border); border-radius: 4px;
+    margin-top: 3px; padding: 3px 6px; }
+  .astn { margin-left: 12px; }
+  .astbox > .astn { margin-left: 0; }
+  .astn.leaf { padding: 0 2px; }
+  details.astn > summary { cursor: pointer; list-style: none; }
+  details.astn > summary::before { content: "▸ "; color: var(--dim); }
+  details.astn[open] > summary::before { content: "▾ "; }
+  .astn.cur > summary, .astn.leaf.cur { background: var(--changed-bg);
+    color: var(--changed-text); border-radius: 3px; }
+  .astn .apos { color: var(--dim); font-size: 9px; }
+  .disbox { position: relative; max-height: 220px; overflow: auto;
+    background: #171a22; border: 1px solid var(--border);
+    border-radius: 4px; margin-top: 3px; padding: 3px 0; }
+  .disrow { display: flex; gap: 7px; padding: 0 8px; white-space: pre; }
+  .disrow.cur { background: var(--changed-bg); }
+  .disrow .disl { min-width: 24px; text-align: right; color: var(--call); }
+  .disrow .dist { min-width: 8px; color: var(--accent); }
+  .disrow .diso { min-width: 26px; text-align: right; color: var(--dim); }
+  .disrow .disop { color: var(--text); font-weight: 600; }
+  .disrow.cur .disop, .disrow.cur .disl { color: var(--changed-text); }
   #qmarks { position: relative; height: 7px; margin: 0 7px 2px; }
   .qmark {
     position: absolute; top: 0; width: 4px; height: 7px;
@@ -475,6 +504,10 @@
       <h2>Console <span id="constat"></span></h2>
       <div id="console"></div>
     </section>
+    <details id="anatbox" title="#85: what this line IS to the interpreter — the syntax tree above it, the instructions below it">
+      <summary>Anatomy <span id="anatname"></span></summary>
+      <div id="anatomy"></div>
+    </details>
     <details id="repro">
       <summary>Reproduce</summary>
       <div id="capsule"></div>
@@ -2166,6 +2199,96 @@ let collapsed = false;   // variables panel: show only changing vars
 let historyVar = null;   // label whose life strip is unfolded
 let lastFnq = "?/";      // view-pref qualifier of the last rendered frame
 
+/* #85: the anatomy panel — the innermost enclosing record's AST tree
+   and dis listing, current line lit in both. Static truth only: the
+   instructions are compiled fresh from the source; the adaptive
+   interpreter's run-time specializations are NOT these rows. */
+const anatBox = $("anatbox");
+let anatKey = null;
+function anatRec(f, l) {
+  const an = (DATA.anatomy || {})[f];
+  if (!an || !an.recs) return null;
+  let best = null;
+  for (const r of an.recs)
+    if (r.l0 <= l && l <= r.l1 &&
+        (!best || (r.l1 - r.l0) <= (best.l1 - best.l0))) best = r;
+  return best;
+}
+function astHtml(n, l) {
+  const [lab, ln, col, l1, kids] = n;
+  const on = ln != null && ln <= l && l <= (l1 == null ? ln : l1);
+  const cur = ln === l ? " cur" : "";
+  const pos = ln != null ? ' <span class="apos">' + ln +
+    (col != null ? ":" + col : "") + "</span>" : "";
+  if (!kids || !kids.length)
+    return '<div class="astn leaf' + cur + '">' + esc2(lab) + pos +
+      "</div>";
+  return '<details class="astn' + cur + '"' + (on ? " open" : "") +
+    "><summary>" + esc2(lab) + pos + "</summary>" +
+    kids.map(k => astHtml(k, l)).join("") + "</details>";
+}
+function updateAnatomy() {
+  if (!anatBox.open) return;
+  const ev = events[idx];
+  if (!ev) return;
+  const body = $("anatomy");
+  if (DATA.granularity !== "line" || !DATA.anatomy
+      || !Object.keys(DATA.anatomy).length) {
+    body.innerHTML = '<div class="anote">line granularity only — an ' +
+      "fn trace records calls, not lines, so there is no current " +
+      "line to dissect.</div>";
+    $("anatname").textContent = "";
+    anatKey = "fn";
+    return;
+  }
+  const rec = anatRec(ev.f, ev.l);
+  if (!rec) {
+    body.innerHTML = '<div class="anote">no anatomy for this file ' +
+      "(unparseable, or outside the recorded set).</div>";
+    $("anatname").textContent = "";
+    anatKey = null;
+    return;
+  }
+  const key = ev.f + " " + rec.q + " " + ev.l;
+  if (key === anatKey) return;
+  anatKey = key;
+  $("anatname").textContent = "· " + rec.q;
+  const py = DATA.anatomy[ev.f].py || "?";
+  let h = '<div class="anote">' + esc2(rec.q) + " · lines " + rec.l0 +
+    "–" + rec.l1 + "</div>";
+  h += '<div class="ahead">syntax — ast</div><div class="astbox">' +
+    astHtml(rec.ast, ev.l) + "</div>";
+  h += '<div class="ahead" title="compiled fresh from the source: the ' +
+    "adaptive interpreter (PEP 659) may have specialized these at run " +
+    'time — that is not shown">instructions — dis · CPython ' +
+    esc2(py) + " · as compiled, not adaptive</div>";
+  if (!rec.dis) {
+    h += '<div class="anote">bytecode unavailable for this record.' +
+      "</div>";
+  } else {
+    let prev = null;
+    h += '<div class="disbox">' + rec.dis.map(r => {
+      const showl = r[3] != null && r[3] !== prev;
+      if (r[3] != null) prev = r[3];
+      return '<div class="disrow' + (r[3] === ev.l ? " cur" : "") +
+        '"><span class="disl">' + (showl ? r[3] : "") + "</span>" +
+        '<span class="dist">' + (r[4] ? "»" : "") + "</span>" +
+        '<span class="diso">' + r[0] + "</span>" +
+        '<span class="disop">' + esc2(r[1]) + "</span>" +
+        esc2(r[2]) + "</div>";
+    }).join("") + "</div>";
+  }
+  body.innerHTML = h;
+  const cur = body.querySelector(".disrow.cur");
+  const box = body.querySelector(".disbox");
+  if (cur && box)
+    box.scrollTop = cur.offsetTop - box.clientHeight / 2;
+}
+anatBox.addEventListener("toggle", () => {
+  anatKey = null;
+  updateAnatomy();
+});
+
 function render() {
   const ev = events[idx];
   if (!ev) return;
@@ -2699,6 +2822,7 @@ function render() {
   }
 
   renderConsole();
+  updateAnatomy();
   $("counter").textContent = (idx + 1) + " / " + events.length;
   $("scrub").value = idx;
   updateHash();

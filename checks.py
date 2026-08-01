@@ -2650,6 +2650,46 @@ def _():
            f"★ row segments must be balanced B/E pairs: {bs}/{es}")
 
 
+@check("anatomy: AST + dis records, innermost spans, fn-honesty (#85)")
+def _():
+    src = fixture("an85.py", (
+        "def outer(a, b):\n"
+        "    def inner(x):\n"
+        "        return x * 2\n"
+        "    if a < b:\n"
+        "        a, b = b, a\n"
+        "    return inner(a)\n"
+        "\n"
+        "print(outer(3, 5))\n"))
+    p = run_trace(src)
+    an = (p.get("anatomy") or {}).get("an85.py")
+    expect(an and an.get("py"), "line traces must carry anatomy + version")
+    recs = {r["q"]: r for r in an["recs"]}
+    expect({"<module>", "outer", "outer.<locals>.inner"} <= set(recs),
+           f"module + defs with real qualnames expected: {set(recs)}")
+    o = recs["outer"]
+    expect(o["l0"] == 1 and o["l1"] == 6, f"outer span wrong: {o}")
+    ops = [r[1] for r in o["dis"]]
+    expect("COMPARE_OP" in ops,
+           "a < b must compile to COMPARE_OP in outer's listing")
+    expect(any(r[4] for r in o["dis"]),
+           "jump targets must be flagged for the » marker")
+    expect(all(r[3] is None or o["l0"] <= r[3] <= o["l1"]
+               for r in o["dis"]),
+           "every instruction's line must sit inside its record's span")
+    # innermost pick: line 3 belongs to inner, not outer or <module>
+    inner = [r for r in an["recs"] if r["l0"] <= 3 <= r["l1"]]
+    best = min(inner, key=lambda r: r["l1"] - r["l0"])
+    expect(best["q"] == "outer.<locals>.inner",
+           f"innermost record for line 3 must be inner: {best['q']}")
+    expect(best["ast"][0].startswith("FunctionDef"),
+           f"record AST root must be its def node: {best['ast'][0]}")
+    # honesty: fn granularity has no current line — no anatomy fiction
+    q = run_trace(src, "--granularity", "fn", name="an85_fn")
+    expect(not q.get("anatomy"),
+           "fn traces must not carry anatomy (no line to dissect)")
+
+
 # ---------------------------------------------------------------- runner
 
 def main():

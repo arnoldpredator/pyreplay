@@ -1180,6 +1180,40 @@ dead or invented panel; every cap and truncation is announced.
 
   [![Feature 39 — mro](screenshots/39-mro.png)](screenshots/39-mro.png)
 
+### 85. The anatomy panel — AST + bytecode of the current line (static tiers)
+- **Measured:** at trace-write time every recorded source file is
+  parsed and compiled fresh — nothing executes. Per record (`<module>`
+  plus every `def`, real qualnames like `outer.<locals>.inner`): the
+  AST tree (one line per node with its salient detail and line:col
+  span, operators spelled out, capped at 800 nodes with the cap
+  announced in-tree) and the `dis` listing (offset, opname, argument,
+  source line via `co_positions`, jump-target flag), joined to the
+  record by `(name, firstlineno)`.
+- **Displayed:** the **Anatomy** panel in the side bar. It names the
+  innermost record enclosing the current line, then two blocks:
+  SYNTAX — the collapsible AST tree, ancestors of the current line
+  pre-opened and its nodes lit; INSTRUCTIONS — the record's full dis
+  listing auto-scrolled to the current line's rows, `»` marking jump
+  targets, the line column written dis-style only where it changes.
+- **Why:** the interpreter is not magic. `a < b` is two LOAD_FASTs
+  and a COMPARE_OP plus dispatch; a tuple swap is a pack and an
+  unpack; the layer below every stepped line is one click away, and
+  the syntax layer above it in the same panel.
+- **Use case:** bubble sort's compare line: the AST path lights
+  If → Compare `>` → Subscript, and the listing shows the
+  BINARY_SUBSCR pair feeding COMPARE_OP — then one step forward, the
+  swap line is the tuple pack/unpack you always suspected it was.
+- **Command:** any line-granularity trace → open **Anatomy** in the
+  side panel (under fn granularity the panel says why there is no
+  current line to dissect). Honesty: the header states "as compiled,
+  not adaptive" with the CPython version — the run-time
+  specializations of PEP 659 are Tier 2, unbuilt.
+- **Screenshot** — bubble sort's compare: the AST path lit to the
+  Subscript, the dis box scrolled to line 5's LOAD_FAST/BINARY_SUBSCR
+  rows, » on the FOR_ITER jump target.
+
+  [![Feature 85 — anatomy](screenshots/85-anatomy.png)](screenshots/85-anatomy.png)
+
 ---
 
 ## G. Concurrency & time

@@ -2256,6 +2256,138 @@ def build_guards(text, rel):
     return {str(k): v for k, v in guards.items()}
 
 
+ANATOMY_AST_CAP = 800    # nodes per record; truncation announced in-tree
+
+_AST_OPS = {
+    "Add": "+", "Sub": "-", "Mult": "*", "Div": "/", "FloorDiv": "//",
+    "Mod": "%", "Pow": "**", "LShift": "<<", "RShift": ">>",
+    "BitOr": "|", "BitXor": "^", "BitAnd": "&", "MatMult": "@",
+    "And": "and", "Or": "or", "Not": "not", "Invert": "~",
+    "UAdd": "+", "USub": "-", "Eq": "==", "NotEq": "!=", "Lt": "<",
+    "LtE": "<=", "Gt": ">", "GtE": ">=", "Is": "is", "IsNot": "is not",
+    "In": "in", "NotIn": "not in",
+}
+
+
+def _ast_label(node):
+    """One human line per AST node: the type plus its salient detail."""
+    t = type(node).__name__
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                         ast.ClassDef)):
+        return t + " " + node.name
+    if isinstance(node, ast.Name):
+        return t + " " + node.id
+    if isinstance(node, ast.Attribute):
+        return t + " ." + node.attr
+    if isinstance(node, ast.Constant):
+        r = repr(node.value)
+        return t + " " + (r[:24] + "…" if len(r) > 24 else r)
+    if isinstance(node, (ast.BinOp, ast.UnaryOp)):
+        return t + " " + _AST_OPS.get(type(node.op).__name__, "")
+    if isinstance(node, ast.BoolOp):
+        return t + " " + _AST_OPS.get(type(node.op).__name__, "")
+    if isinstance(node, ast.Compare):
+        return t + " " + " ".join(_AST_OPS.get(type(o).__name__, "?")
+                                  for o in node.ops)
+    if isinstance(node, ast.AugAssign):
+        return t + " " + _AST_OPS.get(type(node.op).__name__, "") + "="
+    if isinstance(node, ast.arg):
+        return t + " " + node.arg
+    if isinstance(node, ast.keyword):
+        return t + " " + (node.arg or "**")
+    if isinstance(node, (ast.Import, ast.ImportFrom)):
+        return t + " " + ", ".join(a.name for a in node.names)
+    if isinstance(node, ast.ExceptHandler) and node.name:
+        return t + " as " + node.name
+    return t
+
+
+def build_anatomy(text, rel):
+    """#85 Tier 0+1 (static): per-function AST tree + bytecode listing.
+    Records = <module> plus every def/async def, keyed by line span; the
+    renderer picks the INNERMOST record containing the current line.
+    Bytecode comes from compiling the source fresh — the instructions as
+    CPython compiles them, NOT the adaptive/specialized forms the run
+    may have quickened into (that would need the live code objects;
+    stated in the panel). Nothing here executes the code."""
+    try:
+        tree = ast.parse(text, filename=rel)
+        code = compile(tree, rel, "exec")
+    except SyntaxError:
+        return None
+
+    # -- AST side: one nested tree per record, capped with an announced
+    #    marker node (label, l0, c0, l1, children) — cols are 0-based.
+    def encode(node, budget):
+        lab = _ast_label(node)
+        ln = getattr(node, "lineno", None)
+        l1 = getattr(node, "end_lineno", None)
+        col = getattr(node, "col_offset", None)
+        kids = []
+        for ch in ast.iter_child_nodes(node):
+            if type(ch).__name__ in ("Load", "Store", "Del",
+                                     "expr_context") \
+                    or isinstance(ch, (ast.operator, ast.boolop,
+                                       ast.unaryop, ast.cmpop)):
+                continue      # operator detail already lives in the label
+            if budget[0] <= 0:
+                kids.append(["… (AST truncated at %d nodes)"
+                             % ANATOMY_AST_CAP, None, None, None, []])
+                break
+            budget[0] -= 1
+            kids.append(encode(ch, budget))
+        return [lab, ln, col, l1, kids]
+
+    # -- bytecode side: every code object reachable from the module,
+    #    keyed by (name, firstlineno) for the join below.
+    def walk_codes(co, out):
+        out[(co.co_name, co.co_firstlineno)] = co
+        for c in co.co_consts:
+            if hasattr(c, "co_code"):
+                walk_codes(c, out)
+        return out
+    codes = walk_codes(code, {})
+
+    def listing(co):
+        rows = []
+        for ins in dis.get_instructions(co):
+            pos = getattr(ins, "positions", None)
+            line = (pos.lineno if pos and pos.lineno else None)
+            rows.append([ins.offset, ins.opname, str(ins.argrepr or ""),
+                         line, 1 if ins.is_jump_target else 0])
+        return rows
+
+    recs = []
+
+    def add_rec(name, qual, l0, l1, ast_node, co_key):
+        budget = [ANATOMY_AST_CAP]
+        co = codes.get(co_key)
+        recs.append({
+            "q": qual, "l0": l0, "l1": l1,
+            "ast": encode(ast_node, budget),
+            "dis": listing(co) if co is not None else None,
+        })
+
+    def visit(node, prefix):
+        for ch in ast.iter_child_nodes(node):
+            if isinstance(ch, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                qual = prefix + ch.name
+                add_rec(ch.name, qual, ch.lineno,
+                        ch.end_lineno or ch.lineno, ch,
+                        (ch.name, ch.lineno))
+                visit(ch, qual + ".<locals>.")
+            elif isinstance(ch, ast.ClassDef):
+                visit(ch, prefix + ch.name + ".")
+            else:
+                visit(ch, prefix)
+
+    nlines = text.count("\n") + 1
+    add_rec("<module>", "<module>", 1, nlines, tree, (code.co_name, 1))
+    visit(tree, "")
+    return {"recs": recs,
+            "py": "%d.%d.%d" % sys.version_info[:3]}
+
+
 def annotate_conditionals(events, sources):
     """Post-processing: walk the event stream with per-thread frame
     stacks; each event on an if/while line becomes 'pending' and is
@@ -2765,6 +2897,9 @@ def _write_trace(tr, out, granularity, entry_label, error,
         "guards": {rel: build_guards(text, rel)
                    for rel, text in tr.sources.items()}
                   if granularity == "line" else {},
+        "anatomy": {rel: build_anatomy(text, rel)
+                    for rel, text in tr.sources.items()}
+                   if granularity == "line" else {},
         "events": tr.events,
         "truncated": tr.truncated,
         "error": error,

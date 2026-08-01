@@ -7,7 +7,7 @@ can pick an item and implement it. Features are numbered **#63 onward**, continu
 in FEATURES.md. Fifteen roadmap items have shipped since the list was
 written (63, 64, 65, 70, 77, 79, 80, 98, 101 v1, 103, 104 Tier 1,
 106, 109, 118, 120 v1) — their rows below are struck through;
-**49 remain unbuilt** (plus the stated remainders of 75/88/89/101/104/119/120).
+**48 remain unbuilt** (plus the stated remainders of 75/85/88/89/101/104/119/120).
 
 ## Start here — how to contribute
 
@@ -91,7 +91,7 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
 | 82 | Per-variable type histograms; None alarms | M | ★★ |
 | 83 | Array shape/dtype timeline | M | ★★★ |
 | 84 | I/O lane via audit hooks; resource-leak pairing | M | ★★ |
-| 85 | Code anatomy: AST + bytecode panel | S–XL | ★★ |
+| 85 | ~~Code anatomy: AST + bytecode panel~~ **static tiers shipped; Tier 2 (instruction events) remains** | S–XL | ★★ |
 | 86 | Ternary/short-circuit verdicts via BRANCH events | L | ★★ |
 | 87 | Memory heat on the map (tracemalloc) | M | ★★ |
 | 88 | ~~Who-woke-whom arrows across tasks/threads~~ **shipped (v1; queue correlation remains)** | — | ★★★ |
@@ -448,6 +448,7 @@ software.
   security auditing, almost never surfaced to developers).
 
 ### 85. Code anatomy panel (recovers "opcode-level" — AST + bytecode)
+**Static tiers (0+1) shipped 2026-08-01** — now catalog entry #85 in [FEATURES.md](FEATURES.md): Anatomy panel — per-record AST tree + dis listing (innermost enclosing record per line, current line lit in both, "as compiled, not adaptive" honesty header). What remains: Tier 2 — per-instruction dynamic stepping, and the live specialized/quickened opcodes it would reveal.
 - **What:** Tier 0 (static): a collapsible AST tree of the selected
   function — the syntax layer above the bytecode, instaviz-style.
   Tier 1 (static): a panel showing `dis` output for the

@@ -618,6 +618,19 @@ calls, and the terminal summarizes every unstable interface after the
 run. The wrong-shape payload gets caught at the border, not five
 frames downstream.
 
+**The anatomy panel.** Open **Anatomy** in the side bar of any
+line-granularity trace and the current line is dissected into the
+layer above it and the layer below it: SYNTAX — the enclosing
+function's AST tree, the current line's path pre-opened and its nodes
+lit (`If → Compare > → Subscript`); INSTRUCTIONS — the function's
+`dis` listing scrolled to the current line's rows, `»` marking jump
+targets. The interpreter stops being magic: a compare is two loads
+and a COMPARE_OP, a tuple swap is a pack and an unpack. The header
+is honest about what you're reading — "as compiled, not adaptive",
+with the CPython version: the specialized opcodes the adaptive
+interpreter may have quickened at run time are not these rows. Under
+fn granularity the panel says why it can't answer (no current line).
+
 ## 4f. Recording for real life: the black box, the capsule, the chunks (2026-08)
 
 **The flight recorder (`--black-box`).** Recording becomes a ring

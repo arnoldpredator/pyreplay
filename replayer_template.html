@@ -165,6 +165,17 @@
     transform: translateX(-2px);
   }
   .imark:hover { background: #f2989e; }
+  #iomarks { position: relative; height: 7px; margin: 0 7px 2px; }
+  .iomark { position: absolute; top: 0; width: 4px; height: 7px;
+    border-radius: 2px; cursor: pointer; transform: translateX(-2px);
+    background: #56b6c2; }
+  .iomark.io-net { background: #7aa2f7; }
+  .iomark.io-proc { background: #c678dd; }
+  .iomark.io-code { background: #e5c07b; }
+  .iomark.io-import { background: #7d8494; }
+  .iomark.ioleak { background: #e06c75; width: 6px;
+    transform: translateX(-3px); box-shadow: 0 0 4px #e06c75; }
+  .iomark:hover { filter: brightness(1.4); }
   .femark { position: absolute; top: 0; width: 4px; height: 7px;
     background: #e78fbb; border-radius: 2px; cursor: pointer;
     transform: translateX(-2px); }
@@ -1234,6 +1245,26 @@ if (DATA.inject) {
         " (nothing injected there — check the name)"
       : "") +
     " — failure paths explored on purpose.";
+  b.appendChild(s);
+}
+/* roadmap #5: the I/O lane — say what the program touched, and flag
+   any file left open at exit (the resource question) */
+if (DATA.io && DATA.io.total) {
+  const b = $("banner");
+  if (!b.style.display || b.style.display === "none") {
+    b.className = "info";
+    b.style.display = "block";
+  }
+  const c = DATA.io.counts || {};
+  const parts = Object.keys(c).sort().map(k => c[k] + " " + k);
+  const s = document.createElement("span");
+  s.textContent = " ⇄ I/O lane — " + DATA.io.total +
+    " operation(s): " + parts.join(", ") +
+    (DATA.io.leaks
+      ? " · ⚠ " + DATA.io.leaks + " file(s) UNCLOSED at exit"
+      : " · every tracked file was closed") +
+    (DATA.io.capped ? " · cap reached (more happened)" : "") +
+    " — Python-layer audit, not C syscalls.";
   b.appendChild(s);
 }
 /* a chunked file missing a chunk: after the error/trigger banner text
@@ -2882,9 +2913,9 @@ function computeStacks(idx) {
   for (let i = start; i <= idx; i++) {
     const ev = events[i];
     if (ev.e === "chap" || ev.e === "hb" || ev.e === "viol"
-        || ev.e === "br" || ev.e === "inj") {
-      maybeKeyframe(i, idx, stacks, curT);   // boundaries, wakes and
-      continue;                              // verdicts are not frames
+        || ev.e === "br" || ev.e === "inj" || ev.e === "io") {
+      maybeKeyframe(i, idx, stacks, curT);   // boundaries, wakes,
+      continue;                              // verdicts, I/O: not frames
     }
     const t = laneOf(ev);
     curT = t;
@@ -4759,6 +4790,16 @@ function render() {
     wk.innerHTML = "💉 " + esc2(ev.tgt) + " call " + ev.n +
       ": " + what + " (injected on purpose)";
     wk.style.display = "block";
+  } else if (ev.e === "io") {
+    // roadmap #5: the operation, its detail, and the leak verdict
+    const KIND = { file: "file", net: "network", proc: "subprocess",
+                   code: "dynamic code", import: "import" };
+    wk.innerHTML = "⇄ " + esc2(KIND[ev.io] || ev.io) + ": " +
+      esc2(ev.d) + (ev.leak
+        ? ' · <span style="color:var(--err)">UNCLOSED at exit — ' +
+          'no matching close()</span>'
+        : "");
+    wk.style.display = "block";
   } else if (ev.e === "hb") {
     const srcLane = (ev.t || "main") + (ev.tk ? " · " + ev.tk : "");
     const laneHit = e =>
@@ -4795,6 +4836,9 @@ function render() {
     badge.className = "badge exc";
     badge.textContent = "💉 INJECTED " + ev.act + "=" + ev.val +
       (ev.n ? " (call " + ev.n + ")" : "");
+  } else if (ev.e === "io") {
+    badge.className = ev.leak ? "badge exc" : "badge log";
+    badge.textContent = "⇄ I/O " + ev.io + (ev.leak ? " — LEAK" : "");
   } else if (ev.e === "br") {
     badge.className = "badge brv";
     badge.textContent = "BRANCH — " + brValText(ev).toUpperCase();
@@ -6168,6 +6212,33 @@ $("scrub").max = Math.max(0, events.length - 1);
     footer.insertBefore(box, footer.firstChild);
   }
 })();
+/* roadmap #5: the I/O lane strip — every file/net/proc/code/import
+   operation the traced code caused, one pin, leaks glowing red. */
+(function () {
+  if (!DATA.io) return;
+  const box = document.createElement("div");
+  box.id = "iomarks";
+  const total = Math.max(1, events.length - 1);
+  const GLYPH = { file: "🗀", net: "🌐", proc: "⚙", code: "⚡",
+                  import: "📦" };
+  let any = false;
+  events.forEach((e, i) => {
+    if (e.e !== "io") return;
+    any = true;
+    const m = document.createElement("span");
+    m.className = "iomark io-" + e.io + (e.leak ? " ioleak" : "");
+    m.style.left = (i / total * 100) + "%";
+    m.title = (GLYPH[e.io] || "") + " " + e.io + ": " + e.d +
+      (e.leak ? " — UNCLOSED at exit" : "") + " · " + e.f + ":" +
+      e.l + " in " + e.fn + "() (event " + (i + 1) + ")";
+    m.onclick = () => { stop(); goto(i); };
+    box.appendChild(m);
+  });
+  if (any) {
+    const footer = document.querySelector("footer");
+    footer.insertBefore(box, footer.firstChild);
+  }
+})();
 $("scrub").oninput = e => { stop(); goto(parseInt(e.target.value, 10)); };
 $("scrub").onchange = e => e.target.blur();   // drag ended: release focus
 /* view selector: delegated, since #vars is rebuilt on every render */
@@ -6303,7 +6374,7 @@ function parseQuery(q) {
                   chap: "chap", test: "chap", log: "log",
                   console: "log", hb: "hb", wake: "hb", viol: "viol",
                   br: "br", branch: "br", inj: "inj", inject: "inj",
-                  invariant: "viol", yield: "yield",
+                  io: "io", invariant: "viol", yield: "yield",
                   resume: "resume" }[m[1].toLowerCase()];
       if (!k) { bad.push(tok); return; }
       if (k === "yield")

@@ -1,9 +1,9 @@
 # pyreplay — the roadmap & contribution guide
 
-Everything already built lives in **FEATURES.md** (the catalog, 122
+Everything already built lives in **FEATURES.md** (the catalog, 125
 entries, ordered the way you use the tool) and **TUTORIAL.md** (the
 guide, same order). This file is the other half: **the features not
-built yet** — numbered 1–17 below, 14 still open (a shipped one keeps
+built yet** — numbered 1–17 below, 13 still open (a shipped one keeps
 its number, struck through, so references stay stable) — and how to
 contribute one. It's written so a stranger can pick an item and
 implement it.
@@ -12,7 +12,7 @@ implement it.
 
 New here and want to help? Three steps:
 
-1. **Pick something.** The **Index** below lists the 14 open
+1. **Pick something.** The **Index** below lists the 13 open
    features. Bug reports, edge cases, and more `example_*.py`
    programs are just as welcome. Adding **another language** is the
    biggest prize — see "Support another language" and the event-log
@@ -62,7 +62,7 @@ design lenses, not quotes:
   #112/#114, and #3 here (shipped: catalog #118).
 - **The Stroustrup lens — types, invariants, resources.** What holds
   always? What type flows here? Who owns this resource and who
-  closed it? → catalog #65/#66/#67, and #5 here.
+  closed it? → catalog #65/#66/#67, and #5 here (shipped: catalog #120).
 
 **Effort:** S = a focused day · M = several days · L = a week+, schema
 touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
@@ -76,7 +76,7 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
 | ~~2~~ | ~~Inject exceptions/latency on purpose~~ — **shipped**: catalog #119 (`--inject`) | L | ★★ |
 | ~~3~~ | ~~Compare implementations on the same inputs~~ — **shipped**: catalog #118 (`--oracle`) | M | ★★ |
 | 4 | Object-reference graph at an event | L | ★★ |
-| 5 | I/O lane via audit hooks; resource-leak pairing | M | ★★ |
+| ~~5~~ | ~~I/O lane via audit hooks; resource-leak pairing~~ — **shipped**: catalog #120 (`--io`) | M | ★★ |
 | 6 | Memory heat on the map (tracemalloc) | M | ★★ |
 | 7 | Lock-wait attribution | L | ★★ |
 | 8 | Multiprocessing children traced into lanes | XL | ★★★ |
@@ -140,27 +140,19 @@ explanation there.
   teaching visualization Python has ever had, absent from tools for
   real codebases.
 
-### 5. The I/O lane (strace-lite) + resource pairing
-- **What:** record `sys.addaudithook` events — file opens, socket
-  connects, subprocess spawns, `exec/eval`, imports — as a parallel
-  I/O lane in the replayer, each linked to the frame that caused it;
-  pair opens with closes (via weakref finalizers on returned handles)
-  and report unclosed resources at exit.
-- **Why:** "what did this program touch?" — files read, hosts
-  contacted, commands run — answered from the trace; plus the
-  Stroustrup-lens question "who owns this resource and did they
-  release it". Also a light supply-chain audit: an import that opens
-  a socket stands out.
-- **How:** audit hooks are stdlib, near-free, and fire regardless of
-  granularity (they even work in fn mode). Close-pairing needs a
-  small in-process shim in the runner (wrap `open`'s return with a
-  finalizer track) — labeled honestly as instrumentation. Socket
-  events carry their target addresses (an endpoints inventory for
-  free); payload capture stays external on purpose (mitmproxy et
-  al. — we bridge specialists, we don't clone them).
-- **Effort:** M.
-- **Prior art:** strace/ltrace; PEP 578 audit hooks (designed for
-  security auditing, almost never surfaced to developers).
+### 5. The I/O lane — SHIPPED
+Now **catalog #120** (`--io`): `sys.addaudithook` records file opens,
+socket connects/DNS, subprocess spawns, `exec`/`eval` and your direct
+imports as first-class events tied to the causing frame (works at fn
+granularity too); a wrapped `open()` pairs handles and names any file
+still open at exit as a leak, at its site. Transitive stdlib imports
+and importlib's module-body `exec`s are filtered so the lane stays
+signal; socket events carry their target addresses; payload capture
+stays external on purpose. One honesty refinement over the sketch:
+weakref *finalizers* proved the wrong instrument (they fire on GC,
+which for a leaked file may never come) — the leak test is instead
+"a tracked handle whose `.closed` is still False at trace end", so
+only provably-open resources are flagged.
 
 ### 6. Memory heat (calorimetry)
 - **What:** `--memory` — sample `tracemalloc` snapshots at intervals
@@ -390,8 +382,8 @@ The learner's cut of the open seventeen:
    the failing case while you sleep, keep the seed, shrink it.
 2. ~~**#3 differential testing**~~ — **shipped** (catalog #118): the
    brute force is the specification, the loop closed end to end.
-3. **#5 the I/O lane** — "what did this program touch?" answered
-   from audit hooks, with unclosed resources named.
+3. ~~**#5 the I/O lane**~~ — **shipped** (catalog #120): "what did
+   this program touch?" from audit hooks, unclosed resources named.
 4. **#6 memory heat** — time-heat says where it computed;
    memory-heat says where it retained.
 5. **#10 attach** — the one thing external samplers still have over

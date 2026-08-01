@@ -1087,6 +1087,22 @@ grand total, which is the quieter failure mode and the better
 lesson. Repeat the flag for multiple faults; add `--runs 10` for
 the catch rate.
 
+**What did it touch? (`--io`).** `python3 tracer.py --io main.py`
+opens the I/O lane: every file opened, host contacted, subprocess
+spawned, `exec`/`eval` run and import your own code wrote becomes an
+event tied to the frame that caused it, recorded through
+`sys.addaudithook` (stdlib, works in `fn` mode too). Opened files
+are paired with their closes, and any handle still open at exit is
+named as a leak at its exact site — the resource question answered,
+not guessed. The banner sums it up (⇄ with per-kind counts and the
+leak verdict), a color-coded strip pins every operation with
+unclosed files glowing red, and `type:io` filters the lane. It only
+records what your code caused — a library opening a socket on your
+behalf is attributed to the line that triggered it, while the dozens
+of transitive stdlib imports stay out of the way. Honesty: audit
+hooks see the Python layer, not raw C syscalls, and endpoints are
+captured but payloads stay external (bridge mitmproxy for those).
+
 **Input shrinking (`--shrink`).** A huge input that crashes is a
 chore; the tiny core that still crashes is a diagnosis. Pipe the
 input and `--shrink` runs Zeller's ddmin over it — lines by default,

@@ -4706,6 +4706,103 @@ def _():
            "--no-console starves the output channel — refused")
 
 
+@check("io lane: audit events, frame attribution, leak pairing "
+       "(roadmap #5)")
+def _():
+    tgt = fixture("io5.py", (
+        "import json, subprocess\n"
+        "\n"
+        "def load():\n"
+        "    with open('io5_cfg.json') as fh:\n"
+        "        return json.load(fh)\n"
+        "\n"
+        "def leak():\n"
+        "    fh = open('io5_scratch.txt', 'w')\n"
+        "    fh.write('x')\n"
+        "    return fh\n"
+        "\n"
+        "open('io5_cfg.json', 'w').write('{\"n\": 7}')\n"
+        "cfg = load()\n"
+        "held = leak()\n"
+        "subprocess.run(['true'], capture_output=True)\n"
+        "exec('y = 2 + 2')\n"
+        "print('n', cfg['n'])\n"))
+
+    def run(*flags):
+        out = os.path.join(TMP, "io5.html")
+        r = subprocess.run([PY, os.path.join(HERE, "tracer.py"),
+                            "--out", out, "--io", *flags, tgt],
+                           capture_output=True, text=True, cwd=TMP,
+                           stdin=subprocess.DEVNULL, timeout=120)
+        return r, payload(out)
+    r, p = run()
+    io = [e for e in p["events"] if e.get("e") == "io"]
+    kinds = {}
+    for e in io:
+        kinds[e["io"]] = kinds.get(e["io"], 0) + 1
+    expect(kinds.get("file") == 3, f"3 file opens (2 cfg + scratch): "
+           f"{kinds}")
+    expect(kinds.get("proc") == 1 and kinds.get("code") == 2,
+           f"one subprocess + the direct exec's compile/exec: {kinds}")
+    # transitive imports must NOT flood: json/subprocess pull in dozens
+    # of stdlib modules; only YOUR direct import line is signal
+    expect(kinds.get("import", 0) <= 1,
+           f"transitive stdlib imports must not flood the lane: "
+           f"{kinds}")
+    # every event attributes to the target — never to tracer.py, and
+    # never to the import machinery
+    expect(all(e["f"] == "io5.py" for e in io),
+           f"every io event lands in the traced file: "
+           f"{[e['f'] for e in io]}")
+    # the frame is the CALLING function, precise
+    opens = [e for e in io if e["io"] == "file"]
+    byfn = {e["d"].split()[0]: e["fn"] for e in opens}
+    expect(byfn.get("io5_scratch.txt") == "leak"
+           and byfn.get("io5_cfg.json") in ("<module>", "load"),
+           f"file opens attribute to their calling function: {byfn}")
+    # the leak: exactly the never-closed handle, named at its site
+    leaks = [e for e in io if e.get("leak")]
+    expect(len(leaks) == 1
+           and leaks[0]["d"].startswith("io5_scratch.txt")
+           and leaks[0]["fn"] == "leak",
+           f"exactly the unclosed file is flagged, at its site: "
+           f"{leaks}")
+    expect(p["io"]["leaks"] == 1 and p["io"]["total"] == 6,
+           f"payload io summary: {p['io']}")
+    expect("UNCLOSED at exit" in r.stdout
+           and "io5_scratch.txt" in r.stdout,
+           "the terminal names the leaking resource and its site")
+    # the with-block file must NOT be a leak (it closed)
+    closed = [e for e in io if e["d"].startswith("io5_cfg.json")
+              and e["d"].endswith("(r)")]
+    expect(closed and not closed[0].get("leak"),
+           "a properly closed file is never flagged")
+    # audit hooks fire at fn granularity too (no line events needed)
+    r2, p2 = run("--granularity", "fn")
+    io2 = [e for e in p2["events"] if e.get("e") == "io"]
+    expect(len(io2) == 6 and p2["io"]["leaks"] == 1,
+           f"the lane works in fn mode (audit hooks are granularity-"
+           f"independent): {len(io2)} events")
+    # a clean program says so honestly, never invents activity
+    clean = fixture("io5_clean.py", "print(sum(range(10)))\n")
+    out = os.path.join(TMP, "io5_clean.html")
+    r3 = subprocess.run([PY, os.path.join(HERE, "tracer.py"), "--out",
+                         out, "--io", clean], capture_output=True,
+                        text=True, cwd=TMP, stdin=subprocess.DEVNULL,
+                        timeout=120)
+    pc = payload(out)
+    expect(not [e for e in pc["events"] if e.get("e") == "io"]
+           and "no file/network" in r3.stdout,
+           "a program that touched nothing reports nothing, honestly")
+    # the replayer carries the io contract
+    with open(os.path.join(HERE, "replayer_template.html"),
+              encoding="utf-8") as fh:
+        tpl = fh.read()
+    for needle in ("I/O lane —", 'ev.e === "io"', "iomark"):
+        expect(needle in tpl,
+               f"template must carry the io contract: {needle}")
+
+
 @check("inject: forced faults recorded first-class, perturbed "
        "honestly (roadmap #2)")
 def _():

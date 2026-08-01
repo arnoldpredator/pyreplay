@@ -3153,7 +3153,50 @@ Statistics over many runs: rates instead of anecdotes, divergences instead of gu
 
   [![Feature 119 — fault injection](screenshots/r2-inject.png)](screenshots/r2-inject.png)
 
-### 120. Metamorphic relations — the symmetry is the oracle (`--relation`)
+### 120. The I/O lane — what did this program touch? (`--io`)
+- **Measured:** `sys.addaudithook` records the operations that cross
+  the boundary of your process — file opens, socket connects and DNS
+  lookups, subprocess spawns, `exec`/`eval`, and the imports your own
+  code wrote — as first-class events tied to the frame that caused
+  each one. Audit hooks are stdlib, near-free, and fire regardless of
+  granularity, so the lane works in `fn` mode too. Only operations
+  with your code on the stack are recorded: a library opening a socket
+  on your behalf is kept and attributed to the line that triggered
+  it, while the dozens of transitive stdlib imports (and the module
+  bodies importlib `exec`s) are filtered out — direct imports and
+  dynamic code are yours, the rest is plumbing.
+- **Displayed:** a **⇄ I/O lane** banner with per-kind counts and the
+  leak verdict; each operation gets its own event (badge, a panel
+  line spelling it out, `type:io` in the query bar) and a pin on a
+  dedicated color-coded strip — file/net/proc/code/import each a hue,
+  unclosed files glowing red. Opened files are paired with their
+  closes through a wrapped `open()`; any handle still open at exit is
+  named as a leak at its exact open site (a file GC'd earlier was
+  closed by its finalizer, so only a provably-still-open handle is
+  flagged — partial is unmarked).
+- **Why:** two questions answered from one flag. "What did this
+  program touch?" — every file, host and command, from the trace, a
+  light supply-chain audit where an import that opens a socket stands
+  out. And the Stroustrup-lens question, "who owns this resource and
+  did they release it?" — the leak, named.
+- **Use case:** a config-loader demo that opens three files (two via
+  `with`, one leaked), runs a subprocess and `exec`s a string:
+  `⇄ I/O lane — 6 operation(s): 2 code, 3 file, 1 proc · ⚠ 1 file(s)
+  UNCLOSED at exit`, the leak pinned to `leak_a_file()` at its `open`
+  line, and the two `with`-blocks correctly NOT flagged.
+- **Command:** `python3 tracer.py --io tinyshop/main.py`. Off by
+  default (audit hooks are cheap but not free). Honesty: the audit
+  layer sees Python-level operations, not raw C syscalls; endpoint
+  addresses are captured but payload capture stays external
+  (mitmproxy et al. — we bridge specialists, we don't clone them);
+  "no operations" is an observation, not a guarantee.
+- **Screenshot** — the leak moment: ⇄ banner with the counts and the
+  UNCLOSED verdict, the LEAK badge at `leak_a_file()`'s open line,
+  the panel naming the unclosed file, the red pin on the I/O strip.
+
+  [![Feature 120 — the I/O lane](screenshots/r5-io-lane.png)](screenshots/r5-io-lane.png)
+
+### 121. Metamorphic relations — the symmetry is the oracle (`--relation`)
 - **Measured:** the oracle problem's cheapest instrument: the right
   answer may be unknown, but its symmetries are not.
   `--relation "TRANSFORM => RELATION"` declares an input transform
@@ -3195,9 +3238,9 @@ Statistics over many runs: rates instead of anecdotes, divergences instead of gu
   per trial, kept pairs, composed diverge commands, and the diverge
   output below pointing at the exact print that broke the symmetry.
 
-  [![Feature 120 — metamorphic relations](screenshots/126-relations.png)](screenshots/126-relations.png)
+  [![Feature 121 — metamorphic relations](screenshots/126-relations.png)](screenshots/126-relations.png)
 
-### 121. Mutation-survivor forensics — why did this mutant live?
+### 122. Mutation-survivor forensics — why did this mutant live?
 - **Measured:** the bridge uses **mutmut as-is** (never rebuilt): the
   survivor list from `mutmut results`, the nearest covering test
   from mutmut's own coverage mapping (`mutants/mutmut-stats.json`),
@@ -3233,9 +3276,9 @@ Statistics over many runs: rates instead of anecdotes, divergences instead of gu
   missing assertion named), one traced-identical
   (possibly-equivalent, said plainly).
 
-  [![Feature 121 — forensics](screenshots/125-forensics.png)](screenshots/125-forensics.png)
+  [![Feature 122 — forensics](screenshots/125-forensics.png)](screenshots/125-forensics.png)
 
-### 122. The scaling bench — `--sweep`, the doubling experiment as a command
+### 123. The scaling bench — `--sweep`, the doubling experiment as a command
 - **Measured:** the target is run once per rung of a value ladder
   (`--sweep "n=1000,2000,4000,8000"`, or `alpha=3.0..5.0:5` for a
   knob), each child a fresh tracer run whose stdin comes from the
@@ -3277,13 +3320,13 @@ Statistics over many runs: rates instead of anecdotes, divergences instead of gu
   time chart honestly wobbling (startup noise at tiny n), ratios
   marching to 4.
 
-  [![Feature 122 — scaling bench](screenshots/127-scaling-bench.png)](screenshots/127-scaling-bench.png)
+  [![Feature 123 — scaling bench](screenshots/127-scaling-bench.png)](screenshots/127-scaling-bench.png)
 
 ## Part 15 — Infrastructure
 
 What keeps all of the above honest.
 
-### 123. `checks.py` — the regression suite
+### 124. `checks.py` — the regression suite
 68 data-level checks (no browser): the tracer re-runs the permanent
 example suite and the mapper its fixtures, the embedded JSON is
 extracted from each generated HTML (chunked or not), and the honesty
@@ -3305,7 +3348,7 @@ after every change, always.
 - **Command:** `python3 checks.py` — prints the green table, exits
   non-zero on any red.
 
-### 124. The teaching fleet
+### 125. The teaching fleet
 `example_{sort,prefix,histogram,dp,graph,exceptions,control,machinery,
 mro,tasks,threads,watch,dunder,bigarray,heavy,nan,flaky,race}.py` — one small script per feature family, each with its
 pre-built `trace_*.html`; `tinyshop/` — a multi-file teaching project

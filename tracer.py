@@ -18,6 +18,7 @@ overwritten. Use --out NAME.html to pick a name (that one DOES overwrite).
     python tracer.py --fuzz gen.py --runs 50 <script.py>  # input search
     python tracer.py --oracle brute.py fast.py < in.txt   # differential
     python tracer.py --inject "shop.pay:raises=TimeoutError:on_call=3" main.py
+    python tracer.py --io main.py                      # what did it touch?
     python tracer.py --diverge good.html bad.html      # first divergence
     python tracer.py -m pytest tests/                  # trace a test suite
     python tracer.py --root brian2 -m pytest           # pytest scoped to --root
@@ -105,6 +106,21 @@ Repeat --inject for multiple faults. Error-handling paths are the
 least-tested code anywhere; injection is the only way to SEE them
 run — watch the raise propagate and find out what actually catches
 it.
+
+--io opens the I/O lane: every file the program opened, host it
+contacted, subprocess it spawned, exec/eval it ran and import your
+own code wrote becomes a first-class event (e="io") tied to the
+frame that caused it, recorded via sys.addaudithook (stdlib,
+near-free, works at fn granularity too). Opened files are paired with
+their closes through a wrapped open(), and any handle still open at
+exit is named as a leak — the resource question, answered. Only
+operations with your code on the stack are recorded (a library
+opening a socket on your behalf is kept and attributed to the line
+that triggered it; transitive stdlib imports are not). Honesty: the
+audit layer sees Python-level operations, not raw C syscalls, and
+"no operations" is an observation, not a guarantee. Endpoint
+addresses are captured for free; payload capture stays external
+(mitmproxy et al. — we bridge specialists, we don't clone them).
 
 --oracle REF.py is differential testing: the reference implementation
 IS the specification (the AtCoder workflow, automated). Target and
@@ -1130,6 +1146,133 @@ class _Injector:
                             if s["_armed"] is None]}
 
 
+# ---- roadmap #5: the I/O lane (strace-lite) + resource pairing ----------
+# sys.addaudithook fires for file opens, socket connects, subprocess
+# spawns, exec/eval and imports — regardless of trace granularity (it
+# works in fn mode too). We record only operations with an in-scope
+# frame on the stack (YOUR code caused it, directly or transitively),
+# attribute each to the innermost such frame, and pair opened files
+# with their closes via a wrapped builtins.open so unclosed handles
+# are named at exit. The hook can't be removed once added (CPython),
+# so it is gated by a module flag and installed once per process.
+
+IO_CAP = 5000            # recorded I/O events before the lane caps
+
+# event name -> (kind, formatter(args) -> detail str). Imports are
+# recorded DIRECT-only (see _Io); the rest attribute transitively.
+_IO_EVENTS = {
+    "socket.connect": ("net", lambda a: _io_addr(a[1])),
+    "socket.getaddrinfo": ("net", lambda a: "resolve " + str(a[0])),
+    "socket.bind": ("net", lambda a: "bind " + _io_addr(a[1])),
+    "subprocess.Popen": ("proc", lambda a: _io_cmd(a[1] if len(a) > 1
+                                                   else a[0])),
+    "os.system": ("proc", lambda a: "os.system " + _io_str(a[0])),
+    "os.exec": ("proc", lambda a: "exec " + _io_str(a[0])),
+    "exec": ("code", lambda a: "exec/eval dynamic code"),
+    "compile": ("code", lambda a: "compile " + _io_str(
+        a[1] if len(a) > 1 else "<string>")),
+    "import": ("import", lambda a: str(a[0]) if a and a[0]
+               else "<import>"),
+}
+
+
+def _io_str(x, cap=120):
+    try:
+        s = os.fsdecode(x) if isinstance(x, (bytes, os.PathLike)) \
+            else str(x)
+    except Exception:
+        s = repr(x)
+    return s if len(s) <= cap else s[:cap] + "…"
+
+
+def _io_addr(addr):
+    try:
+        if isinstance(addr, (tuple, list)) and len(addr) >= 2:
+            return f"{addr[0]}:{addr[1]}"
+        return _io_str(addr)
+    except Exception:
+        return "?"
+
+
+def _io_cmd(args):
+    try:
+        if isinstance(args, (list, tuple)):
+            return _io_str(" ".join(os.fsdecode(x) if isinstance(
+                x, (bytes, os.PathLike)) else str(x) for x in args))
+        return _io_str(args)
+    except Exception:
+        return "?"
+
+
+_IO_ACTIVE = None            # the Tracer recording I/O, or None
+_IO_HOOK_INSTALLED = False
+_IO_REAL_OPEN = None         # the un-wrapped builtins.open
+
+
+def _io_audit_hook(event, args):
+    tr = _IO_ACTIVE
+    if tr is None:
+        return
+    spec = _IO_EVENTS.get(event)
+    if spec is None:
+        return
+    try:
+        kind, fmt = spec
+        # imports AND dynamic code fire transitively for every stdlib
+        # module a target pulls in (importlib exec's each module body)
+        # — record only the ones your own code wrote DIRECTLY. File,
+        # net and subprocess stay transitive: a library opening a
+        # socket on your behalf is exactly what you want to see.
+        frame = tr._io_frame(direct_only=(kind in ("import", "code")))
+        if frame is None:
+            return
+        tr.record_io(kind, event, fmt(args), frame)
+    except Exception:
+        pass                 # an audit hook must NEVER raise into the run
+
+
+def _install_io(tracer):
+    """Arm the I/O lane: add the audit hook (once per process) and wrap
+    builtins.open for file events + leak pairing. Returns an undo."""
+    global _IO_ACTIVE, _IO_HOOK_INSTALLED, _IO_REAL_OPEN
+    import builtins
+    _IO_ACTIVE = tracer
+    if not _IO_HOOK_INSTALLED:
+        try:
+            sys.addaudithook(_io_audit_hook)
+            _IO_HOOK_INSTALLED = True
+        except Exception:
+            pass
+    if _IO_REAL_OPEN is None:
+        _IO_REAL_OPEN = builtins.open
+    real = _IO_REAL_OPEN
+
+    def wrapped_open(file, mode="r", *a, **kw):
+        fh = real(file, mode, *a, **kw)
+        tr = _IO_ACTIVE
+        if tr is not None:
+            try:
+                # the tracer reads source files through its OWN open
+                # calls (immediate caller = SELF) — never the target's
+                caller = sys._getframe(1)
+                if caller.f_code.co_filename != SELF:
+                    frame = tr._io_frame(direct_only=False)
+                    if frame is not None:
+                        tr.record_io("file", "open",
+                                     f"{_io_str(file)} ({mode})",
+                                     frame, handle=fh)
+            except Exception:
+                pass
+        return fh
+    builtins.open = wrapped_open
+
+    def undo():
+        global _IO_ACTIVE
+        _IO_ACTIVE = None
+        builtins.open = real      # the hook stays (can't be removed)
+    return undo
+
+
 # the REAL streams — the tracer's own runtime prints (heartbeat,
 # trigger-hit) go here so they are never recorded as target output
 _RAW = {"out": sys.stdout, "err": sys.stderr}
@@ -1365,6 +1508,11 @@ class Tracer:
         self._hb_objs = {}      # id(obj) -> thread/task woken by an hb
         #                         event — held so id() stays unambiguous
         #                         and task names can late-bind
+        self.io = False         # roadmap #5: the I/O lane is armed
+        self._io_count = 0      # events recorded before the cap
+        self._io_capped = False
+        self._io_handles = []   # (weakref(fh), event index, path) for
+        #                         open/close pairing — leaks named at end
         # False = watching but not recording
         self.armed = start_at is None and start_when is None
         # #103: ring mode — a bounded window that never truncates the
@@ -1614,6 +1762,80 @@ class Tracer:
         if tk is not None:
             ev["tk"] = tk
         self.events.append(ev)
+
+    def _io_frame(self, direct_only):
+        """The frame to attribute an I/O event to: the innermost
+        in-scope frame on the stack (YOUR code caused it). direct_only
+        requires the FIRST frame up from the audited op to be in scope
+        (imports fire transitively for every stdlib module a target
+        pulls in; only the ones you wrote directly are signal).
+        Returns (rel, lineno, fn) or None."""
+        f = sys._getframe(2)          # skip _io_frame + hook/wrapper
+        depth = 0
+        while f is not None and depth < 60:
+            rel = self._rel(f.f_code.co_filename)
+            if rel is not None:
+                return (rel, f.f_lineno, f.f_code.co_name)
+            if direct_only:
+                return None           # first frame out of scope: not ours
+            f = f.f_back
+            depth += 1
+        return None
+
+    def record_io(self, kind, op, detail, frame, handle=None):
+        """Roadmap #5: one I/O operation as a first-class event
+        (e="io") on the lane, tied to the frame that caused it. A file
+        handle is tracked (weakref) so a close that never comes is
+        named at trace end — the honesty contract's resource half."""
+        if not self.armed or self.truncated \
+                or len(self.events) >= self.max_events:
+            return
+        if self._io_count >= IO_CAP:
+            self._io_capped = True
+            return
+        self._io_count += 1
+        rel, lineno, fn = frame
+        ev = {"e": "io", "io": kind, "op": op,
+              "d": detail if len(detail) <= 200 else detail[:200] + "…",
+              "f": rel, "l": lineno, "fn": fn, "ch": {}}
+        if self.granularity == "fn":
+            now = time.perf_counter_ns() // 1000
+            ev["ts"] = max(0, now - self._last_ts)
+            self._last_ts = now
+        tname = self._thread_label()
+        if tname != "MainThread":
+            ev["t"] = tname
+        tk = self._task_name()
+        if tk is not None:
+            ev["tk"] = tk
+        self.events.append(ev)
+        if handle is not None:
+            try:
+                self._io_handles.append(
+                    (weakref.ref(handle), len(self.events) - 1,
+                     detail))
+            except TypeError:
+                pass          # some handles aren't weakref-able
+
+    def resolve_io(self):
+        """Roadmap #5: at trace end, a wrapped-open file still not
+        .closed is an unclosed resource — mark its event and count.
+        A file GC'd before now was closed by its finalizer; only what
+        is provably still open is a leak (partial = unknown = unmarked).
+        Returns (leaks, capped)."""
+        leaks = 0
+        for wr, idx, _path in self._io_handles:
+            fh = wr()
+            if fh is None:
+                continue
+            try:
+                still_open = not fh.closed
+            except Exception:
+                continue
+            if still_open and 0 <= idx < len(self.events):
+                self.events[idx]["leak"] = True
+                leaks += 1
+        return leaks, self._io_capped
 
     def resolve_hb(self):
         """#88: late-bind wake destinations. A thread's lane label
@@ -7145,6 +7367,7 @@ def main(argv):
     fuzz_seed = 1234
     oracle_file = None   # roadmap #3: the reference implementation
     inject_specs = []    # roadmap #2: forced faults at call sites
+    io_lane = False      # roadmap #5: the I/O + resource lane
     mine_flag = False    # #74: --runs N --mine (multi-run mining)
     fsm_expr = None      # #132: the ONE declared state name
     fsm_declared = None  # #132: declared transitions, or None
@@ -7304,6 +7527,9 @@ def main(argv):
                 print(exc)
                 return 2
             argv = argv[2:]
+        elif argv[0] == "--io":
+            io_lane = True
+            argv = argv[1:]
         elif argv[0] == "--mine":
             mine_flag = True
             argv = argv[1:]
@@ -7848,6 +8074,15 @@ def main(argv):
     # #88: hooks go in AFTER the tracer's own heartbeat thread started —
     # the tracer's machinery must never appear as a wake edge
     hb_undo = _install_hb_hooks(tracer)
+    io_undo = None
+    if io_lane:
+        tracer.io = True
+        io_undo = _install_io(tracer)
+        print("pyreplay: I/O lane — file opens, socket connects, "
+              "subprocess spawns, exec/eval and your direct imports "
+              "become events tied to their frame; opened files are "
+              "paired with their closes (unclosed named at exit)",
+              flush=True)
     injector = None
     if inject_specs:
         injector = _Injector(inject_specs, tracer)
@@ -7947,6 +8182,8 @@ def main(argv):
             signal.signal(signal.SIGUSR1, old_usr1)
         if tracer.chaos is not None:
             tracer.chaos.unhook()
+        if io_undo is not None:
+            io_undo()
         if injector is not None:
             injector.uninstall()
         if old_switch is not None:
@@ -8010,11 +8247,40 @@ def main(argv):
                         else 0)
                 print(f"inject [{s['spec']}]: {s['calls']} call(s) "
                       f"seen, {hits} injected", flush=True)
+    io_report = None
+    if io_lane:
+        leaks, io_capped = tracer.resolve_io()
+        counts = {}
+        for e in tracer.events:
+            if e.get("e") == "io":
+                counts[e["io"]] = counts.get(e["io"], 0) + 1
+        io_report = {"counts": counts, "leaks": leaks,
+                     "capped": io_capped, "total": tracer._io_count}
+        if counts:
+            summary = ", ".join(f"{n} {k}" for k, n
+                                in sorted(counts.items()))
+            print(f"I/O lane: {tracer._io_count} operation(s) — "
+                  f"{summary}"
+                  + (f"; {leaks} file(s) UNCLOSED at exit" if leaks
+                     else "; every tracked file was closed")
+                  + (" (cap reached — more happened)" if io_capped
+                     else ""), flush=True)
+            # name the leaking sites — the Stroustrup question answered
+            for e in tracer.events:
+                if e.get("e") == "io" and e.get("leak"):
+                    print(f"    unclosed: {e['d']} — {e['f']}:{e['l']} "
+                          f"in {e['fn']}()", flush=True)
+        else:
+            print("I/O lane: no file/network/subprocess/import "
+                  "operations reached traced code (an observation, "
+                  "not a guarantee — audit hooks see the Python "
+                  "layer, not C-level syscalls)", flush=True)
     bounds = _boundaries(tracer.events)
     extra = {"capsule": capsule,
              "ring": ring_info,
              "chaos": tracer.chaos.report() if tracer.chaos else None,
              "inject": injector.report() if injector else None,
+             "io": io_report,   # roadmap #5
              "critical": _critical_path(tracer.events)
              if granularity == "fn" else None,
              "invariants": [{"src": s,

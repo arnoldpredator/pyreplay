@@ -3266,7 +3266,7 @@ def _doctor(module, script, root, entry_label, module_ok):
 
 def _write_trace(tr, out, granularity, entry_label, error,
                  trigger_desc=None, extra=None, chunked=None,
-                 fsm=None, memo=None):
+                 fsm=None, memo=None, starve_ms=None):
     """Build the payload and write the self-contained replayer HTML —
     shared by the CLI run and the in-process watch() bracket, so both
     honor the same contract (line-only linevars/dataflow, the </ escape,
@@ -3323,7 +3323,22 @@ def _write_trace(tr, out, granularity, entry_label, error,
         "memo": (_build_memo(tr.events, tr.sources, memo)
                  if memo is not None and granularity == "line"
                  else None),
+        # #124: loop starvation (fn only — line events carry no wall
+        # timestamps, so the detector would have nothing true to say)
+        "starve": (_detect_starvation(tr.events,
+                                      (starve_ms or 100) * 1000)
+                   if granularity == "fn" else None),
     }
+    if granularity != "fn" and starve_ms is not None:
+        print("--starve-ms: refused at line granularity — line events "
+              "carry no wall timestamps; re-run with --granularity fn")
+    st = payload["starve"]
+    if st and st["inc"]:
+        w = st["inc"][0]
+        print(f"⏳ loop starvation: {len(st['inc'])} incident(s) ≥ "
+              f"{st['thresholdMs']:g} ms — worst: task {w['tk']} held "
+              f"the loop {w['us']/1000:.0f} ms inside {w['fn']}() "
+              f"while {', '.join(w['starved'][:3])} waited")
     if extra:
         payload.update(extra)
     # #130: per-bucket compressibility — gzip bits/event as a
@@ -3758,7 +3773,7 @@ def _run_harness(orig_argv, n_runs, out, entry_label, granularity,
               "--exclude", "--granularity", "--max-events", "--start-at",
               "--start-count", "--start-when", "--backend", "--trip",
               "--runs", "--check", "--chaos-schedule", "--fsm",
-              "--fsm-declare", "--memo"}
+              "--fsm-declare", "--memo", "--starve-ms"}
     # --chaos-schedule is stripped and re-issued per child with a
     # DERIVED seed (base+i-1): N runs under one seed would explore one
     # biased stream N times; N seeds explore N different ones, and any
@@ -4290,6 +4305,103 @@ def _forensics_harness(ids):
     return 0 if (n_div or n_eq) else 1
 
 
+# ---- #124: event-loop starvation — long synchronous stretches ----------
+# A blocked loop is the "program frozen" bug class and is invisible in
+# source. At fn granularity every inter-event delta is recorded; a
+# contiguous same-task stretch whose deltas sum past the threshold
+# held the loop that long, and the largest single delta names the
+# frame the time actually sat in. Only stretches with OTHER tasks
+# alive count — with nobody waiting, nobody starved.
+
+def _detect_starvation(events, threshold_us):
+    task_span = {}   # (thread, task) -> [birth_i, last_i]
+    for i, ev in enumerate(events):
+        tk = ev.get("tk")
+        if tk is None:
+            continue
+        key = (ev.get("t") or "main", tk)
+        if key not in task_span:
+            task_span[key] = [i, i]
+        else:
+            task_span[key][1] = i
+    if not task_span:
+        return None          # no asyncio lanes recorded — not applicable
+    # a created-but-not-yet-run task is already waiting: its birth is
+    # the #88 create event, not its first own event (only tasks that
+    # eventually ran traced code count — a wrapper task that never
+    # did cannot claim starvation)
+    for i, ev in enumerate(events):
+        if ev.get("e") == "hb" and ev.get("hb") == "create":
+            key = (ev.get("t") or "main", ev.get("dst"))
+            if key in task_span and i < task_span[key][0]:
+                task_span[key][0] = i
+    by_thread = {}
+    for i, ev in enumerate(events):
+        by_thread.setdefault(ev.get("t") or "main", []).append(i)
+    incidents = []
+    for thread, idxs in by_thread.items():
+        run = []             # consecutive indices sharing one task
+        run_tk = None
+
+        def close():
+            if run_tk is None or len(run) < 1:
+                return
+            dur = sum(events[j].get("ts") or 0 for j in run[1:])
+            if dur < threshold_us:
+                return
+            starved = sorted(
+                tk for (t2, tk), (a, b) in task_span.items()
+                if t2 == thread and tk != run_tk
+                and a < run[-1] and b > run[0])
+            if not starved:
+                return       # nobody was waiting: not starvation
+            # the largest single delta names the culprit frame: walk
+            # the run with a stack; the frame OPEN under that delta
+            # is where the wall time sat
+            gi, gus = run[0], -1
+            for j in run[1:]:
+                d = events[j].get("ts") or 0
+                if d > gus:
+                    gi, gus = j, d
+            stack = []
+            culprit = events[run[0]].get("fn")
+            for j in run:
+                ev = events[j]
+                if j == gi:
+                    culprit = stack[-1] if stack else ev.get("fn")
+                if ev["e"] == "call":
+                    stack.append(ev.get("fn"))
+                elif ev["e"] == "return" and stack:
+                    stack.pop()
+            incidents.append({
+                "tk": run_tk, "t": thread,
+                "i0": run[0], "i1": run[-1], "us": dur,
+                "gi": gi, "gus": gus, "fn": culprit,
+                "f": events[gi].get("f"), "l": events[gi].get("l"),
+                "starved": starved})
+
+        for i in idxs:
+            ev = events[i]
+            tk = ev.get("tk")
+            if tk != run_tk:
+                close()
+                run, run_tk = [], tk
+            run.append(i)
+            # a coroutine yield RELEASES the loop: the synchronous
+            # stretch ends here. Generator yields (k=="g") return to
+            # their caller, not the loop, and do not break it. A
+            # mid-chain await splits a stretch by microseconds — a
+            # real block is one delta and cannot be split.
+            g = ev.get("g")
+            if ev.get("e") == "return" and g and g.get("s") == "y" \
+                    and g.get("k") in ("c", "a"):
+                close()
+                run, run_tk = [], None
+        close()
+    incidents.sort(key=lambda x: -x["us"])
+    return {"thresholdMs": threshold_us / 1000, "inc": incidents}
+
+
 # ---- #78: the nontermination detector (state recurrence) ----------------
 # Poincaré's framing: a closed system that returns to a previous state
 # must repeat forever. At every loop-head event the frame's recorded
@@ -4507,7 +4619,7 @@ def _shrink_harness(orig_argv, model, cap, check_active, entry_label,
               "--start-at", "--start-count", "--start-when",
               "--backend", "--trip", "--runs", "--check",
               "--chaos-schedule", "--sweep", "--gen", "--predict",
-              "--sweep-seed", "--fsm", "--fsm-declare", "--memo",
+              "--sweep-seed", "--fsm", "--fsm-declare", "--memo", "--starve-ms",
               "--relation", "--relation-trials", "--relation-seed",
               "--shrink-model", "--shrink-cap"}
     strip = {"--shrink", "--shrink-model", "--shrink-cap", "--out"}
@@ -4693,7 +4805,7 @@ def _relation_harness(orig_argv, relations, gen_file, trials, seed,
               "--start-at", "--start-count", "--start-when",
               "--backend", "--trip", "--runs", "--check",
               "--chaos-schedule", "--sweep", "--gen", "--predict",
-              "--sweep-seed", "--fsm", "--fsm-declare", "--memo",
+              "--sweep-seed", "--fsm", "--fsm-declare", "--memo", "--starve-ms",
               "--relation", "--relation-trials", "--relation-seed"}
     strip = {"--relation", "--relation-trials", "--relation-seed",
              "--gen", "--out", "--granularity"}
@@ -5548,7 +5660,7 @@ def _sweep_harness(orig_argv, sweep_spec, gen_file, predict_src,
               "--start-count", "--start-when", "--backend", "--trip",
               "--runs", "--check", "--chaos-schedule", "--sweep",
               "--gen", "--predict", "--sweep-seed", "--fsm",
-              "--fsm-declare", "--memo"}
+              "--fsm-declare", "--memo", "--starve-ms"}
     strip = {"--sweep", "--gen", "--predict", "--sweep-seed", "--out",
              "--granularity"}
     child_flags, i = [], 0
@@ -5951,6 +6063,7 @@ def main(argv):
     check = None         # #70: compiled --check expression
     check_src = None
     chunked_opt = None   # #101: None = auto by size
+    starve_ms = None     # #124: loop-starvation threshold (fn only)
     console = True       # #118: console lane on by default
     _chap_plug = None   # #98: the imported pytest chapter plugin
     while argv and (argv[0].startswith("--") or argv[0] == "-m"):
@@ -6093,6 +6206,12 @@ def main(argv):
                 print(exc)
                 return 2
             argv = argv[2:]
+        elif argv[0] == "--starve-ms" and len(argv) >= 2:
+            if not argv[1].isdigit() or int(argv[1]) < 1:
+                print("error: --starve-ms expects a positive integer "
+                      "(milliseconds)")
+                return 2
+            starve_ms, argv = int(argv[1]), argv[2:]
         elif argv[0] == "--memo" and len(argv) >= 2:
             if memo_name is not None:
                 print("error: --memo binds ONE structure — the DAG of "
@@ -6693,7 +6812,7 @@ def main(argv):
     _write_trace(tracer, out, granularity, entry_label, error,
                  trigger_desc, extra=extra, chunked=chunked_opt,
                  fsm=(fsm_expr, fsm_declared) if fsm_expr else None,
-                 memo=memo_name)
+                 memo=memo_name, starve_ms=starve_ms)
     unstable = []
     for key, b in (bounds or {}).items():
         spots = [(n, d) for n, d in b["args"].items() if len(d) > 1]

@@ -1774,6 +1774,38 @@ dead or invented panel; every cap and truncation is announced.
 
   [![Feature 88 — happens-before](screenshots/88-wake.png)](screenshots/88-wake.png)
 
+### 124. The event-loop starvation detector — who froze the loop
+- **Measured:** on fn traces with task lanes, every contiguous
+  same-task stretch of recorded inter-event deltas is summed; past
+  the threshold (default 100 ms — asyncio's own slow-callback
+  duration; `--starve-ms N` configures) it held the loop that long.
+  A coroutine yield RELEASES the loop and ends the stretch — awaited
+  sleep time can never flag; generator yields return to their caller
+  and do not end it. The largest single delta names the frame the
+  wall time actually sat in (a call-stack walk of the stretch).
+  Starved = the other tasks alive during it, birth taken from the
+  #88 create event, so created-and-still-waiting counts; a task that
+  never ran traced code cannot claim starvation. Refused at line
+  granularity with the reason: line events carry no wall timestamps.
+- **Displayed:** the ⏳ LOOP STARVATION banner — worst incident
+  first: "task worker-A held the loop 361 ms inside parse() while
+  Task-1, worker-B waited", with stretch-start and the-block jumps —
+  plus one teal scrubber pin per incident and a terminal summary.
+- **Why:** a blocked loop is the "program frozen" bug class and is
+  invisible in source — the code *looks* async. asyncio's own debug
+  mode logs a line nobody sees; this lands on the moment, jumpable.
+- **Use case:** a coroutine calls a synchronous `parse()` that does
+  `time.sleep(0.18)` twice without yielding between — one unbroken
+  361 ms stretch, attributed to `parse()`, with both waiting tasks
+  named. The fix (`await asyncio.to_thread(parse, item)`) clears the
+  banner.
+- **Command:** `python3 tracer.py --granularity fn app.py` (asyncio
+  runs arm automatically) · `--starve-ms 250` to tune.
+- **Screenshot** — the demo: banner naming worker-A, 361 ms,
+  parse(), and both starved tasks; the teal pin on the strip:
+
+  [![Feature 124 — starvation](screenshots/124-starvation.png)](screenshots/124-starvation.png)
+
 ### 89. The critical path — what actually determined wall time (v1)
 - **Measured:** every microsecond of a concurrent fn trace is
   attributed to the INNERMOST slice open anywhere in the process at

@@ -141,6 +141,11 @@
     transform: translateX(-2px);
   }
   .bmark:hover { background: #aee4ff; }
+  #starvemarks { position: relative; height: 7px; margin: 0 7px 2px; }
+  .stmark { position: absolute; top: 0; width: 5px; height: 7px;
+    background: #56b6c2; border-radius: 2px; cursor: pointer;
+    transform: translateX(-2px); }
+  .stmark:hover { background: #9be3ec; }
   #tripmarks { position: relative; height: 7px; margin: 0 7px 2px; }
   .tmark {
     position: absolute; top: 0; width: 4px; height: 7px;
@@ -1141,6 +1146,34 @@ if (DATA.nonterm && DATA.nonterm.length) {
       escapeHtml(g.reasons.join("; ")) + "." +
       jump(g.first, "first") + jump(g.again, "recurrence");
   }
+  b.appendChild(note);
+  b.addEventListener("click", e => {
+    if (e.target.classList && e.target.classList.contains("wkj")) {
+      stop();
+      goto(parseInt(e.target.dataset.goto, 10));
+    }
+  });
+}
+/* #124: loop starvation — a synchronous stretch held the event loop
+   past the threshold while other tasks sat waiting. fn-only (line
+   events carry no wall timestamps). */
+if (DATA.starve && DATA.starve.inc.length) {
+  const st = DATA.starve;
+  const w = st.inc[0];
+  const b = $("banner");
+  b.style.display = "block";
+  const note = document.createElement("div");
+  const jump = (i, lbl) => ' <span class="wkj" data-goto="' + i +
+    '">' + lbl + " ›</span>";
+  note.innerHTML = "⏳ <b>LOOP STARVATION</b> — " + st.inc.length +
+    " incident(s) ≥ " + st.thresholdMs + " ms. Worst: task <b>" +
+    escapeHtml(w.tk) + "</b> held the loop " +
+    (w.us / 1000).toFixed(0) + " ms inside " + escapeHtml(w.fn) +
+    "() (" + escapeHtml(w.f + ":" + w.l) + ") while " +
+    escapeHtml(w.starved.join(", ")) + " waited." +
+    jump(w.i0, "stretch start") + jump(w.gi, "the block") +
+    ' <span style="color:var(--dim)">threshold --starve-ms ' +
+    st.thresholdMs + " (asyncio's slow-callback default)</span>";
   b.appendChild(note);
   b.addEventListener("click", e => {
     if (e.target.classList && e.target.classList.contains("wkj")) {
@@ -5177,6 +5210,25 @@ $("scrub").max = Math.max(0, events.length - 1);
     m.title = "★ critical path — " + (events[j].fn || "?") +
       " (event " + (j + 1) + ")";
     m.onclick = () => { stop(); goto(j); };
+    box.appendChild(m);
+  });
+  const footer = document.querySelector("footer");
+  footer.insertBefore(box, footer.firstChild);
+})();
+/* #124: starvation pins — one teal mark per incident's block */
+(function () {
+  if (!DATA.starve || !DATA.starve.inc.length) return;
+  const box = document.createElement("div");
+  box.id = "starvemarks";
+  const total = Math.max(1, events.length - 1);
+  DATA.starve.inc.forEach(w => {
+    const m = document.createElement("span");
+    m.className = "stmark";
+    m.style.left = (w.gi / total * 100) + "%";
+    m.title = "⏳ " + w.tk + " held the loop " +
+      (w.us / 1000).toFixed(0) + " ms inside " + w.fn + "() — " +
+      w.starved.join(", ") + " waited (event " + (w.gi + 1) + ")";
+    m.onclick = () => { stop(); goto(w.gi); };
     box.appendChild(m);
   });
   const footer = document.querySelector("footer");

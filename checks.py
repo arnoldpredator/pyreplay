@@ -2904,6 +2904,68 @@ def _():
         expect(probe in tpl, f"seq contract missing: {probe}")
 
 
+@check("starvation: held stretch, yield release, hb births (#124)")
+def _():
+    src = fixture("st124.py", (
+        "import asyncio, time\n"
+        "def parse(x):\n"
+        "    time.sleep(0.16)\n"
+        "    return x\n"
+        "async def blocker(q):\n"
+        "    for _ in range(2):\n"
+        "        item = await q.get()\n"
+        "        parse(item)\n"
+        "        q.task_done()\n"
+        "async def sleeper():\n"
+        "    for _ in range(8):\n"
+        "        await asyncio.sleep(0.03)\n"
+        "async def main():\n"
+        "    q = asyncio.Queue()\n"
+        "    q.put_nowait(1); q.put_nowait(2)\n"
+        "    a = asyncio.create_task(blocker(q), name='blocker')\n"
+        "    b = asyncio.create_task(sleeper(), name='sleeper')\n"
+        "    await q.join(); await b\n"
+        "asyncio.run(main())\n"))
+    p = run_trace(src, "--granularity", "fn", name="st124")
+    st = p["starve"]
+    expect(st is not None and st["thresholdMs"] == 100,
+           f"fn trace with tasks must arm the detector: {st}")
+    tks = [w["tk"] for w in st["inc"]]
+    expect(tks == ["blocker"],
+           f"EXACTLY the blocking task flags — sleeper's awaited "
+           f"time released the loop and must not: {tks}")
+    w = st["inc"][0]
+    expect(w["us"] >= 300000 and w["fn"] == "parse",
+           f"both parses are one unbroken stretch, attributed to the "
+           f"frame the time sat in: {w['us']}us in {w['fn']}")
+    expect("sleeper" in w["starved"],
+           f"sleeper was born (hb create) before the stretch and ran "
+           f"after — it waited: {w['starved']}")
+
+    # awaited time alone must never flag, even above the threshold
+    p2 = run_trace(src, "--granularity", "fn", "--starve-ms", "500",
+                   name="st124b")
+    expect(p2["starve"]["inc"] == [],
+           "a 500 ms threshold clears the 320 ms stretch — "
+           "configurable means configurable")
+
+    r = subprocess.run(
+        [PY, os.path.join(HERE, "tracer.py"), "--out",
+         os.path.join(TMP, "st124c.html"), "--starve-ms", "50", src],
+        capture_output=True, text=True, cwd=TMP,
+        stdin=subprocess.DEVNULL, timeout=120)
+    expect("refused at line granularity" in r.stdout,
+           f"line traces carry no wall time — the flag must refuse "
+           f"with the reason: {r.stdout[-200:]}")
+
+    with open(os.path.join(HERE, "replayer_template.html"),
+              encoding="utf-8") as fh:
+        tpl = fh.read()
+    for probe in ("LOOP STARVATION", "starvemarks", "stmark",
+                  "slow-callback default"):
+        expect(probe in tpl, f"starvation surface missing: {probe}")
+
+
 @check("shadowing: per-def masks, module audit, stdlib filename (#122)")
 def _():
     src = fixture("sh122.py", (

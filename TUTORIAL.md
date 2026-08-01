@@ -867,6 +867,16 @@ their original node — no phantom calls), and the 4000-node render cap
 announces itself. Works at both granularities — on an fn-level trace
 of a real codebase it is the whole run's shape in one panel.
 
+**Loop starvation.** In an asyncio fn trace, any synchronous stretch
+that held the event loop past 100 ms (asyncio's own slow-callback
+threshold; `--starve-ms N` tunes it) raises the ⏳ banner: which task,
+how long, inside which function — the largest recorded delta names the
+frame the time actually sat in — and which tasks were waiting,
+including ones created but never yet scheduled. Awaited time never
+flags: a coroutine yield releases the loop and ends the stretch. Teal
+pins mark each incident on the strip; the fix is usually
+`await asyncio.to_thread(...)`, and the banner clearing proves it.
+
 **The shadowing badge.** A local named `list`, `id`, or like a
 module-level variable silently masks the outer name — the code reads
 fine and resolves wrongly. Every line trace carries a static per-def

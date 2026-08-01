@@ -1682,12 +1682,37 @@ dead or invented panel; every cap and truncation is announced.
 
   [![Feature 95 — crime scene](screenshots/95-crime-scene.png)](screenshots/95-crime-scene.png)
 
+### 99. Import-cost view — the startup autopsy
+- **Measured:** nothing new is recorded — a lens over any adopted fn
+  trace: the cumulative time inside each module's `<module>` frame IS
+  its import cost (cumulative on purpose: a slow import's children
+  are the point, not an accounting detail). Sums across all adopted
+  runs; line traces carry no wall times, so the autopsy is honestly
+  absent there.
+- **Displayed:** the walls panel grows a **⚙ startup autopsy**
+  section — total import time and the ranked offenders, each row a
+  click-to-spotlight on the map; the heat banner carries the total.
+  The mapper's terminal prints the top three.
+- **Why:** slow CLI and test startup is pure import cost and nobody
+  knows whose. `python -X importtime` answers in a wall of text;
+  this lands the same answer on the map, with jump links, from data
+  every fn trace already had.
+- **Use case:** "161.5 ms before main() — main 81.3 ms, slowmod
+  80.2 ms, fastmod 20 µs": the sleeper import named and clickable,
+  the trivial one exonerated at a glance.
+- **Command:** any map with an adopted fn trace — open **walls**.
+  `python3 mapper.py --trace trace_x.html path/` or auto-heat.
+- **Screenshot** — the walls panel: load-bearing walls above, the
+  startup autopsy ranked below.
+
+  [![Feature 99 — import cost](screenshots/99-import-cost.png)](screenshots/99-import-cost.png)
+
 ---
 
 ## J. Infrastructure (no screenshots needed)
 
 ### 61. `checks.py` — the regression suite
-66 data-level checks (no browser): the tracer re-runs the permanent
+67 data-level checks (no browser): the tracer re-runs the permanent
 example suite and the mapper its fixtures, the embedded JSON is
 extracted from each generated HTML (chunked or not), and the honesty
 invariants are asserted in plain Python — windowed-change correctness,

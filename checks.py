@@ -2572,6 +2572,42 @@ def _():
            "invariant under fn granularity must refuse")
 
 
+@check("map import cost: startup autopsy from <module> frames (#99)")
+def _():
+    root = os.path.join(TMP, "impdemo")
+    os.makedirs(root, exist_ok=True)
+    with open(os.path.join(root, "slowmod.py"), "w") as fh:
+        fh.write("import time\ntime.sleep(0.08)\nX = 1\n")
+    with open(os.path.join(root, "fastmod.py"), "w") as fh:
+        fh.write("Y = 2\n")
+    main_py = os.path.join(root, "main.py")
+    with open(main_py, "w") as fh:
+        fh.write("import slowmod\nimport fastmod\n"
+                 "print(slowmod.X + fastmod.Y)\n")
+    tr = os.path.join(root, "tr99.html")
+    subprocess.run([PY, os.path.join(HERE, "tracer.py"),
+                    "--granularity", "fn", "--root", root,
+                    "--out", tr, main_py],
+                   capture_output=True, text=True, cwd=root,
+                   stdin=subprocess.DEVNULL, timeout=120)
+    mp = run_map(root, "--trace", tr, name="map_imp")
+    ic = (mp.get("heat") or {}).get("importCost") or {}
+    expect(ic.get("slowmod", 0) >= 40000,
+           f"a sleeping import must show its cost (>=40ms): {ic}")
+    expect(0 < ic.get("fastmod", 10 ** 9) < ic["slowmod"],
+           f"a trivial import must cost less than the sleeper: {ic}")
+    # honesty: line traces carry no timestamps -> no import cost
+    tr2 = os.path.join(root, "tr99_line.html")
+    subprocess.run([PY, os.path.join(HERE, "tracer.py"),
+                    "--root", root, "--out", tr2, main_py],
+                   capture_output=True, text=True, cwd=root,
+                   stdin=subprocess.DEVNULL, timeout=120)
+    mp2 = run_map(root, "--trace", tr2, name="map_imp_line")
+    expect(not ((mp2.get("heat") or {}).get("importCost") or {}),
+           "a line trace has no wall times — the autopsy must be "
+           "absent, never fiction")
+
+
 # ---------------------------------------------------------------- runner
 
 def main():

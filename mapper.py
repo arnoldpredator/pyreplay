@@ -71,6 +71,14 @@ def _complexity(tree):
     return n
 
 
+def _fmt_us(us):
+    if us < 1000:
+        return f"{us:.0f} µs"
+    if us < 1_000_000:
+        return f"{us / 1000:.1f} ms"
+    return f"{us / 1e6:.2f} s"
+
+
 def _gather_churn(root_dir, since):
     """#95: per-file change counts from `git log --numstat` over the
     window, scoped to the mapped subtree. Returns None when there is no
@@ -559,9 +567,11 @@ def load_heat(trace_path, modules):
         intervals[mod["id"]] = (ds, [d["l"] for d in ds])
 
     heat, unmatched = {}, 0
-    stacks = {}          # per-thread frames: [mod_id, def_key, t0, child]
+    stacks = {}          # per-thread frames: [mod_id, def_key, t0,
+    #                      child, is_module_frame]
     xstacks = {}         # #119: per-(thread, task) module stacks
     xmod = {}            # "callerId|calleeId" -> observed call count
+    imp_cost = {}        # #99: mid -> µs inside its <module> frames
     abs_ts = 0
     for i, ev in enumerate(events):
         mod = mod_for(ev.get("f", ""))
@@ -589,12 +599,18 @@ def load_heat(trace_path, modules):
             th = ev.get("t", "main")
             st = stacks.setdefault(th, [])
             if ev["e"] == "call":
-                st.append([mod["id"] if mod else None, None, abs_ts, 0.0])
+                st.append([mod["id"] if mod else None, None, abs_ts, 0.0,
+                           ev.get("fn") == "<module>"])
             elif ev["e"] == "return" and st:
-                mid, dk, t0, child = st.pop()
+                mid, dk, t0, child, is_mod = st.pop()
                 dur = abs_ts - t0
                 if st:
                     st[-1][3] += dur
+                if is_mod and mid is not None:
+                    # #99: time inside a <module> frame IS import cost
+                    # (cumulative — a slow import's children are the
+                    # point, not an accounting detail)
+                    imp_cost[mid] = imp_cost.get(mid, 0) + dur
                 self_t = max(0, dur - child)
                 if mid is not None and mid in heat:
                     hh = heat[mid]
@@ -638,7 +654,8 @@ def load_heat(trace_path, modules):
     total = abs_ts if kind == "time" else len(events)
     return {"trace": os.path.basename(trace_path), "events": len(events),
             "unmatched": unmatched, "mods": heat, "kind": kind,
-            "xmod": xmod, "script": script, "total": max(1, total)}
+            "xmod": xmod, "importCost": imp_cost, "script": script,
+            "total": max(1, total)}
 
 
 def aggregate_heat(heats):
@@ -673,12 +690,17 @@ def aggregate_heat(heats):
     for h in heats:   # #119: observed pairs sum across workloads too
         for k, n in h.get("xmod", {}).items():
             xmod[k] = xmod.get(k, 0) + n
+    imp_cost = {}
+    for h in heats:   # #99: import cost sums across adopted runs
+        for k, us in h.get("importCost", {}).items():
+            imp_cost[k] = imp_cost.get(k, 0) + us
     return {"trace": f"{len(heats)} traces: "
             + ", ".join(h["trace"] for h in heats),
             "events": sum(h["events"] for h in heats),
             "unmatched": sum(h["unmatched"] for h in heats),
             "mods": mods, "kind": kind, "script": heats[0]["script"],
-            "xmod": xmod, "total": max(1, total)}
+            "xmod": xmod, "importCost": imp_cost,
+            "total": max(1, total)}
 
 
 def main(argv):
@@ -914,6 +936,15 @@ def main(argv):
                 ext_missing.append(ext_name)
         except Exception:
             pass   # unresolvable finder result: unknown, never claimed
+
+    if heat and heat.get("importCost"):
+        # #99: the startup autopsy — the data was in every fn trace
+        # all along; this is a lens, not a recorder
+        ic = heat["importCost"]
+        top = sorted(ic.items(), key=lambda kv: -kv[1])[:3]
+        print("startup autopsy: " + _fmt_us(sum(ic.values()))
+              + " inside <module> frames (import time) — top: "
+              + ", ".join(f"{m} {_fmt_us(us)}" for m, us in top))
 
     churn = None if no_churn else _gather_churn(root_dir, churn_since)
     if churn:

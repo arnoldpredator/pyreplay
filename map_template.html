@@ -85,6 +85,9 @@
   .oexc { fill: var(--err); font-size: 10px; font-weight: 700;
           text-anchor: end; }
   .fheat { fill: #ffd479; font-weight: 700; }
+  .wallhead { padding: 7px 10px 3px; color: var(--dim); font-size: 11px;
+    text-transform: uppercase; letter-spacing: .06em;
+    border-top: 1px solid #2a2e3b; margin-top: 5px; }
   .dedge { stroke: #c678dd; stroke-width: 1.7; fill: none;
            stroke-dasharray: 7 4; opacity: .9; }
   .dedge.hovoff { opacity: .09; }
@@ -357,6 +360,11 @@ function buildNote(allCycles) {
       (h.unmatched ? ", " + h.unmatched.toLocaleString() +
         " events outside this map" : "") +
       ' · <span class="hlegend"></span> 0→100% of run' +
+      (h.importCost && Object.keys(h.importCost).length
+        ? " · ⚙ " + fmtCost(Object.values(h.importCost)
+            .reduce((a, b) => a + b, 0)) +
+          " import time — the walls panel has the autopsy"
+        : "") +
       (h.dark && h.dark.length
         ? ' · <span style="color:#c678dd">⚡ ' + h.darkTotal +
           " dark edge(s) — runtime call routes the parse couldn't see" +
@@ -1606,14 +1614,34 @@ $("walls").onclick = () => {
   const rows = Object.entries(fanTable())
     .sort((a, b) => b[1].i - a[1].i || (a[0] < b[0] ? -1 : 1))
     .slice(0, 10);
-  $("wallsbody").innerHTML = rows.filter(r => r[1].i || r[1].o)
+  let html = rows.filter(r => r[1].i || r[1].o)
     .map(([id, f]) =>
       '<div class="wallrow" data-id="' + esc(id) + '"><span class="win">←' +
       f.i + '</span><span class="wout">→' + f.o + "</span>" + esc(id) +
       "</div>").join("") ||
     '<div class="wallrow">(no internal imports)</div>';
+  // #99: the startup autopsy — import time from the adopted fn
+  // trace(s), the answer to "why is startup slow, and whose fault"
+  const ic = DATA.heat && DATA.heat.importCost;
+  if (ic && Object.keys(ic).length) {
+    const irows = Object.entries(ic).sort((a, b) => b[1] - a[1])
+      .slice(0, 12);
+    const tot = Object.values(ic).reduce((a, b) => a + b, 0);
+    html += '<div class="wallhead">⚙ startup autopsy — ' + fmtCost(tot) +
+      " inside &lt;module&gt; frames (import time, adopted runs)</div>" +
+      irows.map(([id, us]) =>
+        '<div class="wallrow" data-id="' + esc(id) +
+        '"><span class="win">' + fmtCost(us) + "</span>" + esc(id) +
+        "</div>").join("");
+  }
+  $("wallsbody").innerHTML = html;
   box.style.display = "block";
 };
+function fmtCost(us) {
+  if (us < 1000) return Math.round(us) + " µs";
+  if (us < 1e6) return (us / 1000).toFixed(1) + " ms";
+  return (us / 1e6).toFixed(2) + " s";
+}
 $("wallsbody").onclick = e => {
   const r = e.target.closest(".wallrow");
   if (!r || !r.dataset.id) return;

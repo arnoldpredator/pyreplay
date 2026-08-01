@@ -151,6 +151,14 @@ with the raw numbers. No git history readable → the lens stays
 absent. pyreplay mapped on itself puts `tracer` at 0.93 — no
 surprises, which is exactly the point.
 
+**The startup autopsy (#99).** With an fn trace adopted, the walls
+panel grows a **⚙ startup autopsy**: the time inside each module's
+`<module>` frame — its import cost, cumulative on purpose — ranked
+with click-to-spotlight rows and the total in the banner. Slow CLI
+startup is pure import cost and nobody knows whose; the data was in
+every fn trace all along. Line traces carry no wall times, so the
+autopsy is honestly absent there.
+
 # pyreplay tracer — user guide
 
 Record a Python program's execution — every line, call, return, and

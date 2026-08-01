@@ -369,6 +369,12 @@ function buildNote(allCycles) {
             "is complex AND carries the runtime"
           : " — switch the lens to churn × cx to see it"));
   }
+  {                                        // #122 shadowing audit
+    const nSh = DATA.modules.reduce(
+      (a, m) => a + ((m.shadows || []).length), 0);
+    if (nSh) bits.push("👥 " + nSh + " name mask(s) — hover the " +
+      "flagged boxes");
+  }
   if (DATA.layers) {                       // #96 declared architecture
     if (DATA.layers.errors && DATA.layers.errors.length)
       bits.push("⛔ layers file has " + DATA.layers.errors.length +
@@ -1143,6 +1149,8 @@ function render() {
         ? ' <tspan fill="#ff6b6b" font-weight="700">⭯</tspan>' : "") +
       (m.dynimp
         ? ' <tspan fill="#c678dd" font-weight="700">⚡</tspan>' : "") +
+      (m.shadows && m.shadows.length
+        ? ' <tspan fill="#e5c07b" font-weight="700">👥</tspan>' : "") +
       "</text><title>" + esc(m.path +
         (GB
           ? "\n⛓ betweenness " + ((GB.between || {})[m.id] || 0) +
@@ -1159,6 +1167,16 @@ function render() {
         (m.dynimp
           ? "\n⚡ " + m.dynimp + " dynamic-import call site(s) — "
             + "targets unknown until a run is traced (#119)"
+          : "") +
+        (m.shadows && m.shadows.length
+          ? "\n👥 " + m.shadows.length + " name mask(s): " +
+            m.shadows.slice(0, 5).map(([k, n, d]) =>
+              k === "stdlib-filename" ? "⚠ " + d
+              : k === "import-rebound" ? n + " " + d
+              : n + " shadows the builtin (" + d + ")").join(" · ") +
+            (m.shadows.length > 5
+              ? " · +" + (m.shadows.length - 5) + " more" : "") +
+            " (#122)"
           : "") +
         (sccIndex[m.id] !== undefined
           ? "\n⚠ import cycle with: " + (cp =>

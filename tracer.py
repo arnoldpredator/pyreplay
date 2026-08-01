@@ -2256,6 +2256,140 @@ def build_guards(text, rel):
     return {str(k): v for k, v in guards.items()}
 
 
+def build_shadows(text, rel):
+    """#122 static tier: per-def name masking — locals that shadow a
+    builtin, a module-level name, or an enclosing function's local.
+    Scope-collision bugs read correctly and RESOLVE wrongly; the
+    badge marks the name at the moment the frame actually holds it.
+    Records keyed by span; the renderer picks the innermost."""
+    import builtins as _bi
+    BUILTINS = set(dir(_bi))
+    try:
+        tree = ast.parse(text, filename=rel)
+    except SyntaxError:
+        return None
+
+    def name_targets(node, out, line):
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Name):
+                out.setdefault(sub.id, line)
+
+    def bound_names(fn_node):
+        """Names bound in this def's own scope: args, assignments,
+        loop/with/except targets, local imports, nested def/class
+        names, walrus targets. Nested defs are their own scope and
+        are not descended into."""
+        out = {}
+        a = fn_node.args
+        for arg in (a.posonlyargs + a.args + a.kwonlyargs +
+                    ([a.vararg] if a.vararg else []) +
+                    ([a.kwarg] if a.kwarg else [])):
+            out.setdefault(arg.arg, fn_node.lineno)
+
+        def stmts(body):
+            for st in body:
+                if isinstance(st, (ast.FunctionDef,
+                                   ast.AsyncFunctionDef, ast.ClassDef)):
+                    out.setdefault(st.name, st.lineno)
+                    continue                 # a different scope
+                if isinstance(st, ast.Assign):
+                    for t in st.targets:
+                        name_targets(t, out, st.lineno)
+                elif isinstance(st, (ast.AugAssign, ast.AnnAssign)):
+                    name_targets(st.target, out, st.lineno)
+                elif isinstance(st, (ast.For, ast.AsyncFor)):
+                    name_targets(st.target, out, st.lineno)
+                elif isinstance(st, (ast.Import, ast.ImportFrom)):
+                    for al in st.names:
+                        nm = (al.asname or al.name).split(".")[0]
+                        if nm != "*":
+                            out.setdefault(nm, st.lineno)
+                elif isinstance(st, (ast.With, ast.AsyncWith)):
+                    for it in st.items:
+                        if it.optional_vars is not None:
+                            name_targets(it.optional_vars, out,
+                                         st.lineno)
+                if isinstance(st, ast.ExceptHandler) and st.name:
+                    out.setdefault(st.name, st.lineno)
+                # walrus binds in the enclosing function scope; other
+                # expression subtrees can hide one too
+                for sub in ast.walk(st):
+                    if isinstance(sub, ast.NamedExpr) and \
+                            isinstance(sub.target, ast.Name):
+                        out.setdefault(sub.target.id,
+                                       getattr(sub, "lineno",
+                                               st.lineno))
+                for ch in ast.iter_child_nodes(st):
+                    body2 = getattr(ch, "body", None)
+                    if isinstance(body2, list) and not isinstance(
+                            ch, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                 ast.ClassDef)):
+                        stmts([ch] if isinstance(ch, ast.ExceptHandler)
+                              else body2)
+                        for extra in ("orelse", "finalbody",
+                                      "handlers"):
+                            more = getattr(ch, extra, None)
+                            if isinstance(more, list):
+                                stmts(more)
+                if hasattr(st, "body") and isinstance(st.body, list):
+                    stmts(st.body)
+                for extra in ("orelse", "finalbody", "handlers"):
+                    more = getattr(st, extra, None)
+                    if isinstance(more, list):
+                        stmts(more)
+        stmts(fn_node.body)
+        return out
+
+    mod_names = {}
+    for st in tree.body:
+        if isinstance(st, (ast.FunctionDef, ast.AsyncFunctionDef,
+                           ast.ClassDef)):
+            mod_names.setdefault(st.name, st.lineno)
+        elif isinstance(st, ast.Assign):
+            for t in st.targets:
+                name_targets(t, mod_names, st.lineno)
+        elif isinstance(st, (ast.AugAssign, ast.AnnAssign, ast.For,
+                             ast.AsyncFor)):
+            name_targets(st.target, mod_names, st.lineno)
+        elif isinstance(st, (ast.Import, ast.ImportFrom)):
+            for al in st.names:
+                nm = (al.asname or al.name).split(".")[0]
+                if nm != "*":
+                    mod_names.setdefault(nm, st.lineno)
+    recs = []
+
+    def visit(node, enclosing):
+        for ch in ast.iter_child_nodes(node):
+            if isinstance(ch, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                names = bound_names(ch)
+                sh = {}
+                for nm in sorted(names):
+                    if nm in ("self", "cls", "_"):
+                        continue
+                    hit = None
+                    for enc_names, _l0 in reversed(enclosing):
+                        if nm in enc_names:
+                            hit = ["enclosing", "L%d" % enc_names[nm]]
+                            break
+                    if hit is None and nm in mod_names \
+                            and nm != ch.name:
+                        hit = ["global", "L%d" % mod_names[nm]]
+                    if hit is None and nm in BUILTINS:
+                        hit = ["builtin", ""]
+                    if hit is not None:
+                        sh[nm] = hit
+                if sh:
+                    recs.append({"l0": ch.lineno,
+                                 "l1": ch.end_lineno or ch.lineno,
+                                 "fn": ch.name, "sh": sh})
+                visit(ch, enclosing + [(names, ch.lineno)])
+            else:
+                visit(ch, enclosing)
+
+    visit(tree, [])
+    return {"recs": recs} if recs else None
+
+
 ANATOMY_AST_CAP = 800    # nodes per record; truncation announced in-tree
 
 _AST_OPS = {
@@ -3166,6 +3300,10 @@ def _write_trace(tr, out, granularity, entry_label, error,
                    for rel, text in tr.sources.items()}
                   if granularity == "line" else {},
         "anatomy": {rel: build_anatomy(text, rel)
+                    for rel, text in tr.sources.items()}
+                   if granularity == "line" else {},
+        # #122: per-def name-masking audit (static; badge at replay)
+        "shadows": {rel: build_shadows(text, rel)
                     for rel, text in tr.sources.items()}
                    if granularity == "line" else {},
         "cfg": cfg,

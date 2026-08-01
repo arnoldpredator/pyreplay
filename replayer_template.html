@@ -151,6 +151,7 @@
     box-shadow: 0 0 4px #e5c07b; }
   .tmark:hover { background: #ffe0a3; }
   .gly.trip { color: #e5c07b; }
+  .gly.shadow { color: #e5c07b; }
   .tripnote { cursor: pointer; text-decoration: underline;
     text-underline-offset: 2px; }
   #chaplabel { margin-left: 8px; color: var(--dim); }
@@ -3686,6 +3687,17 @@ $("seqdiag").addEventListener("click", e => {
    interpreter's run-time specializations are NOT these rows. */
 const anatBox = $("anatbox");
 let anatKey = null;
+/* #122: innermost shadow record for the current line — the audit is
+   static; the badge appears when the frame actually holds the name */
+function shadowRec(f, l) {
+  const shf = (DATA.shadows || {})[f];
+  if (!shf || !shf.recs) return null;
+  let best = null;
+  for (const r of shf.recs)
+    if (r.l0 <= l && l <= r.l1 &&
+        (!best || (r.l1 - r.l0) <= (best.l1 - best.l0))) best = r;
+  return best;
+}
 function anatRec(f, l) {
   const an = (DATA.anatomy || {})[f];
   if (!an || !an.recs) return null;
@@ -4801,6 +4813,22 @@ function render() {
         gly += '<span class="gly def" title="⚠ this argument IS the ' +
           'function’s shared mutable default — it persists ' +
           'across calls">⚠def</span>';
+      // #122: name masking — this frame holds a name that also means
+      // something outside it; the outer one is unreachable from here
+      const shRec = shadowRec(ev.f, ev.l);
+      if (shRec && shRec.fn === ev.fn && shRec.sh[base] &&
+          !r.label.includes(".")) {
+        const [kind, at] = shRec.sh[base];
+        const what = kind === "builtin"
+          ? "the builtin " + base + "()"
+          : kind === "global"
+            ? "the module-level " + base + " (bound at " + at + ")"
+            : "the enclosing function's " + base + " (bound at " +
+              at + ")";
+        gly += '<span class="gly shadow" title="👥 this local shadows ' +
+          esc2(what) + " — the outer name is unreachable from this " +
+          'frame (static audit, #122)">👥</span>';
+      }
       // tripwire: the poison is born at THIS event; glyph only the rows
       // whose displayed value actually carries it (an object trip lands
       // on the poisoned attribute rows, not every attribute)

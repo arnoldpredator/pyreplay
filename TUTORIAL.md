@@ -867,6 +867,17 @@ their original node — no phantom calls), and the 4000-node render cap
 announces itself. Works at both granularities — on an fn-level trace
 of a real codebase it is the whole run's shape in one panel.
 
+**The shadowing badge.** A local named `list`, `id`, or like a
+module-level variable silently masks the outer name — the code reads
+fine and resolves wrongly. Every line trace carries a static per-def
+audit: rows that shadow a builtin, a module global (named with its
+line), or an enclosing function's local wear **👥**, on exactly the
+frames that hold both names. Reading a closure variable is not
+flagged — only binding is. The map runs the module-level tier: rebound
+imports, module-level builtin masks, and the classic import horror — a
+top-level `random.py` — with 👥 pips on the boxes and the stdlib case
+shouted in the terminal.
+
 **The records table.** A list of dicts with uniform keys (or of
 same-length tuples) gains a **table** option in its view select: one
 column per key, the changed cell highlighted alone at each event,

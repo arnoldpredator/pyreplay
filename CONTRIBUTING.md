@@ -7,7 +7,7 @@ can pick an item and implement it. Features are numbered **#63 onward**, continu
 in FEATURES.md. Fifteen roadmap items have shipped since the list was
 written (63, 64, 65, 70, 77, 79, 80, 98, 101 v1, 103, 104 Tier 1,
 106, 109, 118, 120 v1) — their rows below are struck through;
-**29 remain unbuilt** (plus the stated remainders of 66/74/75/85/88/89/101/104/119/120/126/127/128/132/134).
+**28 remain unbuilt** (plus the stated remainders of 66/74/75/85/88/89/101/104/119/120/126/127/128/132/134).
 
 ## Start here — how to contribute
 
@@ -128,7 +128,7 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
 | 119 | ~~Dynamic edges: runtime relations the parse can't see~~ **shipped (v1; import reconciliation remains)** | — | ★★★ |
 | 120 | ~~Boundary schemas~~ **shipped (v1; cross-run diff + map rows remain)** | M | ★★★ |
 | 121 | NVTX bridge: Python names on the GPU timeline | M | ★★ |
-| 122 | Shadowing & collision audit | S | ★★ |
+| 122 | ~~Shadowing & collision audit~~ **shipped** | S | ★★ |
 | 123 | Float-hygiene probes | S–M | ★★ |
 | 124 | Event-loop starvation detector | S | ★★ |
 | 125 | ~~Mutation-survivor forensics (mutmut bridge)~~ **shipped** | M | ★★★ |
@@ -1039,6 +1039,7 @@ original brief)*
 
 ### 122. Shadowing & collision audit
 *(belongs with Section 5 — the map, plus a replayer badge)*
+**Shipped 2026-08-01** — now catalog entry #122 in [FEATURES.md](FEATURES.md): per-def masks (builtin/global/enclosing, reads never flagged) badged 👥 on the exact frame's rows; per-module audit (rebound imports, builtin masks, top-level stdlib filenames) as map pips + terminal callouts.
 - **What:** detect name masking at three levels: a local shadowing a
   global/enclosing name or a builtin (`sum`, `list`, `id`…); a
   module-level assignment shadowing an import; and a project file

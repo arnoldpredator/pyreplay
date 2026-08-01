@@ -2904,6 +2904,76 @@ def _():
         expect(probe in tpl, f"seq contract missing: {probe}")
 
 
+@check("shadowing: per-def masks, module audit, stdlib filename (#122)")
+def _():
+    src = fixture("sh122.py", (
+        "import json\n"
+        "total = 0\n"
+        "def outer(data):\n"
+        "    count = 0\n"
+        "    def inner(list):\n"
+        "        id = len(list)\n"
+        "        return id + count\n"
+        "    total = sum(data)\n"
+        "    json = 'local'\n"
+        "    return inner(data), total, json\n"
+        "outer([3, 1, 2])\n"))
+    p = run_trace(src)
+    shf = p["shadows"]["sh122.py"]
+    by_fn = {r["fn"]: r["sh"] for r in shf["recs"]}
+    expect(set(by_fn) == {"outer", "inner"},
+           f"both defs carry masks: {sorted(by_fn)}")
+    expect(by_fn["outer"].get("total") == ["global", "L2"]
+           and by_fn["outer"].get("json") == ["global", "L1"],
+           f"outer masks the global and the import: {by_fn['outer']}")
+    expect("count" not in by_fn["inner"],
+           "READING an enclosing name is not shadowing — no false "
+           "positive on the closure read")
+    expect(by_fn["inner"].get("list") == ["builtin", ""]
+           and by_fn["inner"].get("id") == ["builtin", ""],
+           f"the classic builtin masks: {by_fn['inner']}")
+    expect("data" not in by_fn["outer"],
+           "a clean argument must not be flagged")
+
+    proj = os.path.join(TMP, "shadow122")
+    os.makedirs(proj, exist_ok=True)
+    with open(os.path.join(proj, "random.py"), "w",
+              encoding="utf-8") as fh:
+        fh.write("def pick():\n    return 4\n")
+    with open(os.path.join(proj, "app.py"), "w",
+              encoding="utf-8") as fh:
+        fh.write("import json\nimport random\n"
+                 "json = 'cached'\nsum = 0\n")
+    out = os.path.join(TMP, "m122.html")
+    r = subprocess.run(
+        [PY, os.path.join(HERE, "mapper.py"), "--out", out, proj],
+        capture_output=True, text=True, cwd=TMP,
+        stdin=subprocess.DEVNULL, timeout=120)
+    mp = payload(out)
+    sh = {m["id"]: m.get("shadows") or [] for m in mp["modules"]}
+    kinds = {(k, n) for k, n, _ in sh["app"]}
+    expect(kinds == {("import-rebound", "json"), ("builtin", "sum")},
+           f"app: the rebound import and the builtin: {sh['app']}")
+    expect(sh["random"] and sh["random"][0][0] == "stdlib-filename",
+           f"a top-level random.py must carry the import horror: "
+           f"{sh['random']}")
+    expect("shadowing audit" in r.stdout
+           and "shadows the stdlib module" in r.stdout,
+           "the terminal must announce the audit and the stdlib case")
+
+    with open(os.path.join(HERE, "replayer_template.html"),
+              encoding="utf-8") as fh:
+        tpl = fh.read()
+    for probe in ("gly shadow", "outer name is unreachable",
+                  "static audit, #122", "shRec.fn === ev.fn"):
+        expect(probe in tpl, f"badge contract missing: {probe}")
+    with open(os.path.join(HERE, "map_template.html"),
+              encoding="utf-8") as fh:
+        mtpl = fh.read()
+    for probe in ("name mask(s)", "stdlib-filename"):
+        expect(probe in mtpl, f"map surface missing: {probe}")
+
+
 @check("layers: chain ranks, violations, CI exits, refusal (#96)")
 def _():
     proj = os.path.join(TMP, "layers96")

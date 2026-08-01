@@ -905,6 +905,58 @@ def _graph_lens(modules, imports, heat):
 LEAK_CAP = 100
 
 
+# ---- #122: shadowing & collision audit (static tier, module level).
+# Three masks the parse can prove: a module-level assignment that
+# rebinds an earlier import; a module-level binding named like a
+# builtin; and a TOP-LEVEL file named like a stdlib module — the
+# import horror that breaks codebases at import time (only top-level
+# files can shadow stdlib for scripts run from that directory; a
+# package-internal email.py cannot under absolute imports).
+
+def _module_shadows(tree, mod, is_top_level):
+    import builtins as _bi
+    BUILTINS = set(dir(_bi))
+    sh = []
+    bound = {}
+    for st in tree.body:
+        if isinstance(st, (ast.Import, ast.ImportFrom)):
+            kind = "import"
+            names = [(al.asname or al.name).split(".")[0]
+                     for al in st.names if al.name != "*"]
+        elif isinstance(st, (ast.FunctionDef, ast.AsyncFunctionDef,
+                             ast.ClassDef)):
+            kind = "def"
+            names = [st.name]
+        elif isinstance(st, ast.Assign):
+            kind = "assign"
+            names = [n.id for t in st.targets for n in ast.walk(t)
+                     if isinstance(n, ast.Name)]
+        elif isinstance(st, (ast.AugAssign, ast.AnnAssign,
+                             ast.For, ast.AsyncFor)):
+            kind = "assign"
+            names = [n.id for n in ast.walk(st.target)
+                     if isinstance(n, ast.Name)]
+        else:
+            continue
+        for nm in names:
+            prev = bound.get(nm)
+            if prev and prev[0] == "import" and kind != "import":
+                sh.append(["import-rebound", nm,
+                           "imported L%d, rebound L%d"
+                           % (prev[1], st.lineno)])
+            if nm in BUILTINS and prev is None:
+                sh.append(["builtin", nm, "L%d" % st.lineno])
+            if prev is None:
+                bound[nm] = (kind, st.lineno)
+    if is_top_level and mod.split(".")[0] in \
+            getattr(sys, "stdlib_module_names", ()):
+        sh.insert(0, ["stdlib-filename", mod.split(".")[0],
+                      "a top-level %s.py shadows the stdlib module "
+                      "for anything run from this directory"
+                      % mod.split(".")[0]])
+    return sh
+
+
 # ---- #96: layering rules — the declared architecture, enforced.
 # An optional .pyreplay-layers file names the layers and their order;
 # the map paints violating import edges red and --check-layers exits
@@ -1257,8 +1309,10 @@ def main(argv):
         for d in sorted(scan.imports):
             if d != mod:
                 imports.append({"s": emit_id, "d": d})
+        shadows = _module_shadows(tree, mod, "." not in mod)
         entry = {"id": emit_id,
                  "dynimp": scan.dynimp,
+                 "shadows": shadows,   # #122, [] when clean
                  "cx": _complexity(tree),   # #95: decision points
                  "path": os.path.relpath(path, root_dir),
                  "pkg": parent_pkg(mod, path),
@@ -1533,6 +1587,21 @@ def main(argv):
             print(f"graph lens: {ncomm} detected communities (label "
                   f"propagation) — compare them against the package "
                   f"boxes on the map")
+
+    # #122: the shadowing audit — counts to the terminal, pips on the map
+    n_shadow = sum(len(m.get("shadows") or []) for m in modules)
+    if n_shadow:
+        worst = sorted((m for m in modules if m.get("shadows")),
+                       key=lambda m: -len(m["shadows"]))[:4]
+        print(f"shadowing audit: {n_shadow} mask(s) — "
+              + ", ".join(f"{m['id']} ({len(m['shadows'])})"
+                          for m in worst)
+              + " — 👥 pips on the map; stdlib-filename cases listed "
+                "first")
+        for m in modules:
+            for kind, nm, det in (m.get("shadows") or []):
+                if kind == "stdlib-filename":
+                    print(f"    ⚠ {m['id']}: {det}")
 
     # #96: the declared architecture, checked against every internal
     # import edge — a malformed rules file refuses to enforce

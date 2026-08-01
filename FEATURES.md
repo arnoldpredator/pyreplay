@@ -2157,6 +2157,37 @@ dead or invented panel; every cap and truncation is announced.
 
   [![Feature 97 — dead code](screenshots/97-dead-code.png)](screenshots/97-dead-code.png)
 
+### 122. The shadowing & collision audit — names that resolve wrongly
+- **Measured:** static, zero run-time cost, two tiers. Per def (in
+  every line trace): locals that mask a **builtin** (`list`, `id`,
+  `sum`…), a **module-level name** (with the line that bound it), or
+  an **enclosing function's local** — argument names, assignments,
+  loop/with/except targets, walrus bindings, local imports; nested
+  scopes respected, and *reading* an enclosing name is never flagged
+  (a closure read is not a shadow). Per module (on every map):
+  imports rebound by later module-level assignments, module-level
+  builtin masks, and the import horror — a TOP-LEVEL file named like
+  a stdlib module (`random.py`, `email.py`); package-internal files
+  are exempt under absolute imports, and the note says why.
+- **Displayed:** the replayer wears **👥** on exactly the shadowing
+  rows of the matching frame, the outer binding named in the tooltip
+  ("shadows the module-level `total` (bound at L2) — the outer name
+  is unreachable from this frame"). The map wears 👥 pips on flagged
+  boxes with the masks in the tooltip, a banner count, and
+  stdlib-filename cases called out in the terminal, first.
+- **Why:** scope-collision bugs read correctly and *resolve*
+  wrongly — the code looks fine because it is fine, somewhere else.
+  The stdlib-filename case can break a codebase at import time in
+  ways that look supernatural.
+- **Use case:** `total = sum(data)` inside a function silently stops
+  updating the module's `total` — the row wears 👥 naming the L2
+  binding it masks, at the exact moment the frame holds both.
+- **Command:** any line trace (badges) · any map (pips + terminal).
+- **Screenshot** — the demo frame: `total` and `json` wearing 👥,
+  the closure `count` correctly wearing ⛓ instead:
+
+  [![Feature 122 — shadowing](screenshots/122-shadowing.png)](screenshots/122-shadowing.png)
+
 ### 96. Layering rules — the declared architecture, enforced visually
 - **Measured:** an optional `.pyreplay-layers` file at the mapped
   root (or `--layers FILE`) declares the architecture: `layers: ui

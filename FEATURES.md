@@ -1977,6 +1977,42 @@ dead or invented panel; every cap and truncation is announced.
 
   [![Feature 94 — call graph](screenshots/94-callgraph.png)](screenshots/94-callgraph.png)
 
+### 97. Dead-code evidence — two kinds of proof it's safe to delete
+- **Measured:** the join IS the feature: static unreference (#94's
+  def→def call graph plus the importable surface — every name-level
+  import the scanner saw) × dynamic never-ran (per-def counts from
+  every adopted trace). Three tiers, strongest first: **A** — no
+  static reference at all; **B** — importable surface or a live
+  class's method, never called statically (obj.method dispatch is
+  statically invisible, so this is exactly where it hides); **C** —
+  called statically somewhere, never ran in any adopted run
+  (workload-relative). A def that RAN is alive whatever the static
+  graph says — dynamic dispatch, not dead code — and a class body's
+  import-time execution is NOT liveness (a class lives through
+  static references or a method that ran). Dunders are skipped: the
+  interpreter calls them implicitly.
+- **Displayed:** the terminal's ranked tier list; on the map, every
+  candidate def row wears 👻 with its tier in the tooltip, modules
+  carry a 👻N count in their meta line, and the banner totals the
+  three tiers with the honesty clause. Capped at 500, announced.
+- **Why:** deleting code is the highest-leverage refactor and the
+  scariest; two independent kinds of evidence make it a decision
+  instead of a bet. vulture is static-only, coverage.py dynamic-only
+  — the join is what neither shows.
+- **Use case:** a library maps to `[A] lib.never_ever · [A]
+  lib.Ghost (+its method) · [B] lib.exported (imported, never
+  called) · [C] lib.cold (guarded by a branch no run took)` — and
+  `used()` is nowhere on the list because it ran.
+- **Command:** automatic on every map; adopt traces (auto-heat or
+  `--trace`, repeatable) for the dynamic axis — without runs the
+  report keeps the static tiers and makes no workload claims.
+  Honesty, verbatim everywhere it appears: evidence, not proof —
+  reflection, plugins and decorators can hide callers.
+- **Screenshot** — the tier list: four A's in red, the
+  surface-only B, the never-ran C, the honesty line above.
+
+  [![Feature 97 — dead code](screenshots/97-dead-code.png)](screenshots/97-dead-code.png)
+
 ## I. The cockpit — heat & the funnel handoff
 
 ### 56. Heat overlay — the trace drawn onto the map

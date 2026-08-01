@@ -65,6 +65,8 @@
   .mod .mloc { fill: #c7cedd; font-size: 10px; }
   .mod .defrow { fill: #e6eaf2; font-size: 10px; cursor: default; }
   .mod .defrow.hit { fill: var(--warn); font-weight: 700; }
+  .mod .defrow.ghost { fill: #79839a; font-style: italic; }
+  .mod .gh { fill: #9aa3b8; font-size: 8.5px; }
   /* intra-file call graph: focused function + its neighbours */
   .mod .fnname.caller { fill: var(--warn); font-weight: 700; }
   .mod .fnname.callee { fill: var(--call); font-weight: 700; }
@@ -362,6 +364,14 @@ function buildNote(allCycles) {
             "is complex AND carries the runtime"
           : " — switch the lens to churn × cx to see it"));
   }
+  if (DATA.dead && DATA.dead.cands.length) {
+    const c = DATA.dead.counts;
+    bits.push("👻 dead-code evidence: " + c.A + " unreferenced · " +
+      c.B + " surface-only · " + c.C + " never-ran (" +
+      DATA.dead.runs + " adopted run(s))" +
+      (DATA.dead.capped ? " · list capped at 500" : "") +
+      " — evidence, not proof; expand a module to see its ghosts");
+  }
   if (DATA.callgraph) {
     bits.push("call graph: " + DATA.callgraph.resolved +
       " def→def sites resolved" +
@@ -426,6 +436,16 @@ if (DATA.churn || DATA.graphlens) {   // #95 lenses need history;
    its direct members) or a singleton pseudo-group for each top-level
    module. Folding a package hides its members and re-anchors their
    edges to the box — semantic zoom v2. */
+/* #97: dead-code candidates — tier lookup + per-module counts */
+const DEAD = {};
+const DEADN = {};
+if (DATA.dead) DATA.dead.cands.forEach(c => {
+  DEAD[c.m + "|" + c.n] = c.tier;
+  DEADN[c.m] = (DEADN[c.m] || 0) + 1;
+});
+const DEAD_TIER = { A: "no static reference found",
+  B: "importable surface / live-class method — never called statically",
+  C: "called statically — never ran in any adopted trace" };
 const mods = DATA.modules;
 const byId = Object.create(null);
 const byPath = Object.create(null);
@@ -1073,6 +1093,7 @@ function render() {
       esc(m.id) + "</text>" +
       '<text class="mloc" x="' + (g.x + 10) + '" y="' + (g.y + 31) + '">' +
       (m.err ? "parse error" : m.loc + " loc · " + m.defs.length + " defs" +
+       (DEADN[m.id] ? " · 👻" + DEADN[m.id] : "") +
        (mh ? " · " + (heatKind === "time"
          ? fmtUs(mh.tSelf || 0)
          : mh.n.toLocaleString() + " ev") + " (" +
@@ -1170,8 +1191,12 @@ function render() {
         const nOut = (callees[d.n] || []).length;
         const nIn = (callers[d.n] || []).length;
         const rec = recSet.has(d.n), ent = entrySet.has(d.n);
+        const dtier = DEAD[m.id + "|" + d.n];
         const nameTip = "<title>" + esc(d.n + "  (line " + d.l + ", " +
           d.loc + " loc)" +
+          (dtier ? "\n👻 dead-code candidate [" + dtier + "]: " +
+            DEAD_TIER[dtier] + " — evidence, not proof (reflection/" +
+            "plugins/decorators can hide callers)" : "") +
           (intra ? "\ncalls " + nOut + " · called by " + nIn +
             (rec ? " · recursive" : "") +
             (ent ? " · entry point (called at module level — import " +
@@ -1189,10 +1214,12 @@ function render() {
             'level (import time, or under __main__ as a script)' +
             "</title></text>";
         svg += '<text class="defrow fnname' + rel + (hit ? " hit" : "") +
+          (dtier ? " ghost" : "") +
           '" data-mod="' + esc(m.id) + '" data-fn="' + esc(d.n) +
           '" data-f="' + esc(m.path) + '" data-l="' + d.l + '" x="' +
           (g.x + 14) + '" y="' + (yy + 10) + '">' +
           esc(fitText(d.n, g.w - 80)) +
+          (dtier ? ' <tspan class="gh">👻' + dtier + "</tspan>" : "") +
           (rec ? ' <tspan class="fnrec">↺</tspan>' : "") +
           nameTip + '</text><text class="defloc defrow" data-f="' +
           esc(m.path) + '" data-l="' + d.l + '" x="' +

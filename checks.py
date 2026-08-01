@@ -3658,6 +3658,62 @@ def _():
     expect(len(kept) >= 2, f"both traces are kept as evidence: {kept}")
 
 
+@check("dead code: the static x dynamic join, tiered honestly (#97)")
+def _():
+    proj = os.path.join(TMP, "dead97")
+    os.makedirs(proj, exist_ok=True)
+    with open(os.path.join(proj, "lib.py"), "w") as fh:
+        fh.write("def used():\n    return 1\n\n\n"
+                 "def never_ever():\n    return 2\n\n\n"
+                 "def exported():\n    return 3\n\n\n"
+                 "def cold():\n    return 4\n\n\n"
+                 "class Ghost:\n    def haunt(self):\n"
+                 "        return 5\n\n\n"
+                 "class Dyn:\n    def hidden(self):\n"
+                 "        return 6\n")
+    with open(os.path.join(proj, "main.py"), "w") as fh:
+        fh.write("from lib import used, exported, cold, Dyn\n\n\n"
+                 "def local_dead():\n    pass\n\n\n"
+                 "print(used())\n"
+                 "if used() == 0:\n    cold()\n"
+                 "print(getattr(Dyn(), 'hidden')())\n")
+    tr = os.path.join(proj, "trace_main.html")
+    subprocess.run([PY, os.path.join(HERE, "tracer.py"),
+                    "--granularity", "fn", "--out", tr,
+                    os.path.join(proj, "main.py")],
+                   capture_output=True, text=True, cwd=proj,
+                   stdin=subprocess.DEVNULL, timeout=120)
+    mp = run_map(proj, "--trace", tr, name="map_dead97")
+    dead = mp["dead"]
+    tiers = {c["m"] + "." + c["n"]: c["tier"] for c in dead["cands"]}
+    expect(tiers.get("lib.never_ever") == "A",
+           f"unreferenced + never ran = tier A: {tiers}")
+    expect(tiers.get("main.local_dead") == "A",
+           "a local def nobody touches is tier A")
+    expect(tiers.get("lib.Ghost") == "A"
+           and tiers.get("lib.Ghost.haunt") == "A",
+           "a dead class drags its methods into tier A")
+    expect(tiers.get("lib.exported") == "B",
+           "imported-but-never-called is tier B (importable surface)")
+    expect(tiers.get("lib.cold") == "C",
+           "statically called, never ran = tier C (workload-relative)")
+    expect("lib.used" not in tiers,
+           "a def that ran and is called is alive")
+    expect("lib.Dyn.hidden" not in tiers,
+           "getattr dispatch RAN it — dynamic evidence beats the "
+           "static graph; never flag what executed")
+    expect(dead["runs"] == 1 and dead["counts"]["A"] >= 3,
+           f"run count + tier counts recorded: {dead['counts']}")
+    # without any adopted run: C claims are impossible, said by absence
+    mp2 = run_map(proj, "--no-trace", name="map_dead97b")
+    tiers2 = {c["m"] + "." + c["n"]: c["tier"]
+              for c in mp2["dead"]["cands"]}
+    expect("lib.cold" not in tiers2 and mp2["dead"]["runs"] == 0,
+           "no dynamic evidence -> no workload-relative claims")
+    expect(tiers2.get("lib.never_ever") == "A",
+           "static tiers survive without heat")
+
+
 # ---------------------------------------------------------------- runner
 
 def main():

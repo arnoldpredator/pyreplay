@@ -861,6 +861,78 @@ def _graph_lens(modules, imports, heat):
     return res
 
 
+# ---- #97: dead-code evidence ---------------------------------------
+# The join IS the feature: static unreference (#94's def→def graph +
+# the importable surface) × dynamic never-ran (every adopted trace).
+# Tier A: no static reference at all. Tier B: importable surface or
+# method of a live class — never called statically. Tier C: called
+# statically somewhere, never ran in any adopted trace (workload-
+# relative). A def that RAN is alive whatever the static graph says —
+# that is dynamic dispatch, not dead code. Dunders are skipped (the
+# interpreter calls them implicitly). Evidence, never proof:
+# reflection, plugins and decorators can hide callers.
+
+DEAD_CAP = 500
+
+
+def _dead_code(modules, callgraph, imported_fns, heat, n_runs):
+    called = set()
+    if callgraph:
+        for s, d, n, k in callgraph["edges"]:
+            dm, _, dn = d.partition(":")
+            called.add((dm, dn))
+    hm = (heat or {}).get("mods", {})
+
+    def ran(mid, name):
+        fh = (hm.get(mid) or {}).get("fns", {}).get(name)
+        return bool(fh and (fh.get("n", 0) or fh.get("calls", 0)))
+    live_cls = set()
+    for m in modules:
+        for d in m["defs"]:
+            if d.get("k") == "class":
+                key = (m["id"], d["n"])
+                if key in called or key in imported_fns:
+                    live_cls.add(key)
+    cands = []
+    counts = {"A": 0, "B": 0, "C": 0}
+    for m in modules:
+        if m.get("err"):
+            continue
+        for d in m["defs"]:
+            name = d["n"]
+            leaf = name.rsplit(".", 1)[-1]
+            if leaf.startswith("__") and leaf.endswith("__"):
+                continue
+            key = (m["id"], name)
+            if d.get("k") == "class":
+                # a class BODY runs at import time — that is not
+                # liveness. A class is alive statically (called/
+                # imported) or through a method that ran.
+                if key in live_cls or any(
+                        ran(m["id"], d2["n"]) for d2 in m["defs"]
+                        if d2["n"].startswith(name + ".")):
+                    continue
+            elif ran(m["id"], name):
+                continue                  # it ran: alive, full stop
+            in_called = key in called
+            meth_live = "." in name and (
+                m["id"], name.split(".")[0]) in live_cls
+            if in_called:
+                if not n_runs:
+                    continue              # no dynamic evidence yet
+                tier = "C"
+            elif key in imported_fns or meth_live:
+                tier = "B"
+            else:
+                tier = "A"
+            counts[tier] += 1
+            cands.append({"m": m["id"], "n": name, "l": d["l"],
+                          "k": d.get("k", "def"), "tier": tier})
+    cands.sort(key=lambda c: (c["tier"], c["m"], c["l"]))
+    return {"cands": cands[:DEAD_CAP], "counts": counts,
+            "runs": n_runs, "capped": len(cands) > DEAD_CAP}
+
+
 def main(argv):
     out = None
     traces = []
@@ -928,6 +1000,7 @@ def main(argv):
             owner[mod] = p
     internal = set(owner)
     modules, imports, calls_raw, errors = [], [], [], []
+    imported_fns = set()   # #97: (module, name) importable surface
     ext_counts = {}
     unresolved = 0
 
@@ -970,6 +1043,9 @@ def main(argv):
                 calls_raw.append((emit_id, src_def, dmod, dname,
                                   "direct"))
         unresolved += scan.unresolved
+        for a in scan.aliases.values():   # #97: importable surface
+            if a[0] == "func":
+                imported_fns.add((a[1], a[2]))
         for e in scan.external:
             ext_counts[e] = ext_counts.get(e, 0) + 1
         for d in sorted(scan.imports):
@@ -1100,14 +1176,17 @@ def main(argv):
                   + " matching trace(s) — "
                   + ", ".join(os.path.basename(t) for t in traces)
                   + " (--trace FILE to choose, --no-trace to disable)")
+    n_runs = 0
     if traces:
         try:
             heat = aggregate_heat([load_heat(t, modules) for t in traces])
+            n_runs = len(traces)
             if auto and not heat["mods"]:
                 # matched by filenames but no event landed on this map:
                 # an auto guess must never ship empty heat
                 print("auto-heat: no events matched this map — dropped")
                 heat = None
+                n_runs = 0
             else:
                 print(f"heat[{heat['kind']}]: {heat['events']} events from "
                       f"{heat['trace']}, {len(heat['mods'])} modules "
@@ -1203,6 +1282,19 @@ def main(argv):
             print(f"dark edges: the run saw {len(dark)} caller→callee "
                   f"pair(s) the parse couldn't — drawn dashed on the map")
 
+    dead = _dead_code(modules, callgraph, imported_fns, heat, n_runs)
+    if dead["cands"]:
+        c = dead["counts"]
+        print(f"dead-code evidence: {c['A']} with no static reference "
+              f"· {c['B']} importable-surface-only · {c['C']} never "
+              f"ran in {n_runs} adopted run(s) — evidence, not proof "
+              f"(reflection/plugins/decorators can hide callers):")
+        for cd in dead["cands"][:10]:
+            print(f"    [{cd['tier']}] {cd['m']}.{cd['n']}  "
+                  f"(:{cd['l']}, {cd['k']})")
+        if len(dead["cands"]) > 10:
+            print(f"    … +{len(dead['cands']) - 10} more on the map")
+
     graphlens = _graph_lens(modules, imports, heat)
     if graphlens:
         topb = sorted(graphlens["between"].items(),
@@ -1232,6 +1324,7 @@ def main(argv):
         "extMissing": ext_missing,
         "unresolvedCalls": unresolved,
         "callgraph": callgraph,   # #94: def→def, resolved/guessed
+        "dead": dead,             # #97: the join, tiered, capped
         "errors": errors,
         "heat": heat,
         "churn": churn,   # #95: git history lens, or null (no repo)

@@ -170,6 +170,19 @@ on nengo that crowns `ValidationError` (←135 sites from 26 modules)
 and `Signal` (←133), invisible in module counts. Click a row to
 spotlight its module.
 
+**Dead-code evidence (#97).** Every map now joins two kinds of
+evidence about every def: does anything reference it statically
+(#94's call graph + the importable surface), and did it ever run
+(every adopted trace)? Candidates come tiered — [A] no static
+reference at all, [B] importable surface or live-class method
+(obj.method dispatch hides here), [C] statically called but never
+ran in any adopted run — as a ranked terminal list and 👻 rows on
+the map's expanded modules. What ran is alive no matter what the
+graph says, class bodies executing at import time don't count as
+liveness, and the clause rides every surface: evidence, not proof —
+reflection, plugins and decorators can hide callers. Deleting code
+becomes a decision instead of a bet.
+
 **The graph lens (#129) — graph theory over the map's own graphs.**
 The lens select gains *graph (structure)*, available on any map of
 two or more modules: boxes tint violet by **betweenness centrality**

@@ -986,6 +986,44 @@ if (DATA.trip) {
   }
   b.appendChild(note);
 }
+/* #78: state recurrence — Poincaré's rule as a banner. PROVEN only
+   when the recorder saw the whole system; otherwise the reasons for
+   the downgrade are listed, verbatim from the analysis. */
+if (DATA.nonterm && DATA.nonterm.length) {
+  const g = DATA.nonterm[0];
+  const b = $("banner");
+  b.style.display = "block";
+  const note = document.createElement("div");
+  const jump = (i, lbl) => ' <span class="wkj" data-goto="' + i +
+    '">' + lbl + " ›</span>";
+  if (g.proven) {
+    note.innerHTML = "⟳ <b>PROVEN CYCLE</b> at " + escapeHtml(g.f) + ":" +
+      g.head + " — iteration state at event " + (g.again + 1) +
+      " is identical to event " + (g.first + 1) + " (period " +
+      g.period + " events · " + g.iters + " iteration" +
+      (g.iters === 1 ? "" : "s") + "): a pure recorded state that " +
+      "returns must repeat forever." +
+      jump(g.first, "first") + jump(g.again, "recurrence") +
+      (DATA.nonterm.length > 1
+        ? ' <span style="color:var(--dim)">(+' +
+          (DATA.nonterm.length - 1) + " more recurring loop(s))</span>"
+        : "");
+  } else {
+    note.innerHTML = "⟳ state recurring at line level at " +
+      escapeHtml(g.f) + ":" + g.head + " — event " + (g.again + 1) +
+      " matches event " + (g.first + 1) + " (period " + g.period +
+      " events), but NOT proven a hang: " +
+      escapeHtml(g.reasons.join("; ")) + "." +
+      jump(g.first, "first") + jump(g.again, "recurrence");
+  }
+  b.appendChild(note);
+  b.addEventListener("click", e => {
+    if (e.target.classList && e.target.classList.contains("wkj")) {
+      stop();
+      goto(parseInt(e.target.dataset.goto, 10));
+    }
+  });
+}
 /* #118 the console lane: every stdout/stderr line the run wrote,
    tied to its moment. Built once; render() only moves the cursor. */
 const logIdx = [];

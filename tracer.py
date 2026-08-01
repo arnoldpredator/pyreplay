@@ -3178,6 +3178,9 @@ def _write_trace(tr, out, granularity, entry_label, error,
         # observations only; --runs --mine multiplies the evidence
         "mined": mine_invariants([{"events": tr.events}]),
         "fsm": fsm_data,   # #132, or null without --fsm
+        # #78: state-recurrence findings (line granularity only)
+        "nonterm": (_detect_nonterm(tr.events, tr.sources)
+                    if granularity == "line" else []),
         # #134: the subproblem DAG of the bound memo, or null
         "memo": (_build_memo(tr.events, tr.sources, memo)
                  if memo is not None and granularity == "line"
@@ -3991,6 +3994,162 @@ def _build_fsm(events, expr, declared):
             if declared else None,
             "states": [states[v] for v in order],
             "edges": edge_list, "obs": obs, "viol": n_viol}
+
+
+# ---- #78: the nontermination detector (state recurrence) ----------------
+# Poincaré's framing: a closed system that returns to a previous state
+# must repeat forever. At every loop-head event the frame's recorded
+# state is fingerprinted; an exact repeat is a cycle. "PROVEN" is
+# claimed only when the recorder could actually see the whole system:
+# a while-loop whose extent is statically free of calls/attributes/
+# await/yield (C calls are INVISIBLE to settrace — time.time() in the
+# condition would fake purity), every fingerprinted encoding complete
+# (windowed containers can collide), and nothing else active in the
+# window (no calls, no I/O, no other lanes, no exceptions). Anything
+# less downgrades to "state recurring at line level", with the
+# reasons named. The trace itself usually ends at the event cap —
+# that is the expected way to catch a hang.
+
+def build_loop_purity(text, rel):
+    """Per loop-head line: can the recorder SEE this loop's whole
+    state? {"line": {"kind": "while"|"for", "end": last_line,
+    "reasons": [static impurity strings]}}."""
+    try:
+        tree = ast.parse(text, filename=rel)
+    except SyntaxError:
+        return {}
+    out = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.While, ast.For, ast.AsyncFor)):
+            continue
+        reasons = []
+        kind = "while" if isinstance(node, ast.While) else "for"
+        if kind == "for":
+            reasons.append("a for-loop's iterator is state the "
+                           "recorder cannot fingerprint")
+        seen = set()
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Call):
+                seen.add("calls in the loop body (C calls are "
+                         "invisible to the recorder)")
+            elif isinstance(sub, ast.Attribute):
+                seen.add("attribute access (properties/descriptors "
+                         "may read external state)")
+            elif isinstance(sub, (ast.Await, ast.Yield,
+                                  ast.YieldFrom)):
+                seen.add("suspension points (await/yield)")
+            elif isinstance(sub, ast.Global):
+                seen.add("global declarations (writes escape the "
+                         "frame)")
+        reasons.extend(sorted(seen))
+        out[str(node.lineno)] = {
+            "kind": kind,
+            "end": node.end_lineno or node.lineno,
+            "reasons": reasons,
+        }
+    return out
+
+
+def _enc_complete(enc):
+    if not isinstance(enc, dict):
+        return True
+    if enc.get("n") is not None:
+        v = enc.get("v")
+        if not isinstance(v, list) or len(v) < enc["n"]:
+            return False
+        return all(_enc_complete(x) for x in v)
+    return True
+
+
+def _nt_bump(d, reason):
+    d[reason] = d.get(reason, 0) + 1
+
+
+def _detect_nonterm(events, sources):
+    """The post-pass: fingerprint the frame at every loop-head event,
+    report the FIRST recurrence per head. Returns a list of findings,
+    strongest (proven, then longest period) first."""
+    purity = {rel: build_loop_purity(text, rel)
+              for rel, text in sources.items()}
+    stacks, gen_saved = {}, {}
+    fid_next = [0]
+    seen = {}        # (fid, rel, line) -> {fp: (ev_idx, hits)}
+    hits = {}        # (fid, rel, line) -> head hit count
+    findings = []
+    done = set()     # heads already reported
+    for i, ev in enumerate(events):
+        e = ev.get("e")
+        stack = stacks.setdefault(ev.get("t", "main"), [])
+        if e == "call":
+            gm = ev.get("g")
+            if gm is not None and gm.get("s") == "r" \
+                    and gm.get("i") in gen_saved:
+                stack.append(gen_saved.pop(gm["i"]))
+                continue
+            if stack:
+                imp = stack[-1]["impure"]
+                imp["a traced function ran inside the window"] = \
+                    imp.get("a traced function ran inside the window",
+                            0) + 1
+            stack.append({"id": fid_next[0], "vars": {},
+                          "impure": {}})
+            fid_next[0] += 1
+            continue
+        if not stack:
+            continue
+        fr = stack[-1]
+        if e == "return":
+            gm = ev.get("g")
+            if gm is not None and gm.get("s") == "y":
+                gen_saved[gm["i"]] = fr
+            stack.pop()
+            continue
+        for nm, enc in (ev.get("ch") or {}).items():
+            fr["vars"][nm] = json.dumps(enc, sort_keys=True)
+            if not _enc_complete(enc):
+                _nt_bump(fr["impure"], "state beyond the recorded "
+                         "window (a truncated encoding can collide)")
+        if e in ("log",):
+            _nt_bump(fr["impure"], "console I/O inside the loop window")
+        if e in ("hb", "viol"):
+            _nt_bump(fr["impure"], "other machinery active in the window")
+        if e == "exc":
+            _nt_bump(fr["impure"], "an exception unwound in the window")
+        if e != "line":
+            continue
+        rel, line = ev.get("f"), str(ev.get("l"))
+        info = purity.get(rel, {}).get(line)
+        if info is None:
+            continue
+        key = (fr["id"], rel, line)
+        if key in done:
+            continue
+        fp = hash(tuple(sorted(fr["vars"].items())))
+        table = seen.setdefault(key, {})
+        hits[key] = hits.get(key, 0) + 1
+        if fp in table:
+            first_i, first_hit, imp0 = table[fp]
+            reasons = list(info["reasons"]) + sorted(
+                r for r, c in fr["impure"].items()
+                if c > imp0.get(r, 0))
+            lanes = [t for t, st in stacks.items() if st]
+            if len(lanes) > 1 or len(stacks) > 1:
+                reasons.append("other lanes were active")
+            findings.append({
+                "f": rel, "head": int(line),
+                "kind": info["kind"],
+                "first": first_i, "again": i,
+                "period": i - first_i,
+                "iters": hits[key] - first_hit,
+                "proven": not reasons,
+                "reasons": reasons,
+            })
+            done.add(key)
+        else:
+            if len(table) < 20000:   # per-head cap; never near it
+                table[fp] = (i, hits[key], dict(fr["impure"]))
+    findings.sort(key=lambda g: (not g["proven"], -g["period"]))
+    return findings
 
 
 # ---- #66: automatic input shrinking (ddmin) -----------------------------

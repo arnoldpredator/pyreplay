@@ -1255,6 +1255,42 @@ dead or invented panel; every cap and truncation is announced.
 
   [![Feature 77 — whyline](screenshots/77-whyline.png)](screenshots/77-whyline.png)
 
+### 78. The nontermination detector — Poincaré's rule as a banner
+- **Measured:** at every loop-head event the frame's recorded state
+  is fingerprinted (all variables, canonical encodings); an exact
+  repeat is a cycle. **PROVEN** is claimed only when the recorder
+  could see the whole system: a `while` loop whose extent is
+  statically free of calls, attribute access and suspension points
+  (C calls are invisible to settrace — `time.time()` in a condition
+  would fake purity), every fingerprinted encoding complete, and a
+  quiet window (no traced calls, no console I/O, no other lanes, no
+  exceptions). Anything less downgrades to "state recurring at line
+  level" with every reason named. Impurities are counted per
+  window, so noise before the cycle never taints the verdict.
+- **Displayed:** the banner: "⟳ PROVEN CYCLE at file:2 — iteration
+  state at event 23 is identical to event 8 (period 15 events · 5
+  iterations): a pure recorded state that returns must repeat
+  forever", with first/recurrence jump links. The hang itself is
+  caught the natural way: the run hits the event cap and the trace
+  holds the cycle.
+- **Why:** the heartbeat already says "it seems stuck"; this says
+  "it IS stuck, here is the cycle" — with the cycle's events right
+  there to study. For-loops are never PROVEN (the iterator is state
+  the recorder cannot fingerprint), and the banner says so.
+- **Use case:** `while a != b: a = (a+2) % 10; b = (b+2) % 10`
+  called with parity-mismatched arguments — five iterations in, the
+  state returns exactly and the banner names the period. Add a
+  `print` inside and the same cycle honestly downgrades: "calls in
+  the loop body; console I/O inside the loop window".
+- **Command:** automatic in every line trace; pair with
+  `--max-events` (the cap catches the hang) or `--black-box` (the
+  ring keeps the cycle). Honesty: proven means proven ABOUT THE
+  RECORDED STATE — the reasons list is the boundary of that claim.
+- **Screenshot** — the parity trap: PROVEN CYCLE banner with period
+  and iteration count, jump links, the truncation note above it.
+
+  [![Feature 78 — nontermination](screenshots/78-nonterm.png)](screenshots/78-nonterm.png)
+
 ### 79. NaN/Inf tripwire — where the poison was born
 - **Measured:** with `--trip nan`, the encoder's own bounded output is
   scanned for NaN/Inf leaves. An event records a trip when a

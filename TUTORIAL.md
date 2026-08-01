@@ -598,6 +598,18 @@ be nondeterminism (the report says to pin PYTHONHASHSEED or measure
 with --runs first), and held trials are an observation, never a
 proof. Conservation laws as tests — no oracle required.
 
+**The nontermination detector.** Poincaré's rule, applied: a closed
+system that returns to a previous state must repeat forever. Every
+line trace fingerprints the frame at each loop head; an exact repeat
+raises the banner — "⟳ PROVEN CYCLE: iteration state at event 23
+identical to event 8, period 15 events · 5 iterations", with jumps
+to both ends. PROVEN holds itself to a hard standard: a while-loop
+statically free of calls/attributes (C calls are invisible to the
+recorder), complete encodings, a quiet window; anything else says
+"state recurring at line level" and names every reason — for-loops
+always carry the iterator caveat. Run the suspect with --max-events:
+the cap catches the hang and the trace holds the cycle.
+
 **Input shrinking (`--shrink`).** A huge input that crashes is a
 chore; the tiny core that still crashes is a diagnosis. Pipe the
 input and `--shrink` runs Zeller's ddmin over it — lines by default,

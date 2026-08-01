@@ -7,7 +7,7 @@ can pick an item and implement it. Features are numbered **#63 onward**, continu
 in FEATURES.md. Fifteen roadmap items have shipped since the list was
 written (63, 64, 65, 70, 77, 79, 80, 98, 101 v1, 103, 104 Tier 1,
 106, 109, 118, 120 v1) — their rows below are struck through;
-**36 remain unbuilt** (plus the stated remainders of 66/74/75/85/88/89/101/104/119/120/126/127/128/132/134).
+**35 remain unbuilt** (plus the stated remainders of 66/74/75/85/88/89/101/104/119/120/126/127/128/132/134).
 
 ## Start here — how to contribute
 
@@ -84,7 +84,7 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
 | 75 | ~~Full backward slice of a value~~ **shipped (v1; caller-arg crossing remains)** | — | ★★★ |
 | 76 | Forward taint from an input | L | ★★ |
 | 77 | ~~"Why didn't this line run?"~~ **shipped** | — | ★★★ |
-| 78 | Prove a loop is stuck (state recurrence) | M | ★★ |
+| 78 | ~~Nontermination detector (state recurrence)~~ **shipped** | M | ★★ |
 | 79 | ~~Catch the first NaN/Inf at birth~~ **shipped** | — | ★★★ |
 | 80 | ~~Strip-charts + phase portraits of variables~~ **shipped** | — | ★★★ |
 | 81 | Object-reference graph at an event | L | ★★ |
@@ -351,6 +351,7 @@ software.
 **Shipped 2026-08-01** — now catalog entry #77 in [FEATURES.md](FEATURES.md), with the full measured/displayed/why/use-case record.
 
 ### 78. Nontermination detector (state recurrence)
+**Shipped 2026-08-01** — now catalog entry #78 in [FEATURES.md](FEATURES.md): per-head state fingerprints, PROVEN only for statically pure while-loops with complete encodings and a quiet window (impurities counted PER WINDOW); everything else downgrades with named reasons; banner + jump links; the event cap is the honest hang-catcher.
 - **What:** for a loop suspected of hanging: hash (line, frame's
   fingerprint set) each iteration; an **exact repeat proves** the loop
   can never exit (pure state) — banner: "iteration state at event

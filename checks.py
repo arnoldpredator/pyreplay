@@ -3494,6 +3494,53 @@ def _():
            "no failure on the full input -> refused with the reason")
 
 
+@check("nonterm: proven cycle vs downgraded recurrence (#78)")
+def _():
+    src = fixture("nt78.py", (
+        "def converge(a, b):\n"
+        "    while a != b:\n"
+        "        a = (a + 2) % 10\n"
+        "        b = (b + 2) % 10\n"
+        "    return a\n"
+        "print(converge(0, 1))\n"))
+    p = run_trace(src, "--max-events", "400")
+    g = (p.get("nonterm") or [None])[0]
+    expect(g and g["proven"] and g["head"] == 2 and g["iters"] == 5
+           and g["period"] == 15 and not g["reasons"],
+           f"the parity trap must be a PROVEN period-5 cycle: {g}")
+    # print() inside the loop: statically a call, dynamically I/O —
+    # the claim must downgrade with the reasons named
+    src2 = fixture("nt78b.py", (
+        "def spin(a, b):\n"
+        "    while a != b:\n"
+        "        a = (a + 2) % 10\n"
+        "        b = (b + 2) % 10\n"
+        "        print(a)\n"
+        "    return a\n"
+        "print(spin(0, 1))\n"))
+    p2 = run_trace(src2, "--max-events", "400", name="nt78b")
+    g2 = (p2.get("nonterm") or [None])[0]
+    expect(g2 and not g2["proven"]
+           and any("calls" in r for r in g2["reasons"])
+           and any("I/O" in r for r in g2["reasons"]),
+           f"impure loop must downgrade with call + I/O reasons: {g2}")
+    # a for-loop can never be proven: the iterator is unseen state
+    src3 = fixture("nt78c.py", (
+        "import itertools\n"
+        "x = 0\n"
+        "for k in itertools.cycle([1, 2]):\n"
+        "    x = k\n"))
+    p3 = run_trace(src3, "--max-events", "300", name="nt78c")
+    g3 = (p3.get("nonterm") or [None])[0]
+    expect(g3 and not g3["proven"]
+           and any("iterator" in r for r in g3["reasons"]),
+           f"for-loops carry the iterator caveat, never PROVEN: {g3}")
+    # a terminating loop whose state never repeats: no finding at all
+    p4 = run_trace(os.path.join(HERE, "bubble_sort.py"), name="nt78d")
+    expect(p4.get("nonterm") == [],
+           f"bubble sort recurs nowhere: {p4.get('nonterm')}")
+
+
 # ---------------------------------------------------------------- runner
 
 def main():

@@ -74,7 +74,11 @@ const R = DATA.perRun;
 $("subtitle").textContent = "· " + DATA.script + " · " + R.length +
   (DATA.interrupted ? " of " + DATA.requested + " (interrupted)" : "") +
   " runs · " + DATA.granularity + " granularity · python " + DATA.python;
-$("cmdline").textContent = "each run: " + DATA.cmd;
+$("cmdline").textContent = "each run: " + DATA.cmd +
+  (DATA.chaos !== null && DATA.chaos !== undefined
+    ? "  ·  ⚡ PERTURBED: schedule chaos, seed base " + DATA.chaos +
+      " (run i = base+i−1)"
+    : "");
 $("honesty").textContent = "Wall times are tracer-inclusive (interpreter " +
   "start-up + " + DATA.granularity + "-granularity recording overhead) — " +
   "comparable to each other, not to bare runtime. Outcomes are classified " +

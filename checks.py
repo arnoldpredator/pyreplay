@@ -2152,6 +2152,87 @@ def _():
            f"events must rank as a wall: {p['fan']['events']}")
 
 
+@check("chaos: same seed = same decision stream; plain runs carry none (#68)")
+def _():
+    a = run_trace(os.path.join(HERE, "example_sort.py"),
+                  "--chaos-schedule", "7", name="chaos_a")
+    b = run_trace(os.path.join(HERE, "example_sort.py"),
+                  "--chaos-schedule", "7", name="chaos_b")
+    for p in (a, b):
+        c = p.get("chaos")
+        expect(c is not None, "chaos run carries no chaos block")
+        expect(c["seed"] == 7, f"seed not recorded: {c}")
+    expect((a["chaos"]["delays"], a["chaos"]["yields"],
+            a["chaos"]["switchRolls"])
+           == (b["chaos"]["delays"], b["chaos"]["yields"],
+               b["chaos"]["switchRolls"]),
+           f"same seed, different decision stream: {a['chaos']} "
+           f"vs {b['chaos']}")
+    expect(len(a["events"]) == len(b["events"]),
+           "single-threaded same-seed chaos runs differ in event count")
+    plain = run_trace(os.path.join(HERE, "example_sort.py"),
+                      name="chaos_plain")
+    expect(plain.get("chaos") is None,
+           "an unperturbed trace carries a chaos block")
+
+
+@check("chaos: asyncio ready queue really shuffled (#68)")
+def _():
+    p = run_trace(os.path.join(HERE, "example_tasks.py"),
+                  "--chaos-schedule", "3", "--granularity", "fn",
+                  name="chaos_tasks")
+    c = p.get("chaos")
+    expect(c is not None, "no chaos block on the asyncio run")
+    expect(c["asyncioHooked"] is True,
+           f"asyncio hook reported unavailable: {c}")
+    expect(c["shuffles"] > 0, f"ready queue never shuffled: {c}")
+
+
+@check("chaos x runs: derived seeds, PERTURBED report, kept capsule (#68+#63)")
+def _():
+    out = os.path.join(TMP, "runs_chaos.html")
+    if os.path.exists(out):
+        os.remove(out)
+    r = subprocess.run([PY, os.path.join(HERE, "tracer.py"),
+                        "--runs", "3", "--chaos-schedule", "50",
+                        "--out", out,
+                        os.path.join(HERE, "example_sort.py")],
+                       capture_output=True, text=True, cwd=TMP,
+                       stdin=subprocess.DEVNULL, timeout=180)
+    expect(r.returncode == 0,
+           f"clean chaos run set must exit 0, got {r.returncode} "
+           f"({r.stdout} {r.stderr})")
+    expect(os.path.exists(out), "chaos runs report missing")
+    with open(out, encoding="utf-8") as fh:
+        m = re.search(r'<script id="runs-data" '
+                      r'type="application/json">(.*?)</script>',
+                      fh.read(), re.S)
+    expect(m is not None, "no runs payload")
+    rp = json.loads(m.group(1).replace("<\\/", "</"))
+    expect(rp["chaos"] == 50, f"report must carry the seed base: "
+           f"{rp.get('chaos')}")
+    kept = payload(os.path.join(TMP, "runs_chaos_run1.html"))
+    expect(kept["chaos"]["seed"] == 50,
+           f"run 1 must run under seed base+0: {kept['chaos']}")
+    expect("--chaos-schedule 50" in kept["capsule"]["cmd"],
+           f"kept capsule must reproduce its own seed: "
+           f"{kept['capsule']['cmd']}")
+
+
+@check("chaos: --export-perfetto refused (perturbed time is not truth) (#68)")
+def _():
+    r = subprocess.run([PY, os.path.join(HERE, "tracer.py"),
+                        "--chaos-schedule", "1", "--granularity", "fn",
+                        "--export-perfetto", os.path.join(TMP, "cx.json"),
+                        os.path.join(HERE, "example_sort.py")],
+                       capture_output=True, text=True, cwd=TMP,
+                       stdin=subprocess.DEVNULL, timeout=60)
+    expect(r.returncode == 2, f"expected refusal exit 2, got "
+           f"{r.returncode}")
+    expect("perturb" in (r.stdout + r.stderr).lower(),
+           "refusal must say WHY (perturbed timings)")
+
+
 # ---------------------------------------------------------------- runner
 
 def main():

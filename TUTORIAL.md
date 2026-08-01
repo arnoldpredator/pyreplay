@@ -460,6 +460,19 @@ must never look like a clean run. That is exactly the yes/no oracle
 `--check "'deprecated' in output"`, no test required; compose with
 `--runs` and you can bisect a *rate* change in flaky behavior.
 
+**Make the race fire (`--chaos-schedule SEED`).** A latent race
+survives almost every natural schedule — the torn window is a few
+bytecodes wide. Chaos injects seeded stalls and GIL yields at traced
+event boundaries, jitters the thread switch interval, and (under
+asyncio) shuffles each loop tick's ready queue: it biases *which*
+legal interleavings you explore without touching your code, and the
+trace is labeled **⚡ PERTURBED** (timings under chaos are not
+performance truth; `--export-perfetto` is refused). With `--runs N`,
+run i gets seed SEED+i−1 — diverse exploration, every child
+reproducible from the seed in its own Reproduce box. The bundled
+`example_race.py`: 12/12 clean naturally, 11/12 conservation-broken
+under chaos — the race that "never happens", as a rate.
+
 **Catch the first NaN at birth (`--trip nan`).** For numerical code
 the crash site is thousands of operations downstream of the mistake.
 `python3 tracer.py --trip nan sim.py` marks the event where each

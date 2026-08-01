@@ -96,6 +96,17 @@ current window as a normal trace WITHOUT stopping the run, and the end
 (or crash) writes the final window as usual. watch(ring=N) gives the
 same in-process. Pay ~nothing forever; have the film when it matters.
 
+--chaos-schedule SEED turns latent races into measured rates: seeded
+micro-stalls and GIL yields injected at traced event boundaries,
+switch-interval jitter, and (when asyncio runs) a seeded shuffle of
+each loop tick's ready queue. Chaos biases WHICH legal interleavings
+the run explores — it never edits your code — and the trace is
+labeled PERTURBED. Same seed = same injected decision stream (the OS
+still owns the schedule: biased exploration, not replay). Under
+--runs N run i gets seed SEED+i-1, so "fails 4/20 under chaos, 0/20
+without" becomes an afternoon's sentence. Timings under chaos are not
+performance truth; --export-perfetto is refused.
+
 Every fn or line trace also aggregates its BOUNDARY SCHEMAS (#120):
 the structural shape of every function's observed arguments and
 returns — types, keys, nesting, never values — shown on call/return
@@ -158,6 +169,7 @@ import io
 import json
 import os
 import platform
+import random
 import re
 import reprlib
 import runpy
@@ -668,6 +680,99 @@ class _Ring(collections.deque):
     def dropped(self):
         return self.appended - len(self)
 
+
+class _Chaos:
+    """#68: seeded schedule fuzzing. A pulse fires at a traced event
+    boundary — a legal switch point anyway — so chaos only biases WHICH
+    legal interleavings this run explores (PCT's insight: a few random
+    perturbation points flush most races). Same seed = same injected
+    decision stream; the OS still owns the schedule, so this is biased
+    exploration, not deterministic replay. The trace says PERTURBED."""
+
+    PULSE_P = 1 / 16       # a boundary perturbs at all
+    BIG_P = 1 / 4          # ...and of those, a real stall vs a bare yield
+    SWITCH_EVERY = 256     # re-roll sys.setswitchinterval this often
+
+    def __init__(self, seed):
+        self.seed = seed
+        self._rng = random.Random(seed)   # own stream, never the target's
+        self._lock = threading.Lock()
+        self._n = 0
+        self.delays = self.yields = self.switch_rolls = self.shuffles = 0
+        self.asyncio_hooked = False
+        self._unhook = None
+
+    def interval(self):
+        return self._rng.uniform(1e-5, 2e-3)
+
+    def pulse(self):
+        with self._lock:
+            self._n += 1
+            if self._n % self.SWITCH_EVERY == 0:
+                sys.setswitchinterval(self._rng.uniform(1e-5, 2e-3))
+                self.switch_rolls += 1
+            if self._rng.random() >= self.PULSE_P:
+                return
+            stall = self._rng.random() < self.BIG_P
+            dur = self._rng.uniform(50e-6, 500e-6) if stall else 0.0
+            if stall:
+                self.delays += 1
+            else:
+                self.yields += 1
+        time.sleep(dur)   # outside the lock: stall THIS thread only
+
+    def hook_asyncio(self):
+        """Shuffle each loop tick's ready queue. Private API
+        (loop._ready / loop._run_once) — probed, and its absence is
+        reported rather than papered over."""
+        try:
+            import asyncio
+            cls = type(asyncio.get_event_loop_policy())
+            orig_new = cls.new_event_loop
+            chaos = self
+
+            def chaotic_new(pol):
+                loop = orig_new(pol)
+                chaos._wrap_loop(loop)
+                return loop
+            cls.new_event_loop = chaotic_new
+            self._unhook = (cls, orig_new)
+            self.asyncio_hooked = True
+        except Exception:
+            self.asyncio_hooked = False
+
+    def _wrap_loop(self, loop):
+        ready = getattr(loop, "_ready", None)
+        orig = getattr(loop, "_run_once", None)
+        if ready is None or orig is None:
+            return          # exotic loop (uvloop): pulses still apply
+        chaos = self
+
+        def shuffled_run_once():
+            r = loop._ready
+            if len(r) > 1:
+                items = list(r)
+                with chaos._lock:
+                    chaos._rng.shuffle(items)
+                    chaos.shuffles += 1
+                r.clear()
+                r.extend(items)
+            return orig()
+        loop._run_once = shuffled_run_once
+
+    def unhook(self):
+        if self._unhook is not None:
+            cls, orig = self._unhook
+            cls.new_event_loop = orig
+            self._unhook = None
+
+    def report(self):
+        return {"seed": self.seed, "delays": self.delays,
+                "yields": self.yields, "switchRolls": self.switch_rolls,
+                "shuffles": self.shuffles,
+                "asyncioHooked": self.asyncio_hooked}
+
+
 # the REAL streams — the tracer's own runtime prints (heartbeat,
 # trigger-hit) go here so they are never recorded as target output
 _RAW = {"out": sys.stdout, "err": sys.stderr}
@@ -878,6 +983,7 @@ class Tracer:
         self._log_count = 0
         self.log_capped = False
         self.check = None        # #70: compiled --check expression
+        self.chaos = None        # #68: _Chaos instance when fuzzing
         self.check_hit = False
         self.check_hits = 0
         self.check_evals = 0     # successful evaluations (typo honesty)
@@ -950,6 +1056,8 @@ class Tracer:
                 frame.f_trace_lines = False
                 self._record_fn(frame, "call", arg)
                 return self
+            if self.chaos is not None:
+                self.chaos.pulse()
             if self.armed:
                 self._record(frame, "call", arg)
             return self  # keep watching for the trigger even when not armed
@@ -957,6 +1065,10 @@ class Tracer:
             if event in ("return", "exception") and not self.truncated:
                 self._record_fn(frame, event, arg)
             return self
+        if self.chaos is not None:
+            # #68: every in-scope line/return/exception boundary is a
+            # perturbation point, armed or not — chaos is about the RUN
+            self.chaos.pulse()
         if self.check is not None and event == "line":
             # #70: the run-level predicate, watched on every in-scope
             # line (same contract as --start-when: not-evaluable-here
@@ -1169,6 +1281,8 @@ class Tracer:
         """fn-granularity recording: call/return/exception only, shallow
         args, µs timestamps (delta-encoded). No locals machinery — this
         path must stay nearly free. Both backends land here."""
+        if self.chaos is not None:
+            self.chaos.pulse()   # #68: fn boundaries, both backends
         if len(self.events) >= self.max_events:
             self.truncated = True
             if self.abort_on_cap:
@@ -2642,7 +2756,7 @@ def _boundaries(events):
 
 
 def _run_harness(orig_argv, n_runs, out, entry_label, granularity,
-                 module, script):
+                 module, script, chaos_seed=None):
     """#63: one run is an anecdote; N runs are an experiment. Execute the
     target N times (each a fresh child tracer with identical stdin),
     classify every outcome (exception type + crash site), keep ONE
@@ -2669,8 +2783,12 @@ def _run_harness(orig_argv, n_runs, out, entry_label, granularity,
     valued = {"--out", "--root", "--export-perfetto", "--include",
               "--exclude", "--granularity", "--max-events", "--start-at",
               "--start-count", "--start-when", "--backend", "--trip",
-              "--runs", "--check"}
-    strip = {"--runs", "--out", "--granularity"}
+              "--runs", "--check", "--chaos-schedule"}
+    # --chaos-schedule is stripped and re-issued per child with a
+    # DERIVED seed (base+i-1): N runs under one seed would explore one
+    # biased stream N times; N seeds explore N different ones, and any
+    # failing child remains reproducible from its own recorded seed.
+    strip = {"--runs", "--out", "--granularity", "--chaos-schedule"}
     child_flags, i = [], 0
     while i < len(orig_argv):
         tok = orig_argv[i]
@@ -2711,6 +2829,11 @@ def _run_harness(orig_argv, n_runs, out, entry_label, granularity,
                       os.path.basename(SELF)] + child_flags)
     print(f"pyreplay: {n_runs} runs of {entry_label} ({granularity} "
           f"granularity), identical stdin each run", flush=True)
+    if chaos_seed is not None:
+        print(f"pyreplay: schedule chaos — seed base {chaos_seed}, run i "
+              f"gets seed {chaos_seed}+i-1; every run is PERTURBED on "
+              f"purpose (a failing run reruns with its own seed)",
+              flush=True)
     per_run, seen_cls, interrupted = [], set(), False
     # #65 SBFL: per-run coverage survives the trace deletion — the set
     # of (file, line) pairs each run touched, split by outcome
@@ -2719,7 +2842,9 @@ def _run_harness(orig_argv, n_runs, out, entry_label, granularity,
     try:
         for i in range(1, n_runs + 1):
             tr_path = f"{rep_base}_run{i}.html"
-            cmd = [sys.executable, SELF, "--out", tr_path] + child_flags
+            cmd = [sys.executable, SELF, "--out", tr_path] \
+                + (["--chaos-schedule", str(chaos_seed + i - 1)]
+                   if chaos_seed is not None else []) + child_flags
             t0 = time.perf_counter()
             r = subprocess.run(cmd, input=stdin_bytes,
                                capture_output=True)
@@ -2835,6 +2960,7 @@ def _run_harness(orig_argv, n_runs, out, entry_label, granularity,
                "granularity": granularity,
                "python": sys.version.split()[0],
                "cmd": shown,   # child_flags already ends with the target
+               "chaos": chaos_seed,   # #68: seed base, or null
                "interrupted": interrupted,
                "suspicion": suspicion,
                "perRun": per_run}
@@ -3029,6 +3155,7 @@ def main(argv):
     trip = None
     runs_n = None
     black_box = False    # #103: ring-buffer flight recorder
+    chaos_seed = None    # #68: schedule-fuzzing seed
     check = None         # #70: compiled --check expression
     check_src = None
     chunked_opt = None   # #101: None = auto by size
@@ -3090,6 +3217,14 @@ def main(argv):
         elif argv[0] == "--black-box":
             black_box = True
             argv = argv[1:]
+        elif argv[0] == "--chaos-schedule" and len(argv) >= 2:
+            try:
+                chaos_seed = int(argv[1])
+            except ValueError:
+                print("error: --chaos-schedule expects an integer seed "
+                      "(same seed = same injected decision stream)")
+                return 2
+            argv = argv[2:]
         elif argv[0] == "--no-console":
             console = False
             argv = argv[1:]
@@ -3180,6 +3315,11 @@ def main(argv):
               "line traces carry no timestamps (wall times under "
               "line tracing would be fiction)")
         return 2
+    if chaos_seed is not None and perfetto:
+        print("error: --chaos-schedule perturbs the schedule on purpose "
+              "— a Perfetto timeline of a perturbed run would read as "
+              "timing truth. Export from an unperturbed run instead.")
+        return 2
 
     if module is not None:
         # -m mode: the entry is a module, not a file on disk. Scope defaults
@@ -3226,7 +3366,7 @@ def main(argv):
 
     if runs_n:
         return _run_harness(orig_argv, runs_n, out, entry_label,
-                            granularity, module, script)
+                            granularity, module, script, chaos_seed)
 
     if out is None:  # default: unique name per entry, never overwrite
         stem = (module.replace(".", "_") if module is not None
@@ -3276,6 +3416,19 @@ def main(argv):
                     include, exclude, granularity, trip=trip,
                     ring=max_events if black_box else None)
     tracer.check = check
+    old_switch = None
+    if chaos_seed is not None:
+        tracer.chaos = _Chaos(chaos_seed)
+        old_switch = sys.getswitchinterval()
+        sys.setswitchinterval(tracer.chaos.interval())
+        tracer.chaos.hook_asyncio()
+        print(f"pyreplay: CHAOS — schedule fuzzing, seed {chaos_seed}: "
+              "seeded stalls/yields at traced boundaries + "
+              "switch-interval jitter"
+              + (" + asyncio ready-queue shuffle"
+                 if tracer.chaos.asyncio_hooked
+                 else " (asyncio hook unavailable)")
+              + "; this run is PERTURBED on purpose", flush=True)
     if black_box:
         print(f"pyreplay: flight recorder — keeping the LAST "
               f"{max_events} events (window = --max-events); kill "
@@ -3386,6 +3539,8 @@ def main(argv):
                              extra={"ring": {"size": tracer.ring,
                                              "dropped":
                                              tracer.events.dropped},
+                                    "chaos": tracer.chaos.report()
+                                    if tracer.chaos else None,
                                     "capsule": capsule})
                 print(f"pyreplay: snapshot -> {spath}",
                       file=_RAW["err"], flush=True)
@@ -3439,6 +3594,10 @@ def main(argv):
             sys.stderr = tees[1]._real
         if old_usr1 is not None:
             signal.signal(signal.SIGUSR1, old_usr1)
+        if tracer.chaos is not None:
+            tracer.chaos.unhook()
+        if old_switch is not None:
+            sys.setswitchinterval(old_switch)
 
     ring_info = None
     if black_box:
@@ -3466,6 +3625,7 @@ def main(argv):
     bounds = _boundaries(tracer.events)
     extra = {"capsule": capsule,
              "ring": ring_info,
+             "chaos": tracer.chaos.report() if tracer.chaos else None,
              "boundaries": bounds or None,
              "logCapped": tracer.log_capped or None}
     tsum, tsusp = _chapter_suspicion(tracer.events, granularity)

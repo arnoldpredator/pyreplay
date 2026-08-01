@@ -404,8 +404,15 @@ def find_matching_traces(root_dir, modules, cap=6):
                           html, re.S)
             if m is None:
                 continue   # not a trace (a map, or something else)
-            srcs = set(json.loads(m.group(1).replace("<\\/", "</"))
-                       .get("sources", {}))
+            pl = json.loads(m.group(1).replace("<\\/", "</"))
+            if pl.get("chaos"):
+                # #68: a schedule-chaos run is PERTURBED on purpose —
+                # auto-adoption must never mix its heat into the picture
+                print("auto-heat: skipped " + os.path.basename(p)
+                      + " (PERTURBED — schedule-chaos run; --trace it "
+                      "explicitly if you really want fuzzed heat)")
+                continue
+            srcs = set(pl.get("sources", {}))
             if not srcs:
                 continue
             hits = sum(1 for s in srcs
@@ -451,6 +458,11 @@ def load_heat(trace_path, modules):
                              f"{len(events)}/{ch.get('total')}")
         data["events"] = events
     events = data.get("events", [])
+    if data.get("chaos"):
+        # explicit --trace of a chaos run: obeyed, but never silently
+        print("note: " + os.path.basename(trace_path) + " is a PERTURBED "
+              "schedule-chaos run — its heat reflects the fuzzed "
+              "schedule, not natural timing")
     kind = "time" if data.get("granularity") == "fn" else "counts"
     script = data.get("script")
 

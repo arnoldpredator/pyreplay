@@ -21,11 +21,10 @@ small; clone them if you want to reproduce those shots:
 [brian2](https://github.com/brian-team/brian2),
 [pymdp](https://github.com/infer-actively/pymdp). Features 61–62 are
 infrastructure and carry no shot; 64 and 70 are terminal reports and
-101 is plumbing, so those three carry none. All fifteen 2026-08
-additions that can be seen carry live shots captured from the
-commands their entries give — the three interactive ones (77's click,
-104's Reproduce box, 109's typed query) posed by dispatching the real
-browser events.
+101 is plumbing, so those three carry none. Every 2026-08 addition
+that can be seen carries a live shot captured from the commands its
+entry gives — the three interactive ones (77's click, 104's Reproduce
+box, 109's typed query) posed by dispatching the real browser events.
 
 The two tools, one contract:
 
@@ -1485,7 +1484,7 @@ dead or invented panel; every cap and truncation is announced.
 ## J. Infrastructure (no screenshots needed)
 
 ### 61. `checks.py` — the regression suite
-51 data-level checks (no browser): the tracer re-runs the permanent
+55 data-level checks (no browser): the tracer re-runs the permanent
 example suite and the mapper its fixtures, the embedded JSON is
 extracted from each generated HTML (chunked or not), and the honesty
 invariants are asserted in plain Python — windowed-change correctness,
@@ -1496,7 +1495,8 @@ the 2026-08 wave: runs-harness outcome classification + SBFL suspects,
 divergence depths, NaN-trip transitions, chart and query machinery,
 deep links, per-test chapters, `--check` exit codes, the black-box
 ring, capsule contents, console-lane attribution, whyline guards,
-boundary schemas. Every subprocess the suite spawns pins its stdin, so
+boundary schemas, schedule-chaos determinism and honesty labels.
+Every subprocess the suite spawns pins its stdin, so
 the result cannot depend on how the suite was invoked. Run before and
 after every change, always.
 - **Command:** `python3 checks.py` — prints the green table, exits
@@ -1504,7 +1504,7 @@ after every change, always.
 
 ### 62. The teaching fleet
 `example_{sort,prefix,histogram,dp,graph,exceptions,control,machinery,
-mro,tasks,threads,watch,dunder,bigarray,heavy,nan,flaky}.py` — one small script per feature family, each with its
+mro,tasks,threads,watch,dunder,bigarray,heavy,nan,flaky,race}.py` — one small script per feature family, each with its
 pre-built `trace_*.html`; `tinyshop/` — a multi-file teaching project
 with a planted silent bug; `bubble_sort.py`, `graph.py`, real AtCoder
 code. TUTORIAL.md is the user guide; these are also the screenshot
@@ -1632,6 +1632,41 @@ program behavior as a distribution to be measured.
   `-m pytest`), or both in one expression. (Terminal instrument — no
   screenshot.)
 
+### 68. Schedule fuzzing — concurrency chaos (`--chaos-schedule SEED`)
+- **Measured:** seeded perturbation injected at every traced event
+  boundary — mostly bare GIL yields, sometimes 50–500 µs stalls —
+  plus switch-interval jitter re-rolled as the run goes, and, under
+  asyncio, a seeded shuffle of each loop tick's ready queue. The seed
+  drives a private random stream (the target's own `random` is
+  untouched), and every injection is counted. Chaos biases WHICH
+  legal interleavings the run explores; it never edits the code.
+- **Displayed:** the trace banner wears **⚡ PERTURBED** with the seed
+  and the injected counts; a chaos run set says PERTURBED in its
+  report header; the map's auto-heat refuses to adopt chaos traces
+  (fuzzed heat, and it says so). Same seed = same injected decision
+  stream — the OS still owns the schedule, so this is biased
+  exploration, honestly labeled, not replay.
+- **Why:** race conditions are probability distributions, and the
+  natural schedule samples one tiny corner of the space. A few random
+  perturbation points flush most races (PCT, Burckhardt et al.) —
+  "works on my machine" collapses into a measured rate.
+- **Use case:** `example_race.py` moves money between two accounts
+  with no lock. Twelve natural line-granularity runs: 12× clean.
+  Under `--chaos-schedule 1`: 11× "conservation broken: 978 != 1000 —
+  a lost update", one kept trace per class, the suspects led by the
+  conservation raise — and the failing child's Reproduce box carries
+  the exact seed that broke it.
+- **Command:** `python3 tracer.py --runs 12 --granularity line
+  --chaos-schedule 1 example_race.py` — under `--runs`, run i gets
+  seed SEED+i−1 (diverse exploration, every child reproducible).
+  `--export-perfetto` is refused under chaos: perturbed time is not
+  performance truth.
+- **Screenshot** — the chaos run set: 11× broken · 1× clean, ⚡
+  PERTURBED in the header, the CHAOS announce in the stderr tail, the
+  suspects led by the raise.
+
+  [![Feature 68 — schedule chaos](screenshots/68-chaos-runs.png)](screenshots/68-chaos-runs.png)
+
 ## Appendix A — the manual test plan
 
 Agreed flow: work through the catalog top to bottom, ticking each
@@ -1658,4 +1693,6 @@ feature after exercising it by hand. Two codebases cover everything:
    a `tinyshop/main.py` line trace shows 77 (click a dead line);
    `-m pytest` on a small suite shows 98 (chapters); `--black-box` on
    `example_heavy.py` plus `kill -USR1` shows 103; 101 wants any run
-   past 100k events (a whole-suite fn trace does it).
+   past 100k events (a whole-suite fn trace does it); and
+   `example_race.py` under `--runs 12 --granularity line
+   --chaos-schedule 1` runs the whole chaos lab (68).

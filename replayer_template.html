@@ -634,6 +634,26 @@ if (DATA.ring && DATA.ring.dropped > 0) {
     "mid-run.";
   b.appendChild(rn);
 }
+/* #68 chaos: a perturbed run must say so, loudly (constitution rule 4) */
+if (DATA.chaos) {
+  const b = $("banner");
+  if (!b.style.display || b.style.display === "none") {
+    b.className = "info";
+    b.style.display = "block";
+  }
+  const cn = document.createElement("span");
+  const n1 = (n, w) => n + " " + w + (n === 1 ? "" : "s");
+  cn.textContent = " ⚡ PERTURBED — schedule chaos (seed " +
+    DATA.chaos.seed + "): " + n1(DATA.chaos.delays, "stall") + ", " +
+    n1(DATA.chaos.yields, "GIL yield") + ", " +
+    n1(DATA.chaos.switchRolls, "switch-interval roll") +
+    (DATA.chaos.asyncioHooked
+      ? ", " + n1(DATA.chaos.shuffles, "ready-queue shuffle")
+      : "") +
+    " — interleavings explored on purpose; timings are not " +
+    "performance truth.";
+  b.appendChild(cn);
+}
 /* a chunked file missing a chunk: after the error/trigger banner text
    is set (textContent assignments above would erase an earlier note) */
 if (chunkDamage) {

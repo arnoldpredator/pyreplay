@@ -7,7 +7,7 @@ can pick an item and implement it. Features are numbered **#63 onward**, continu
 in FEATURES.md. Fifteen roadmap items have shipped since the list was
 written (63, 64, 65, 70, 77, 79, 80, 98, 101 v1, 103, 104 Tier 1,
 106, 109, 118, 120 v1) — their rows below are struck through;
-**49 remain unbuilt** (plus the stated remainders of 101/104/120).
+**48 remain unbuilt** (plus the stated remainders of 101/104/120).
 
 ## Start here — how to contribute
 
@@ -74,7 +74,7 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
 | 65 | ~~Color lines by failing-run correlation (SBFL)~~ **shipped** | — | ★★★ |
 | 66 | Auto-shrink a failing input (ddmin) | M | ★★ |
 | 67 | Random-input entry with seed capture | M | ★★ |
-| 68 | Perturb thread/task schedules to flush races | L | ★★★ |
+| 68 | ~~Perturb thread/task schedules to flush races~~ **shipped** | — | ★★★ |
 | 69 | Inject exceptions/latency on purpose | L | ★★ |
 | 70 | ~~git bisect driven by a trace predicate~~ **shipped** | — | ★★★ |
 | 71 | Compare implementations on the same inputs | M | ★★ |
@@ -187,6 +187,7 @@ software.
   seed, minimize the case), property-based testing.
 
 ### 68. Schedule fuzzing (concurrency chaos)
+**Shipped 2026-08-01** — now catalog entry #68 in [FEATURES.md](FEATURES.md), with the full measured/displayed/why/use-case record (and `example_race.py` to fire it at).
 - **What:** `--chaos-schedule SEED` — perturb interleavings on
   purpose: randomized micro-delays injected from the trace callback at
   line/call boundaries, `sys.setswitchinterval` jitter for threads, a

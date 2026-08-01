@@ -822,6 +822,13 @@ construction" — the graph never conflates the two. Click any block:
 if it ran, you jump to its first execution; if it never ran, the
 whyline answers with the guards that said no. The for-else you were
 never sure about, the break that skips it: drawn, with counts.
+Prefer the classic look? The select on the CONTROL FLOW header
+switches the same graph to a **flowchart** skin — diamonds, yes/no
+labels, rounded terminals — and the select on SYNTAX turns the tree
+into a **Nassi–Shneiderman structogram**: if splits into T|F columns,
+loops band their bodies, every guard wears its recorded T×/F× counts,
+and lines that never ran are dimmed. Skins only: the same recorded
+blocks, edges and verdicts underneath — the note under each says so.
 
 **The decision table.** Under the CFG, the same panel condenses the
 function's branching into DECISIONS — OBSERVED TRUTH: one row per

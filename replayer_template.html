@@ -219,6 +219,69 @@
   .ahead { margin: 8px 0 3px; color: var(--accent); font-size: 10px;
     text-transform: uppercase; letter-spacing: .5px; }
   .anote { color: var(--dim); font-style: italic; margin: 3px 0; }
+  /* #138: grammar skins — flowchart glyphs + NS structogram */
+  .skinsel { float: right; background: #262b38; color: var(--dim);
+    border: 1px solid var(--border); border-radius: 4px; font: inherit;
+    font-size: 10px; padding: 0 2px; text-transform: none;
+    letter-spacing: 0; }
+  .dshape { fill: #232838; stroke: #9db0d8; stroke-width: 1.4; }
+  .flowb.cur .dshape, .flowb.cur rect { stroke: var(--changed-text);
+    fill: #3d3320; }
+  .flowb.ghost .dshape, .flowb.ghost rect { stroke-dasharray: 3 3;
+    opacity: .55; }
+  .flowb.unre .dshape, .flowb.unre rect { stroke: var(--err);
+    stroke-dasharray: 3 3; }
+  .flowb rect { fill: #232838; stroke: #9db0d8; stroke-width: 1.2; }
+  .flowb text { fill: #d6d9e0; font-size: 10px; }
+  .nsbox { border: 1px solid var(--border); border-radius: 4px;
+    background: #171a22; padding: 4px; margin-top: 3px;
+    max-height: 340px; overflow: auto; font-size: 11px; }
+  .nsln { padding: 1px 4px; white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; color: var(--text); }
+  .nsln .nslno { color: #4a5060; margin-right: 6px; font-size: 9px; }
+  .nsln.cur { background: var(--changed-bg);
+    color: var(--changed-text); }
+  .nsln.ghost { opacity: .4; }
+  .nsif { border: 1px solid #9db0d8; margin: 2px 0;
+    background: #1c2130; }
+  .nscond { position: relative; border-bottom: 1px solid #9db0d8;
+    background: #232838; }
+  .nstf { position: absolute; right: 4px; top: 1px;
+    color: var(--dim); font-size: 9px; }
+  .nstf i { font-style: normal; margin-left: 8px; }
+  .nstf i:first-child { color: #7ee08a; }
+  .nstf i:last-child { color: #e06c75; }
+  .nsbadge { position: absolute; right: 40px; top: 1px;
+    font-size: 9px; color: var(--dim); }
+  .nscond .nsbadge { right: 40px; }
+  .nslhead { position: relative; }
+  .nslhead .nsbadge { position: static; margin-left: 6px; }
+  .nssplit { display: flex; }
+  .nssplit > .nscol { flex: 1 1 50%; min-width: 0; padding: 1px 0; }
+  .nssplit > .nscol + .nscol { border-left: 1px solid #9db0d8; }
+  .nsempty { color: var(--dim); text-align: center; }
+  .nsloop { border: 1px solid #5eb1ff; margin: 2px 0;
+    background: #1c2130; }
+  .nsloop > .nslhead { border-bottom: 1px solid #5eb1ff;
+    background: #1d2a3a; }
+  .nsloop > .nslbody { margin-left: 14px;
+    border-left: 1px solid #5eb1ff; }
+  .nsloop > .nslelse { border-top: 1px dashed #5eb1ff;
+    color: var(--dim); font-style: italic; padding: 1px 4px; }
+  .nsloop.nsmatch { border-color: #c792ea; }
+  .nsloop.nsmatch > .nslhead { border-color: #c792ea;
+    background: #241d33; }
+  .nsloop.nsmatch > .nslbody { border-color: #c792ea; }
+  .nsloop.nsdef { border-color: #7d8493; }
+  .nsloop.nsdef > .nslhead { border-color: #7d8493;
+    background: #20242f; }
+  .nsloop.nsdef > .nslbody { border-color: #7d8493; }
+  .nsexc { border: 1px solid #e5c07b; margin: 2px 0;
+    background: #1c2130; }
+  .nsexc > .nsehead { border-bottom: 1px solid #e5c07b;
+    background: #2a2415; }
+  .nsexc > .nsebody { margin-left: 14px;
+    border-left: 1px solid #e5c07b; }
   /* #137: the observed decision table */
   .dctab { border-collapse: collapse; margin-top: 3px;
     font-size: 11px; }
@@ -3731,6 +3794,254 @@ function decisionTable(rec, rel, curLine) {
   return h;
 }
 
+/* #138: classic grammar skins — alternate DRAWINGS of data already
+   recorded. The flowchart re-draws #131's CFG record (diamonds,
+   yes/no, terminals); the structogram re-draws the statement nesting
+   (mined from the guards map) as Nassi–Shneiderman bands. Observed
+   weights, ghosts and the current token carry over — the skin
+   changes, the truth doesn't. */
+const SKIN_KEY = "pyreplay-skins";
+let skins = { cfg: "ladder", ast: "tree" };
+try { skins = { ...skins,
+                ...JSON.parse(localStorage.getItem(SKIN_KEY) || "{}") }; }
+catch (e) {}
+function skinSel(which, opts) {
+  return ' <select class="skinsel" data-skin="' + which + '">' +
+    opts.map(o => '<option value="' + o + '"' +
+      (skins[which] === o ? " selected" : "") + ">" + o + "</option>")
+    .join("") + "</select>";
+}
+function flowSvg(rec, curB, rel) {
+  const order = rec.blocks.map((_, i) => i).sort((a, b) => {
+    const la = rec.blocks[a].length ? rec.blocks[a][0] : 1e9;
+    const lb = rec.blocks[b].length ? rec.blocks[b][0] : 1e9;
+    return la - lb || a - b;
+  });
+  const W0 = rec.w || {}, H0 = rec.h || {};
+  const src = (DATA.sources[rel] || "").split("\n");
+  const isDec = {};
+  for (const [s, , k] of rec.edges)
+    if (k === "true" || k === "false") isDec[s] = true;
+  const bw = 150, bx = 60, dh = 30;
+  const y0 = {}, hgt = {};
+  let ycur = 10;
+  for (const b of order) {
+    const split = isDec[b] && rec.blocks[b].length > 1;
+    y0[b] = ycur;
+    hgt[b] = split ? 22 + 8 + dh : (isDec[b] ? dh : 22);
+    ycur += hgt[b] + 18;
+  }
+  const yTop = b => y0[b];
+  const yBot = b => y0[b] + hgt[b];
+  const yMid = b => isDec[b]
+    ? yBot(b) - dh / 2          // the diamond's waist, split or not
+    : y0[b] + hgt[b] / 2;
+  const cx = bx + bw / 2;
+  const parts = [];
+  let fl = 0, bl = 0;
+  for (const [s, d, k] of rec.edges) {
+    const w = W0[s + "-" + d] || 0;
+    const col = CFG_KC[k] || "#93a1c0";
+    const cls = "cfge" + (w ? "" : " ghost");
+    const sw = w ? Math.min(1.2 + Math.log2(w + 1), 4) : 1.2;
+    const name = k === "true" ? "yes" : k === "false" ? "no"
+      : k !== "seq" ? k : "";
+    const lbl = name + (w ? " ×" + w : "");
+    const si = order.indexOf(s), di = order.indexOf(d);
+    const sideExit = isDec[s] && k !== "true";
+    let lx, ly;
+    if (di === si + 1 && !sideExit) {
+      parts.push('<path class="' + cls + '" stroke="' + col +
+        '" stroke-width="' + sw + '" fill="none" d="M' + cx + " " +
+        yBot(s) + " L" + cx + " " + yTop(d) + '"/>');
+      lx = cx + 6; ly = (yBot(s) + yTop(d)) / 2 + 3;
+      parts.push('<polygon class="cfgah' + (w ? "" : " ghost") +
+        '" fill="' + col + '" points="' + (cx - 3.5) + "," +
+        (yTop(d) - 6) + " " + (cx + 3.5) + "," + (yTop(d) - 6) + " " +
+        cx + "," + yTop(d) + '"/>');
+    } else if (di > si) {
+      // forward: leave the diamond's side (no/exc/case) or the
+      // block's bottom, ride a right-hand channel down
+      const lane = bx + bw + 20 + (fl++ % 5) * 14;
+      const ys = sideExit ? yMid(s) : yBot(s);
+      const xs = sideExit ? bx + bw : cx;
+      parts.push('<path class="' + cls + '" stroke="' + col +
+        '" stroke-width="' + sw + '" fill="none" d="M' + xs + " " +
+        ys + " H" + lane + " V" + (yTop(d) - 6) + " H" + cx +
+        " V" + yTop(d) + '"/>');
+      parts.push('<polygon class="cfgah' + (w ? "" : " ghost") +
+        '" fill="' + col + '" points="' + (cx - 3.5) + "," +
+        (yTop(d) - 6) + " " + (cx + 3.5) + "," + (yTop(d) - 6) +
+        " " + cx + "," + yTop(d) + '"/>');
+      lx = lane + 2; ly = (ys + yMid(d)) / 2;
+    } else {
+      // backward (loop/continue): left-hand channel up
+      const lane = bx - 24 - (bl++ % 3) * 12;
+      const ys = sideExit ? yMid(s) : yBot(s);
+      const xs = sideExit ? bx : cx;
+      parts.push('<path class="' + cls + '" stroke="' + col +
+        '" stroke-width="' + sw + '" fill="none" d="M' + xs + " " +
+        ys + (sideExit ? "" : " V" + (ys + 8)) + " H" + lane +
+        " V" + yMid(d) + " H" + (bx - 4) + '"/>');
+      parts.push('<polygon class="cfgah' + (w ? "" : " ghost") +
+        '" fill="' + col + '" points="' + (bx - 10) + "," +
+        (yMid(d) - 3.5) + " " + (bx - 10) + "," + (yMid(d) + 3.5) +
+        " " + (bx - 4) + "," + yMid(d) + '"/>');
+      lx = Math.max(2, lane + 2); ly = yMid(d) - 6;
+    }
+    if (lbl) parts.push('<text class="cfgt' + (w ? "" : " ghost") +
+      '" fill="' + col + '" x="' + lx + '" y="' + ly + '">' + lbl +
+      "</text>");
+  }
+  for (const b of order) {
+    const lines = rec.blocks[b];
+    const un = (rec.unreach || []).indexOf(b) >= 0;
+    const hit = H0[String(b)];
+    const isExit = b === rec.exit;
+    const isEntry = b === rec.entry;
+    const split = isDec[b] && lines.length > 1;
+    const gline = lines.length ? lines[lines.length - 1] : null;
+    const snip = l => esc2((src[l - 1] || "").trim().slice(0, 18));
+    const title = un
+      ? "unreachable by construction — no static path from entry"
+      : !hit ? "never observed in this run — click for the whyline"
+      : "entered " + hit + "× — click to jump to its first execution";
+    let body = "";
+    const y = y0[b];
+    if (isExit || (isEntry && !isDec[b])) {
+      body = '<rect x="' + bx + '" y="' + y + '" width="' + bw +
+        '" height="22" rx="11"/><text x="' + cx + '" y="' + (y + 15) +
+        '" text-anchor="middle">' +
+        (isExit ? "EXIT" : snip(lines[0]) || "ENTRY") + "</text>";
+    } else if (isDec[b]) {
+      let yD = y;
+      if (split) {
+        body += '<rect x="' + bx + '" y="' + y + '" width="' + bw +
+          '" height="22"/><text x="' + (bx + 6) + '" y="' + (y + 15) +
+          '">' + snip(lines[0]) +
+          (lines.length > 2 ? " …" : "") + "</text>";
+        yD = y + 30;
+        body += '<path class="cfge" stroke="#93a1c0" fill="none" d="M' +
+          cx + " " + (y + 22) + " L" + cx + " " + yD + '"/>';
+      }
+      body += '<polygon class="dshape" points="' +
+        cx + "," + yD + " " + (bx + bw) + "," + (yD + dh / 2) + " " +
+        cx + "," + (yD + dh) + " " + bx + "," + (yD + dh / 2) +
+        '"/><text x="' + cx + '" y="' + (yD + dh / 2 + 4) +
+        '" text-anchor="middle">' +
+        (gline != null ? snip(gline) : "?") + "</text>";
+    } else {
+      body = '<rect x="' + bx + '" y="' + y + '" width="' + bw +
+        '" height="22"/><text x="' + (bx + 6) + '" y="' + (y + 15) +
+        '">' + snip(lines[0]) +
+        (lines.length > 1 ? " …+" + (lines.length - 1) : "") +
+        "</text>";
+    }
+    parts.push('<g class="cfgb flowb' + (b === curB ? " cur" : "") +
+      (un ? " unre" : !hit && !isExit ? " ghost" : "") + '" ' +
+      'data-cfgb="' + b + '" data-cfgl="' + (lines[0] || "") + '"' +
+      (un ? ' data-un="1"' : "") + ">" + body + "<title>" + title +
+      "</title></g>");
+  }
+  const Hgt = ycur + 6;
+  return '<svg class="cfgsvg" width="330" height="' + Hgt +
+    '" viewBox="0 0 330 ' + Hgt + '">' + parts.join("") + "</svg>";
+}
+/* the structogram: statement nesting rebuilt from the guards map —
+   every line's innermost controller is already recorded; then/else/
+   loop/except/case groups nest the lines they control. */
+function nsBadge(rel, ln) {
+  const a = condAgg()[rel + "|" + ln];
+  if (!a || (!a.t && !a.f)) return "";
+  return '<span class="nsbadge">T×' + a.t + " F×" + a.f + "</span>";
+}
+function nsHtml(rel, rec, curLine) {
+  const g = DATA.guards[rel] || {};
+  const src = (DATA.sources[rel] || "").split("\n");
+  const agg = condAgg();
+  let anyRan = false;
+  for (let k = rec.l0; k <= rec.l1 && !anyRan; k++)
+    if (agg[rel + "|" + k]) anyRan = true;
+  const groups = {};   // "ctlLine|kind" -> [line numbers]
+  const owned = new Set();
+  for (let k = rec.l0; k <= rec.l1; k++) {
+    const txt = (src[k - 1] || "").trim();
+    if (!txt || txt.startsWith("#")) continue;
+    const ctl = g[String(k)];
+    if (ctl && ctl[0] !== k && ctl[0] >= rec.l0 && ctl[0] <= rec.l1) {
+      const key = ctl[0] + "|" + ctl[1];
+      (groups[key] || (groups[key] = [])).push(k);
+      owned.add(k);
+    }
+  }
+  const KINDS = ["then", "else", "loop", "loopelse", "except", "case",
+                 "def"];
+  const isCtl = ln => KINDS.some(kd => groups[ln + "|" + kd]);
+  function lineRow(ln) {
+    const txt = (src[ln - 1] || "").trim();
+    const structural = /^(else|try|finally)\s*:/.test(txt);
+    const ghost = anyRan && !agg[rel + "|" + ln] && !structural;
+    return '<div class="nsln' + (ln === curLine ? " cur" : "") +
+      (ghost ? " ghost" : "") + '"' +
+      (ghost ? ' title="no recorded event on this line in this run"'
+             : "") + '><span class="nslno">' + ln + "</span>" +
+      esc2(txt.slice(0, 60)) + "</div>";
+  }
+  function renderLines(lns) {
+    return lns.map(ln => isCtl(ln) ? renderCtl(ln) : lineRow(ln))
+      .join("");
+  }
+  function renderCtl(ln) {
+    const thenL = groups[ln + "|then"], elseL = groups[ln + "|else"];
+    const loopL = groups[ln + "|loop"];
+    const lelseL = groups[ln + "|loopelse"];
+    const excL = groups[ln + "|except"];
+    const caseL = groups[ln + "|case"];
+    const defL = groups[ln + "|def"];
+    if (thenL || elseL)
+      return '<div class="nsif"><div class="nscond">' + lineRow(ln) +
+        nsBadge(rel, ln) +
+        '<span class="nstf"><i>T</i><i>F</i></span></div>' +
+        '<div class="nssplit"><div class="nscol">' +
+        (thenL ? renderLines(thenL) : '<div class="nsempty">—</div>') +
+        '</div><div class="nscol">' +
+        (elseL ? renderLines(elseL) : '<div class="nsempty">—</div>') +
+        "</div></div></div>";
+    if (loopL || lelseL)
+      return '<div class="nsloop"><div class="nslhead">' +
+        lineRow(ln) + nsBadge(rel, ln) + "</div>" +
+        '<div class="nslbody">' + (loopL ? renderLines(loopL) : "") +
+        "</div>" +
+        (lelseL ? '<div class="nslelse">else — loop exhausted:' +
+          renderLines(lelseL) + "</div>" : "") + "</div>";
+    if (excL)
+      return '<div class="nsexc"><div class="nsehead">' + lineRow(ln) +
+        '</div><div class="nsebody">' + renderLines(excL) +
+        "</div></div>";
+    if (caseL)
+      return '<div class="nsloop nsmatch"><div class="nslhead">' +
+        lineRow(ln) + '</div><div class="nslbody">' +
+        renderLines(caseL) + "</div></div>";
+    if (defL)
+      return '<div class="nsloop nsdef"><div class="nslhead">' +
+        lineRow(ln) + '</div><div class="nslbody">' +
+        renderLines(defL) + "</div></div>";
+    return lineRow(ln);
+  }
+  const roots = [];
+  for (let k = rec.l0; k <= rec.l1; k++) {
+    const txt = (src[k - 1] || "").trim();
+    if (!txt || txt.startsWith("#")) continue;
+    if (!owned.has(k)) roots.push(k);
+  }
+  // a def record renders its own body as the top level, not a box
+  const topDef = groups[rec.l0 + "|def"];
+  const h = (topDef && roots.length === 1 && roots[0] === rec.l0)
+    ? lineRow(rec.l0) + renderLines(topDef)
+    : renderLines(roots);
+  return '<div class="nsbox">' + h + "</div>";
+}
+
 function updateAnatomy() {
   if (!anatBox.open) return;
   const ev = events[idx];
@@ -3753,15 +4064,28 @@ function updateAnatomy() {
     anatKey = null;
     return;
   }
-  const key = ev.f + "|" + rec.q + "|" + ev.l;
+  const key = ev.f + "|" + rec.q + "|" + ev.l + "|" + skins.ast +
+    "|" + skins.cfg;
   if (key === anatKey) return;
   anatKey = key;
   $("anatname").textContent = "· " + rec.q;
   const py = DATA.anatomy[ev.f].py || "?";
   let h = '<div class="anote">' + esc2(rec.q) + " · lines " + rec.l0 +
     "–" + rec.l1 + "</div>";
-  h += '<div class="ahead">syntax — ast</div><div class="astbox">' +
-    astHtml(rec.ast, ev.l) + "</div>";
+  h += '<div class="ahead">syntax — ' +
+    (skins.ast === "structogram" ? "structogram (NS)" : "ast") +
+    skinSel("ast", ["tree", "structogram"]) + "</div>";
+  if (skins.ast === "structogram") {
+    h += nsHtml(ev.f, rec, ev.l) +
+      '<div class="anote">#138 skin: the same statement nesting, ' +
+      "Nassi–Shneiderman bands — T|F columns, loop bands; dim = no " +
+      "recorded event on that line; T×/F× from the recorded " +
+      "verdicts. try/with bodies draw flat (their nesting is not a " +
+      "guard). The skin changes, the truth doesn't — #85's tree " +
+      "holds the full syntax.</div>";
+  } else {
+    h += '<div class="astbox">' + astHtml(rec.ast, ev.l) + "</div>";
+  }
   h += '<div class="ahead" title="compiled fresh from the source: the ' +
     "adaptive interpreter (PEP 659) may have specialized these at run " +
     'time — that is not shown">instructions — dis · CPython ' +
@@ -3790,10 +4114,21 @@ function updateAnatomy() {
     for (let bi = 0; bi < crec.blocks.length && curB === null; bi++)
       if (crec.blocks[bi].indexOf(ev.l) >= 0) curB = bi;
     h += '<div class="ahead" title="#131: the code as the graph it ' +
-      'is, the run as a path on it">control flow — cfg · ' +
-      esc2(crec.q) + "</div>";
-    h += '<div class="cfgbox">' + cfgSvg(crec, curB, ev.f) + "</div>";
-    h += '<div class="anote">solid ×N = observed traversals · ' +
+      'is, the run as a path on it">control flow — ' +
+      (skins.cfg === "flowchart" ? "flowchart" : "cfg") + " · " +
+      esc2(crec.q) + skinSel("cfg", ["ladder", "flowchart"]) +
+      "</div>";
+    h += '<div class="cfgbox">' +
+      (skins.cfg === "flowchart" ? flowSvg(crec, curB, ev.f)
+                                 : cfgSvg(crec, curB, ev.f)) +
+      "</div>";
+    h += '<div class="anote">' +
+      (skins.cfg === "flowchart"
+        ? "#138 skin: same blocks, same edges — diamonds = the " +
+          "CFG's verdict blocks, yes/no = true/false, rounded = " +
+          "entry/exit. "
+        : "") +
+      "solid ×N = observed traversals · " +
       "dashed = never observed · red dash = unreachable by " +
       "construction · exception edges leave the try header (any " +
       "line inside may raise); a finally's interception of returns " +
@@ -3807,11 +4142,23 @@ function updateAnatomy() {
     box.scrollTop = cur.offsetTop - box.clientHeight / 2;
   const cb = body.querySelector(".cfgb.cur");
   const cbox = body.querySelector(".cfgbox");
-  if (cb && cbox)
-    cbox.scrollTop = cb.querySelector("rect").y.baseVal.value -
-      cbox.clientHeight / 2;
+  if (cb && cbox)   // a flowchart diamond has no rect: bbox the group
+    cbox.scrollTop = cb.getBBox().y - cbox.clientHeight / 2;
+  const nc = body.querySelector(".nsln.cur");
+  const nbox = body.querySelector(".nsbox");
+  if (nc && nbox)
+    nbox.scrollTop = nc.offsetTop - nbox.clientHeight / 2;
 }
 anatBox.addEventListener("toggle", () => {
+  anatKey = null;
+  updateAnatomy();
+});
+$("anatomy").addEventListener("change", e => {
+  const s = e.target.closest(".skinsel");
+  if (!s) return;
+  skins[s.dataset.skin] = s.value;      // #138: skin only, data intact
+  try { localStorage.setItem(SKIN_KEY, JSON.stringify(skins)); }
+  catch (err) {}
   anatKey = null;
   updateAnatomy();
 });

@@ -1461,6 +1461,43 @@ dead or invented panel; every cap and truncation is announced.
 
   [![Feature 137 — decisions](screenshots/137-decisions.png)](screenshots/137-decisions.png)
 
+### 138. Grammar skins — the flowchart and the structogram
+- **Measured:** nothing new — two alternate drawings of data already
+  recorded. The flowchart re-draws the #131 CFG record; the
+  structogram rebuilds statement nesting from the guards map (every
+  line's innermost controller, already in the payload) and reads
+  truth counts from the recorded verdicts.
+- **Displayed:** two selects in the Anatomy panel, persisted across
+  sessions. CONTROL FLOW `ladder | flowchart`: diamonds for the
+  CFG's verdict blocks (a multi-line block splits its straight-line
+  prefix into a process box above the diamond), yes/no for
+  true/false, stadium terminals for entry/exit, orthogonal side
+  channels for jumps and loop-backs — with the observed ×N weights,
+  ghost dashes, unreachable red and the lit current block carried
+  over unchanged. SYNTAX `tree | structogram`: Nassi–Shneiderman
+  bands — if splits into T|F columns (an absent else is an honest
+  "—"), loops wrap their bodies in bands, except/match/def get
+  bordered boxes, every guard wears its recorded T×/F× badge,
+  never-ran lines are dim, the current line is lit.
+- **Why:** readability and teaching — these are the grammars people
+  already know how to read; the ladder is denser but unfamiliar. No
+  new information, and the note under each skin says exactly that:
+  the skin changes, the truth doesn't.
+- **Use case:** in the structogram, example_control's empty loop is
+  a band whose body is dim with `T×0 F×1` on the head — the
+  invisible loop as a picture a first-year can read; the flowchart
+  shows the break edge leaving the `if` diamond and bypassing the
+  loop's exhaust path.
+- **Command:** any line trace → **Anatomy** → the selects on the
+  SYNTAX and CONTROL FLOW headers. Honesty: try/with bodies draw
+  flat in the structogram (their nesting is not a guard); #85's tree
+  holds the full syntax.
+- **Screenshot** — example_control.py wearing both skins: the
+  structogram's dim never-ran band and T|F split, the flowchart's
+  diamonds with yes ×2 / no ×1 and the loop channels:
+
+  [![Feature 138 — skins](screenshots/138-skins.png)](screenshots/138-skins.png)
+
 ## F. Replayer — the interpreter's hidden machinery
 
 ### 33. Generators & coroutines tell the truth

@@ -7,7 +7,7 @@ can pick an item and implement it. Features are numbered **#63 onward**, continu
 in FEATURES.md. Fifteen roadmap items have shipped since the list was
 written (63, 64, 65, 70, 77, 79, 80, 98, 101 v1, 103, 104 Tier 1,
 106, 109, 118, 120 v1) — their rows below are struck through;
-**32 remain unbuilt** (plus the stated remainders of 66/74/75/85/88/89/101/104/119/120/126/127/128/132/134).
+**31 remain unbuilt** (plus the stated remainders of 66/74/75/85/88/89/101/104/119/120/126/127/128/132/134).
 
 ## Start here — how to contribute
 
@@ -144,7 +144,7 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
 | 135 | ~~Motion layer (tweened transitions, honest)~~ **shipped** | M | ★★ |
 | 136 | ~~Sequence diagram — lifelines from the log~~ **shipped** | M | ★★★ |
 | 137 | ~~Observed decision table (guard truth summary)~~ **shipped** | S | ★★ |
-| 138 | Classic grammar skins: flowchart / structogram | S–M | ★ |
+| 138 | ~~Classic grammar skins: flowchart / structogram~~ **shipped** | S–M | ★ |
 
 ---
 
@@ -1495,6 +1495,7 @@ and two small completions:
 
 ### 138. Classic grammar skins — flowchart and structogram
 *(belongs with Section 7; presentation-only, explicitly optional)*
+**Shipped 2026-08-01** — now catalog entry #138 in [FEATURES.md](FEATURES.md): two persisted selects in the Anatomy panel — CONTROL FLOW ladder|flowchart (diamonds, yes/no, stadium terminals, orthogonal channels; weights/ghosts/unreachable/current token carry over) and SYNTAX tree|structogram (Nassi–Shneiderman bands from the guards map, T|F columns, loop bands, T×/F× verdict badges, never-ran lines dim). The skin changes, the truth doesn't.
 - **What:** alternate DRAWINGS of data already recorded, as a
   select in the Anatomy panel: #131's CFG rendered as a classic
   flowchart (diamonds, yes/no labels, orthogonal routing, rounded

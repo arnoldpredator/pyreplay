@@ -2904,6 +2904,50 @@ def _():
         expect(probe in tpl, f"seq contract missing: {probe}")
 
 
+@check("grammar skins: NS nesting mirror + flowchart contract (#138)")
+def _():
+    p = run_trace(os.path.join(HERE, "example_control.py"),
+                  name="ns138")
+    g = p["guards"]["example_control.py"]
+    # mirror of the viewer's nsHtml grouping: a line is owned by its
+    # innermost controller when that controller is another line of
+    # the same record (main = lines 20-34)
+    src = p["sources"]["example_control.py"].split("\n")
+    groups, owned = {}, set()
+    for k in range(20, 35):
+        txt = (src[k - 1] or "").strip()
+        if not txt or txt.startswith("#"):
+            continue
+        ctl = g.get(str(k))
+        if ctl and ctl[0] != k and 20 <= ctl[0] <= 34:
+            groups.setdefault((ctl[0], ctl[1]), []).append(k)
+            owned.add(k)
+    expect(groups.get((22, "loop")) == [23],
+           f"the first for-band owns exactly its body: {groups}")
+    expect(groups.get((25, "loop")) == [26],
+           "the empty loop's band still owns its (never-run) body")
+    expect(groups.get((28, "loop")) == [29],
+           "the broken loop's band owns the if")
+    expect(groups.get((29, "then")) == [30],
+           "the if's T column owns the break")
+    expect(groups.get((20, "def")) == [21, 22, 25, 28, 32, 33, 34],
+           f"main's top band owns the straight-line spine: "
+           f"{groups.get((20, 'def'))}")
+    with open(os.path.join(HERE, "replayer_template.html"),
+              encoding="utf-8") as fh:
+        tpl = fh.read()
+    for probe in ('skinSel("cfg", ["ladder", "flowchart"])',
+                  'skinSel("ast", ["tree", "structogram"])',
+                  "same blocks, same edges",
+                  "Nassi–Shneiderman bands", 'class="dshape"',
+                  "The skin changes, the truth doesn't",
+                  "pyreplay-skins"):
+        expect(probe in tpl, f"skin contract missing: {probe}")
+    expect(tpl.count("flowSvg(crec, curB, ev.f)") == 1
+           and tpl.count("cfgSvg(crec, curB, ev.f)") == 1,
+           "both skins must draw from the SAME record — one call each")
+
+
 @check("motion layer: honesty legend + play-only gating (#135)")
 def _():
     with open(os.path.join(HERE, "replayer_template.html"),

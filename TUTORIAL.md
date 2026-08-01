@@ -867,6 +867,14 @@ their original node — no phantom calls), and the 4000-node render cap
 announces itself. Works at both granularities — on an fn-level trace
 of a real codebase it is the whole run's shape in one panel.
 
+**The explain bundle.** Park the cursor on the interesting moment
+and press **⧉ explain**: ±25 events become a plain-text file — source
+lines, every changed value, verdicts, provenance arrows, the rerun
+command — downloaded and on your clipboard. Paste it into an issue, a
+review, or an AI assistant: whoever reads it gets the recorded truth,
+not a retelling. The header says exactly what it is, the cap
+announces itself, and nothing is ever recomputed.
+
 **The ghost branch.** Flip 👻 in the badges menu and every verdict
 moment shows what did NOT happen: the untaken arm dims under a
 hatched wash for exactly that one step — the else skipped, the loop

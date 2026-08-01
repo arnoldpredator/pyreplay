@@ -7,7 +7,7 @@ can pick an item and implement it. Features are numbered **#63 onward**, continu
 in FEATURES.md. Fifteen roadmap items have shipped since the list was
 written (63, 64, 65, 70, 77, 79, 80, 98, 101 v1, 103, 104 Tier 1,
 106, 109, 118, 120 v1) — their rows below are struck through;
-**21 remain unbuilt** (plus the stated remainders of 66/74/75/85/88/89/101/104/119/120/126/127/128/132/134).
+**20 remain unbuilt** (plus the stated remainders of 66/74/75/85/88/89/101/104/119/120/126/127/128/132/134).
 
 ## Start here — how to contribute
 
@@ -121,7 +121,7 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
 | 112 | ~~Sortable table view for list-of-dicts~~ **shipped** | S | ★★ |
 | 113 | ~~Ghost-highlight the untaken branch~~ **shipped** | S | ★★ |
 | 114 | Hear the trace (sonification) | M | ★ |
-| 115 | Text bundle of a trace slice | S | ★★ |
+| 115 | ~~Text bundle of a trace slice~~ **shipped** | S | ★★ |
 | 116 | Symbolic "what input reaches this line" | XL | ★ |
 | 117 | Full deterministic record/replay | XL | ★★ |
 | 118 | ~~Console & logging lane synced to the trace~~ **shipped** | — | ★★★ |
@@ -915,6 +915,7 @@ software.
   tool.
 
 ### 115. The explain bundle
+**Shipped 2026-08-02** — now catalog entry #115 in [FEATURES.md](FEATURES.md): ⧉ explain — ±25 events as self-describing text (source, values, verdicts, provenance, capsule rerun line), 20k cap announced, recorded-truth honesty verbatim, download+clipboard, PYREPLAY.explain() scriptable.
 - **What:** export a compact, human/LLM-readable text slice of the
   trace: N events around the cursor with source lines, variable
   states, verdicts and provenance, formatted for pasting into an

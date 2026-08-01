@@ -2900,6 +2900,29 @@ def _():
         expect(probe in tpl, f"seq contract missing: {probe}")
 
 
+@check("explain bundle: format contract, caps, honesty lines (#115)")
+def _():
+    with open(os.path.join(HERE, "replayer_template.html"),
+              encoding="utf-8") as fh:
+        tpl = fh.read()
+    # renderer-side serializer: pin the bundle's self-describing
+    # contract — version marker, recorded-truth line, caps, legend,
+    # provenance arrows, the scriptable surface, and the button
+    for probe in ("pyreplay explain bundle v1",
+                  "every value below is RECORDED truth",
+                  "EXPLAIN_SPAN = 25",
+                  "EXPLAIN_CHAR_CAP = 20000",
+                  "bundle capped at ",
+                  "legend: >> = the cursor",
+                  "(← from ",
+                  "explain: buildExplain",
+                  'id="btn-explain"',
+                  "where it goes is your business"):
+        expect(probe in tpl, f"bundle contract missing: {probe}")
+    expect(tpl.count("URL.createObjectURL") >= 3,
+           "download path must exist beside stdin/predictions/notes")
+
+
 @check("ghost branch: untaken arms, transitive extent, one step (#113)")
 def _():
     src = fixture("gh113.py", (

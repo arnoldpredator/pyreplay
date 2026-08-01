@@ -604,6 +604,36 @@ dead or invented panel; every cap and truncation is announced.
 
   [![Feature 106 — deep links](screenshots/106-deep-links.png)](screenshots/106-deep-links.png)
 
+### 115. The explain bundle — ground truth as text
+- **Measured:** nothing — a serializer over what the trace already
+  holds. ±25 events around the cursor become plain text: a
+  self-describing header (script, granularity, engine, event span,
+  the capsule's rerun command when recorded), then one block per
+  event — the source line, the verdict in Python spelling, every
+  changed value in compact form with its static dataflow sources
+  (`← from reading, gain`), returns, exceptions, console lines,
+  wakes, sub-line branch verdicts, ☢ trips. `>>` marks the cursor;
+  a legend closes the file; a 20k-char cap announces itself.
+- **Displayed:** the **⧉ explain** button — downloads
+  `pyreplay-explain_<script>_ev<N>.txt` and copies to the clipboard;
+  `PYREPLAY.explain()` exposes the builder for scripting. Every
+  bundle carries the honesty line verbatim: *every value below is
+  RECORDED truth as the replayer displays it (windows and caps
+  apply; nothing is recomputed).*
+- **Why:** the trace knows what actually happened; humans and
+  models alike reason better when handed that truth as text instead
+  of a screenshot or a memory of one. pyreplay stays offline — the
+  bundle is a file; where it goes is the user's business.
+- **Use case:** paste the failing window into an issue, a review
+  comment, or an AI assistant: fifteen events of source, values,
+  verdicts and provenance around the bug — no transcription errors,
+  no "I think it was 13.0".
+- **Command:** any trace → park the cursor → **⧉ explain**.
+- **Screenshot** — the bundle itself: header with the rerun command,
+  verdicts, provenance arrows, the `>>` cursor:
+
+  [![Feature 115 — explain bundle](screenshots/115-explain-bundle.png)](screenshots/115-explain-bundle.png)
+
 ### 107. Annotations — the trace as the notebook
 - **Measured:** nothing — a pure replayer medium. Notes live in
   localStorage keyed to this exact trace (script + event count), and

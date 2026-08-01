@@ -792,6 +792,7 @@
     <button id="btn-last" title="Jump to end (End)">End &#9197;</button>
     <button id="btn-present" title="Presentation mode (P): chrome hidden, large type, play + motion — Esc exits">&#127916;</button>
     <button id="btn-gate" title="#128 prediction gate: commit a claim about the NEXT state before stepping — scored against the recorded truth. Free navigation stays allowed; only committed claims count.">&#128302;</button>
+    <button id="btn-explain" title="#115: export a text slice of the trace around this moment — source lines, values, verdicts, provenance — for an issue, a review, or an AI assistant (the bundle is a file; where it goes is your business)">⧉ explain</button>
     <details id="machmenu" title="Which interpreter-machinery hints to show — the data is always recorded; these only change the display">
       <summary>badges</summary>
       <div class="machbox">
@@ -5339,6 +5340,155 @@ function jumpBookmark(dir) {
 }
 renderBmarks();
 
+/* #115: the explain bundle — a compact, human/LLM-readable text
+   slice of the trace around the cursor. The trace knows the ground
+   truth of what happened; humans and models alike reason better
+   handed that truth as text. pyreplay stays offline: the bundle is
+   a file, where it goes is the user's business. */
+const EXPLAIN_SPAN = 25;      // events each side of the cursor
+const EXPLAIN_CHAR_CAP = 20000;
+function textVal(enc) {
+  if (!enc || typeof enc !== "object") return "?";
+  if (enc.t === "p") return String(enc.v);
+  if (enc.t === "s") return "'" + enc.v + "'";
+  if (enc.t === "list" || enc.t === "tuple" || enc.t === "set") {
+    const open = enc.t === "list" ? "[" : enc.t === "tuple" ? "(" : "{";
+    const close = enc.t === "list" ? "]" : enc.t === "tuple" ? ")" : "}";
+    const els = (enc.v || []).slice(0, 8).map(textVal);
+    const more = (enc.n || 0) - Math.min(8, (enc.v || []).length);
+    return open + els.join(", ") + (more > 0 ? ", …+" + more : "") +
+      close + " " + (enc.c || enc.t) + "[" + (enc.n || 0) + "]";
+  }
+  if (enc.t === "dict")
+    return "{" + (enc.v || []).slice(0, 6).map(p =>
+      p[0] + ": " + textVal(p[1])).join(", ") +
+      ((enc.n || 0) > 6 ? ", …+" + ((enc.n || 0) - 6) : "") + "} " +
+      "dict[" + (enc.n || 0) + "]";
+  if (enc.t === "o" || enc.t === "obj") {
+    let base = "<" + (enc.c || "object") + ">";
+    if (enc.v && Array.isArray(enc.v))
+      base += " {" + enc.v.slice(0, 4).map(p =>
+        p[0] + "=" + textVal(p[1])).join(", ") + "}";
+    return base;
+  }
+  return enc.c || enc.t || "?";
+}
+function buildExplain() {
+  const lo = Math.max(0, idx - EXPLAIN_SPAN);
+  const hi = Math.min(events.length - 1, idx + EXPLAIN_SPAN);
+  const L = [];
+  L.push("pyreplay explain bundle v1 — " + DATA.script);
+  L.push("granularity " + DATA.granularity +
+    (DATA.engine ? " · engine " + DATA.engine : "") +
+    " · events " + (lo + 1) + "–" + (hi + 1) + " of " +
+    events.length + " · cursor at " + (idx + 1));
+  if (DATA.capsule)
+    L.push("recorded: " + DATA.capsule.when + " · python " +
+      DATA.capsule.python + " · rerun: " + DATA.capsule.cmd);
+  L.push("every value below is RECORDED truth as the replayer " +
+    "displays it (windows and caps apply; nothing is recomputed)");
+  L.push("");
+  const src = f => (DATA.sources[f] || "").split("\n");
+  for (let i = lo; i <= hi; i++) {
+    const e = events[i];
+    const cur = i === idx ? ">>" : "  ";
+    const lane = (e.t ? " thread " + e.t : "") +
+      (e.tk ? " task " + e.tk : "");
+    if (e.e === "log") {
+      L.push(cur + " ev " + (i + 1) + "  CONSOLE " +
+        (e.s === "err" ? "stderr" : "stdout") + ": " + e.txt);
+      continue;
+    }
+    if (e.e === "chap") {
+      L.push(cur + " ev " + (i + 1) + "  TEST " +
+        (e.k === "s" ? "starts" : (e.o || "ends")) + " — " + e.id);
+      continue;
+    }
+    if (e.e === "hb") {
+      L.push(cur + " ev " + (i + 1) + "  WAKE " + e.hb + " → " +
+        e.dst + lane);
+      continue;
+    }
+    const head = cur + " ev " + (i + 1) + "  " +
+      e.e.toUpperCase() +
+      (e.g ? "/" + e.g.s : "") + "  " + e.f + ":" + e.l +
+      " in " + e.fn + "()" + lane;
+    L.push(head);
+    if (e.e === "br") {
+      const line = src(e.f)[e.l - 1] || "";
+      L.push("      sub-expr `" +
+        line.slice(e.c0, e.c1 == null ? undefined : e.c1).trim() +
+        "` → " + brValText(e));
+      continue;
+    }
+    const line = (src(e.f)[e.l - 1] || "").trim();
+    if (line) L.push("      | " + line);
+    if (e.cond)
+      L.push("      verdict: " + e.cond.x + " → " +
+        (e.cond.r ? "True" : "False") +
+        (e.cond.k === "for" ? (e.cond.r
+          ? " (iteration " + e.cond.i + ")" : " (exhausted)") : ""));
+    for (const [nm, enc] of Object.entries(e.ch || {})) {
+      let prov = "";
+      if (e.e === "line") {
+        let pj = i - 1;
+        while (pj >= 0 && eventFrame[pj] !== eventFrame[i]) pj--;
+        const srcs = pj >= 0
+          ? (((DATA.dataflow || {})[events[pj].f] || {})
+             [events[pj].l] || {})[nm]
+          : null;
+        if (srcs && srcs.length) prov = "   (← from " +
+          srcs.join(", ") + ")";
+      }
+      L.push("      " + nm + " = " + textVal(enc) + prov);
+    }
+    if (e.e === "return" && e.ret !== undefined)
+      L.push("      returns " + textVal(e.ret));
+    if (e.x)
+      L.push("      exception: " + e.x.t +
+        (e.x.v ? ": " + e.x.v : "") + (e.x.soft
+          ? " (control-flow, handled)" : ""));
+    if (e.trip)
+      L.push("      ☢ " + e.trip.map(t => t.v + " → " + t.k)
+        .join(", "));
+  }
+  L.push("");
+  L.push("legend: >> = the cursor · ch lines are the DELTA at that " +
+    "event · (← from …) is the static dataflow of the assignment");
+  let text = L.join("\n");
+  if (text.length > EXPLAIN_CHAR_CAP)
+    text = text.slice(0, EXPLAIN_CHAR_CAP) +
+      "\n… bundle capped at " + EXPLAIN_CHAR_CAP + " chars (" +
+      (hi - lo + 1) + " events attempted — narrow the span by " +
+      "moving the cursor)";
+  return text;
+}
+$("btn-explain").onclick = () => {
+  const text = buildExplain();
+  const blob = new Blob([text], { type: "text/plain" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "pyreplay-explain_" +
+    DATA.script.replace(/[^A-Za-z0-9_.-]+/g, "_") + "_ev" +
+    (idx + 1) + ".txt";
+  a.click();
+  let copied = false;
+  try {
+    navigator.clipboard.writeText(text);
+    copied = true;
+  } catch (e) {}
+  const b = $("banner");
+  b.style.display = "block";
+  const note = document.createElement("div");
+  note.className = "info";
+  note.textContent = "⧉ explain bundle: " + text.length +
+    " chars around event " + (idx + 1) + " — downloaded" +
+    (copied ? " + copied to clipboard" : "") + ".";
+  b.appendChild(note);
+  setTimeout(() => { note.remove(); if (!b.children.length)
+    b.style.display = "none"; }, 4000);
+};
+
 /* #107: annotations — notes pinned to events. A long investigation
    IS a set of annotated moments; make the trace the notebook.
    localStorage per trace (the bookmarks pattern) + a JSON sidecar
@@ -6367,6 +6517,7 @@ else $("code").innerHTML = '<div class="empty" style="padding:20px">No events re
    scope, so expose the essentials for debugging and verification */
 window.PYREPLAY = {
   goto, stop,
+  explain: buildExplain,   // #115: the bundle, scriptable
   info: () => ({ events: events.length,
                  chunked: !!DATA.chunked,
                  keyframes: kfIndices.length })

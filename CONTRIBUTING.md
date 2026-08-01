@@ -7,13 +7,13 @@ can pick an item and implement it. Features are numbered **#63 onward**, continu
 in FEATURES.md. Fifteen roadmap items have shipped since the list was
 written (63, 64, 65, 70, 77, 79, 80, 98, 101 v1, 103, 104 Tier 1,
 106, 109, 118, 120 v1) — their rows below are struck through;
-**40 remain unbuilt** (plus the stated remainders of 75/88/89/101/104/119/120).
+**49 remain unbuilt** (plus the stated remainders of 75/88/89/101/104/119/120).
 
 ## Start here — how to contribute
 
 New here and want to help? Three steps:
 
-1. **Pick something.** The **Index** below lists features #63–#126; the
+1. **Pick something.** The **Index** below lists features #63–#135; the
    **Good first** lists at the end are the gentlest way in. Bug reports,
    edge cases, and more `example_*.py` programs are just as welcome.
    Adding **another language** is the biggest prize — see "Support
@@ -133,6 +133,15 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
 | 124 | Event-loop starvation detector | S | ★★ |
 | 125 | Mutation-survivor forensics | M | ★★★ |
 | 126 | Metamorphic relations harness | S–M | ★★ |
+| 127 | Scaling bench: measured growth exponents | M | ★★★ |
+| 128 | Prediction gate: commit a claim, get scored | M | ★★★ |
+| 129 | Graph lens on the map (centrality, communities) | M | ★★ |
+| 130 | Trace compressibility (regularity strip) | S | ★ |
+| 131 | CFG view: the code as a graph, the run as a path | M | ★★★ |
+| 132 | Observed state machine (one declared variable) | M | ★★ |
+| 133 | Recursion tree view | S | ★★ |
+| 134 | Subproblem DAG (memo dependency view) | M | ★★ |
+| 135 | Motion layer (tweened transitions, honest) | M | ★★ |
 
 ---
 
@@ -1139,8 +1148,268 @@ standalone gate lacks.
   standard in compiler and search-engine testing, almost never
   available to everyday Python.
 
+## Section 11 — the library & representation pass (2026-08-01)
+
+A permanent-shelf curriculum canon (computation → complexity →
+algorithms → the machine → systems → networks → languages) and an
+inventory of algorithm representations were checked against
+FEATURES.md and this roadmap. Most of the curriculum's language and
+systems floor is already instrumented: closure cells (#35), the MRO
+panel (#39), aliasing vs. rebinding (#34), generator lifecycles (#33)
+and the import-time badge (#37) cover the interpreter syllabus; #88 is
+Lamport's happens-before by name; #78's proven→observed downgrade is
+the computability boundary rendered as a banner; the event log itself
+embodies the append-only-log-as-narrow-waist idea; #74 already owns
+theory-from-trajectories. The machine layer stays out by constitution
+— bridge, don't clone: #85 is the deepest honest rung inside CPython,
+#121 the bridge outward.
+
+Nine gaps surfaced, in two families: **instruments** that turn a law
+into an experiment on your own code (#127–130), and **general views**
+of code and execution (#131–135). One design rule binds the second
+family: a view earns its place by generality — shape-recognized
+(#23's doctrine) or bound by a single declared name — never authored
+per algorithm.
+
+### 127. The scaling bench (empirical asymptotics)
+*(belongs with Section 1 — the reliability lab)*
+- **What:** `--sweep "n=1000,2000,4000,8000" --gen GEN.py` — run the
+  target across a size ladder (the #67 generator protocol produces an
+  input of size n), record per-size **event counts** (any
+  granularity) and fn-mode wall times, fit the log–log slope, and
+  report the observed growth exponent with R². A `--predict "n^2"`
+  claim is scored against the measurement. The same harness with a
+  non-size knob (`--sweep "alpha=3.0..5.0"`) measures hardness
+  curves and phase transitions instead of growth.
+- **Why:** nothing in #1–126 varies input size: #63 repeats one input,
+  #67 randomizes inputs hunting failures, #71 races two
+  implementations. "What is the observed exponent" is the question
+  the whole algorithms shelf trains — and **event counts are the
+  honest cost model**: exact, deterministic, immune to timing noise,
+  valid at line granularity where wall time is forbidden. The
+  doubling experiment separates n log n from n^1.2 where eyeballing
+  cannot.
+- **How:** a harness over #63's runner — per-rung child runs, event
+  totals (already counted), least-squares on log–log, chart via the
+  oscilloscope machinery plus a terminal table. Honesty: the banner
+  states "counts are Python-level events, not machine operations —
+  constants live in the C layer"; a bad fit is reported as a bad fit,
+  never forced to a line.
+- **Effort:** M.
+- **Prior art:** Sedgewick's doubling-ratio experiments; McGeoch,
+  *A Guide to Experimental Algorithmics*; SAT phase-transition
+  studies (Mitchell–Selman–Levesque).
+
+### 128. The prediction gate
+*(belongs with Section 7 — the replayer as a medium)*
+- **What:** a replayer mode in which the next state is hidden behind a
+  curtain until you commit a claim — "this verdict is False", "this
+  loop runs 7 times", "`total` becomes 42" — which is then scored
+  against the recorded truth. The session ends with a prediction
+  ledger (hit rate by claim type). Tours (#108) gain prediction
+  stops: a walkthrough becomes an exercise with a grade.
+- **Why:** passive replay teaches little; the mismatch between a
+  committed prediction and the recorded truth is where understanding
+  is generated. This is the feature that converts the replayer from a
+  microscope into a laboratory — and a planted-bug hunt into a scored
+  drill.
+- **How:** renderer-only. Every claim type rides existing data:
+  verdicts (#31), the change index (#28), controller iteration counts
+  (#77). A "commit to reveal" curtain over the next-state panels;
+  ledger in localStorage with sidecar export (the #107 pattern). Zero
+  schema change.
+- **Effort:** M.
+- **Prior art:** predict–observe–explain (White & Gunstone, science
+  education); the pre-registration discipline of experimental
+  physics.
+
+### 129. The graph lens on the map
+*(belongs with Section 5 — the map)*
+- **What:** upgrade the map's analytics from degree to graph theory:
+  **betweenness centrality** (Brandes) beside fan-in in the walls
+  panel — the modules everything routes *through*, not merely *to*;
+  **community detection** (label propagation), detected clusters
+  outlined against declared package boundaries — "is the architecture
+  real?" as a picture; **percolation** — remove the top-k central
+  modules, plot reachability collapse: the dependency-fragility
+  curve; and the degree distribution reported with a
+  straight-line-on-log-log caution.
+- **Why:** the map is a graph analyzed with a fraction of graph
+  theory — #52 ranks by raw degree, #49 finds cycles; bridges,
+  clusters and fragility are invisible. Betweenness routinely names a
+  different (and truer) load-bearing wall than fan-in does.
+- **How:** pure Python over data the mapper already holds (Brandes
+  O(VE) is comfortable at map scale; label propagation is a page).
+  Rendered as a lens beside heat/churn/risk in the #95 select. Every
+  number names its graph — "static import graph" vs "observed call
+  pairs" when heat is adopted; the dark-edge honesty clause carries
+  over.
+- **Effort:** M.
+- **Prior art:** Brandes (2001); Raghavan et al., label propagation;
+  Albert–Jeong–Barabási attack-tolerance studies; Newman, *Networks*.
+
+### 130. Trace compressibility
+*(belongs with Section 6 — scale & interchange)*
+- **What:** report the event stream's compression ratio — bits/event
+  overall and per density-strip bucket — as a regularity measure; a
+  marked change in compressibility marks a phase change in the run.
+- **Why:** a tight loop is low-entropy; data-dependent wandering is
+  high. The run's regularity is a real observable no panel currently
+  shows — and the bytes are already gzipped (#101), so the
+  measurement is nearly free.
+- **How:** per-chunk ratios recorded at write time; a thin strip under
+  the density strip. Honesty: compressed length is an upper bound on
+  the entropy rate — the label says "compressibility", never bare
+  "entropy".
+- **Effort:** S.
+- **Prior art:** Shannon (1948); compression-as-complexity
+  (Cilibrasi–Vitányi, normalized compression distance).
+
+### 131. CFG view — the code as a graph, the run as a path
+*(sibling of #85 — code anatomy)*
+- **What:** a per-function control-flow graph built from the ast
+  (basic blocks; edges from if/while/for/try/match/break/continue/
+  return). Static, it joins #85's anatomy panel. With a trace
+  adopted it turns dynamic: edges weighted by observed traversal
+  counts, the current event a token walking the graph, never-taken
+  edges ghosted — with #77's "why" one click away.
+- **Why:** control flow *is* a graph; source text hides it. The
+  dynamic CFG is the picture of what the whyline already computes —
+  controller structure joined with recorded verdict counts — and the
+  natural home of branch-coverage truth. #86's BRANCH events refine
+  it to sub-line precision when they land.
+- **How:** stdlib CFG construction (a contained small-compiler
+  exercise; the delicate edges are try/finally and loop-else — the
+  whyline's controller-stamping pass is reusable ground). The
+  renderer reuses the graph-view engine. Honesty:
+  unreachable-by-construction and never-observed are distinguished,
+  never conflated.
+- **Effort:** M.
+- **Prior art:** classic compiler-textbook CFG construction;
+  staticfg / py2cfg (unmaintained); coverage.py's branch model —
+  which counts, but never shows.
+
+### 132. The observed state machine
+*(sibling of #74 — mined behavior)*
+- **What:** declare one state variable (`--fsm order.status`, or a
+  click on a variable row) and the tool mines the transition diagram
+  from the trace: nodes = observed values sized by dwell, edges =
+  observed transitions weighted by count with first-occurrence jump
+  links, current state lit during replay. #63 aggregates many runs
+  into one machine. An optional declared-transitions file turns the
+  view into a checker: a forbidden edge becomes a violation event.
+- **Why:** state machines are how half of real systems are designed
+  and almost never how they are observed. The mined diagram is
+  executable documentation and a drift detector — the general
+  instrument for every automata-shaped mental model in a codebase.
+- **How:** the binding is a single declared name — one flag, no
+  authored scenes. The change index already holds every value
+  transition; the graph engine renders. Honesty, verbatim from the
+  dark-edge clause: *observed machine ⊆ true machine — a missing edge
+  is never evidence of absence.*
+- **Effort:** M.
+- **Prior art:** Synoptic / Perfume (Beschastnikh, Ernst et al. — FSM
+  inference from logs); process mining (van der Aalst); Angluin's L*
+  as the theory backdrop.
+
+### 133. The recursion tree
+*(belongs with Section 7 — the replayer as a medium)*
+- **What:** a `tree` execution view: the run's call tree — not lanes,
+  not a flame chart — each node a frame carrying its arguments and
+  return value, subtrees collapsible, the replay cursor descending
+  the tree live; per-level node counts and event totals annotated.
+- **Why:** for divide-and-conquer the call tree IS the canonical
+  object — the recurrence, drawn. Per-level totals make "work per
+  level × number of levels" countable on screen, and pair with
+  #127's measured exponent. The stack panel shows one path; this
+  shows the whole tree.
+- **How:** a pure projection of recorded call/return nesting — no
+  schema change. Collapsible rendering with the existing windowing
+  honesty for huge trees (caps announced).
+- **Effort:** S.
+- **Prior art:** the recursion-tree method of the classic algorithms
+  texts; flame graphs as the aggregate cousin — this one keeps
+  per-call identity.
+
+### 134. The subproblem DAG
+*(belongs with Section 2 — deeper causality)*
+- **What:** bind a memo structure (`--memo dp`) and the view draws
+  its entries as nodes appearing as they are written, with
+  read→write dependency edges mined from the dataflow — the
+  dependency DAG of the table, animated as it fills. The grid view
+  shows fill *order*; this shows fill *causality*.
+- **Why:** dynamic programming is shortest-paths-in-DAGs, and the DAG
+  is the part nobody ever sees. It is also a bug detector, not just
+  pedagogy: a read of a not-yet-written cell renders as a red edge —
+  the wrong-evaluation-order bug, visible at the moment it happens.
+- **How:** one binding flag; edges from the provenance machinery
+  (#29/#75) restricted to subscripts of the bound name. The honest
+  frontier note carries over: slice assignments and C-level writes
+  are marked untracked, never guessed. Graph engine renders.
+- **Effort:** M after #75's container-element remainder ships; L
+  before it.
+- **Prior art:** the DP-as-DAG chapter of the standard texts; program
+  slicing (Weiser; Korel–Laski).
+
+### 135. The motion layer
+*(belongs with Section 7 — the replayer as a medium)*
+- **What:** tweened transitions between consecutive events in the
+  existing generic views — a swap's two bars glide past each other, a
+  queue advances, a tree node descends into place — plus a
+  presentation mode (chrome hidden, large type). Inert at
+  single-step; active at play speeds.
+- **Why:** state currently teleports between events, and at play
+  speed the eye loses element identity exactly when
+  watching-the-algorithm is the point. Motion is the honest rendering
+  of a recorded change *as a change* — and it is generic by
+  construction: it animates whatever the shape views already draw,
+  for any code, with no per-algorithm authoring.
+- **How:** renderer-only FLIP over the diff machinery, which already
+  knows precisely which elements changed; identity by `id()` for
+  objects, index/value heuristics for primitives — heuristic, and
+  labeled as such. Honesty, stated once in the legend: *motion
+  between events is interpolation; only the endpoints are recorded
+  truth.* Composes with #111 (movie export) and #108 (tours).
+- **Effort:** M.
+- **Prior art:** the FLIP animation technique; Heer & Robertson,
+  *Animated Transitions in Statistical Data Graphics* (2007).
+
+### Notes recorded so they aren't lost (Section 11)
+- **Guest clock** *(rides #72)* — when tracing an interpreter you
+  wrote, declare one watch expression as the guest program counter:
+  a second density strip in guest time, host events against guest
+  steps — two floors of the interpretation tower on one screen.
+  S once #72 exists (#72 shipped 2026-08-01 — this is now live bait).
+- **Wire alignment** *(rides #84 + #105)* — import a packet-capture
+  timeline as a lane aligned on the I/O lane's socket-call
+  timestamps: the trace and the wire on one clock. A bridge, not a
+  clone — capture remains tcpdump's job. M.
+- **Descriptor blind spot** *(attach to #85)* — attribute lookup's
+  descriptor priority resolves below the line: invisible to line
+  events and to the MRO panel alike. #85 Tier 2 (instruction events)
+  is the feature that would show a `__get__` hit.
+
+### If you only build five — the learner's cut (Section 11)
+1. **#128** — the prediction gate: the switch from microscope to
+   laboratory; understanding is generated at the mismatch.
+2. **#127** — the scaling bench: the observed exponent, measured in
+   honest event counts; the doubling experiment as a command.
+3. **#131** — the CFG path view: the code as the graph it is, the run
+   as a walk on it — the whyline's knowledge, finally drawn.
+4. **#85-static** — the anatomy floor: AST and bytecode, the deepest
+   honest rung of the tower, already rated S.
+5. **#74** — invariant mining: conserved quantities inferred from
+   recorded trajectories — the trace-to-theory bridge everything
+   else feeds.
+
 ## Deliberately still rejected
 
+- **Per-algorithm authored scenes** — a view earns its place by
+  generality: shape-recognized (#23's doctrine) or bound by a single
+  declared name (#132, #134). One flag is a binding; an artwork per
+  algorithm is a museum piece, and museums go stale while the shape
+  engine keeps working on code nobody curated. The teaching fleet
+  plus tours (#108) carry the pedagogy without bespoke renderers.
 - **Viewer-side eval / edit-and-continue** — replay must never
   pretend to compute; recording-side #72/#73 cover the need honestly.
 - **3D visualization** — aggregation and filtering, not rendering

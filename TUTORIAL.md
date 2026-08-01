@@ -643,6 +643,18 @@ if it ran, you jump to its first execution; if it never ran, the
 whyline answers with the guards that said no. The for-else you were
 never sure about, the break that skips it: drawn, with counts.
 
+**The call tree.** The stack panel shows one path; the **Call tree**
+panel shows them all — the run's whole recursion as nested collapsible
+nodes, each frame carrying its arguments and its return value
+(`fib(n=3) → 2`), the current frame lit and its ancestors auto-opened
+as the replay descends. The level line above it makes "work per level
+× number of levels" countable on screen (`L4 6× / 24 ev`), ⤷ jumps to
+any call's moment, and honesty holds at the edges: a frame that never
+returned is marked, a suspended generator says so (resumes re-enter
+their original node — no phantom calls), and the 4000-node render cap
+announces itself. Works at both granularities — on an fn-level trace
+of a real codebase it is the whole run's shape in one panel.
+
 ## 4f. Recording for real life: the black box, the capsule, the chunks (2026-08)
 
 **The flight recorder (`--black-box`).** Recording becomes a ring

@@ -104,7 +104,7 @@ green suite is the contract that keeps contributions honest.
 
 Bug reports, edge cases, more example programs, and **other languages** are
 all very welcome. **[CONTRIBUTING.md](CONTRIBUTING.md) is the place to start** — one file
-with the roadmap of what to build (47 unbuilt features plus a "good first"
+with the roadmap of what to build (46 unbuilt features plus a "good first"
 list), the ground rules, and the event-log schema a new-language backend emits.
 
 ## License

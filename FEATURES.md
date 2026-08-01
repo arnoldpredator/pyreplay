@@ -567,6 +567,39 @@ dead or invented panel; every cap and truncation is announced.
 
   [![Feature 109 — query bar](screenshots/109-query-bar.png)](screenshots/109-query-bar.png)
 
+### 133. The call tree — the recurrence, drawn
+- **Measured:** nothing new — a pure projection of recorded
+  call/return nesting. Each call event opens a node carrying the
+  frame's arguments (they already ride the call event) and, when its
+  return arrives, the return value; per-lane stacks attribute every
+  event to the node executing it; per-level call counts and event
+  totals are summed as the tree builds. A resumed generator/coroutine
+  re-enters its ORIGINAL node — resumes counted, never phantom calls.
+- **Displayed:** the **Call tree** panel: the run's whole call tree
+  as nested collapsible nodes — `fib(n=3) → 2 · 4 ev ⤷` — the current
+  frame lit and its ancestors auto-opened as the replay descends,
+  live. Above it, the level line: `L3 4× / 16 ev` — calls at each
+  depth × events recorded there. ⤷ jumps to that call's moment. A
+  frame that never returned says so (`↯ no return recorded`); a
+  suspended generator reads `⇢ suspended`. Render cap 4000 nodes,
+  announced in-tree.
+- **Why:** the stack panel shows ONE path; a flame graph aggregates
+  identity away. For divide-and-conquer the call tree IS the
+  canonical object — the recurrence, drawn, with "work per level ×
+  number of levels" countable on screen.
+- **Use case:** `fib(5)`: fifteen nodes, level counts
+  1·2·4·6·2 — the exponential blowup visible before you measure it;
+  both `fib(3)` subtrees on screen at once, each with its own
+  arguments and value.
+- **Command:** any trace, any granularity → open **Call tree** in
+  the side panel. Composes with fn-granularity traces of real
+  codebases (calls and returns are all it needs).
+- **Screenshot** — fib(5) mid-descent: the current `fib(n=2) → 1`
+  node lit amber inside its ancestors, level counts above, one
+  subtree collapsed.
+
+  [![Feature 133 — call tree](screenshots/133-call-tree.png)](screenshots/133-call-tree.png)
+
 ## D. Replayer — variables & data structures
 
 ### 21. Semantic rendering by type

@@ -11,6 +11,7 @@ were won in the adversarial-review sessions. Data-level only — no
 browser. Exit code 0 = all green.
 """
 import base64
+import collections
 import gzip
 import json
 import os
@@ -2756,6 +2757,64 @@ def _():
     q = run_trace(src, "--granularity", "fn", name="cfg131_fn")
     expect(not q.get("cfg"),
            "fn traces carry no CFG weights (no line events to walk)")
+
+
+@check("call tree: projection counts, generator reattachment (#133)")
+def _():
+    src = fixture("tree133.py", (
+        "def fib(n):\n"
+        "    if n < 2:\n"
+        "        return n\n"
+        "    return fib(n - 1) + fib(n - 2)\n"
+        "\n"
+        "def gen():\n"
+        "    yield 1\n"
+        "    yield 2\n"
+        "\n"
+        "g = gen()\n"
+        "next(g); next(g)\n"
+        "print(fib(5))\n"))
+    p = run_trace(src)
+    # mirror of the viewer's buildTree: node per call, resumes REATTACH
+    nodes, stacks, saved = [], {}, {}
+    for ev in p["events"]:
+        lane = (ev.get("t") or "main", ev.get("tk") or "")
+        st = stacks.setdefault(lane, [])
+        if ev["e"] == "call":
+            gm = ev.get("g")
+            if gm and gm.get("s") == "r" and gm.get("i") in saved:
+                nid = saved.pop(gm["i"])
+                nodes[nid]["resumes"] += 1
+                st.append(nid)
+                continue
+            nodes.append({"fn": ev["fn"], "depth": len(st),
+                          "resumes": 0, "ret": None})
+            st.append(len(nodes) - 1)
+            continue
+        if not st:
+            continue
+        if ev["e"] == "return":
+            gm = ev.get("g")
+            if gm and gm.get("s") == "y":
+                saved[gm["i"]] = st[-1]
+            else:
+                nodes[st[-1]]["ret"] = ev.get("ret")
+            st.pop()
+    fibs = [n for n in nodes if n["fn"] == "fib"]
+    expect(len(fibs) == 15, f"fib(5) must project 15 nodes: {len(fibs)}")
+    depths = collections.Counter(n["depth"] for n in fibs)
+    expect(depths == collections.Counter({1: 1, 2: 2, 3: 4, 4: 6, 5: 2}),
+           f"the recurrence's level counts are wrong: {dict(depths)}")
+    expect(all(n["ret"] is not None for n in fibs),
+           "every fib frame returned — every node must carry its value")
+    gens = [n for n in nodes if n["fn"] == "gen"]
+    expect(len(gens) == 1,
+           "a resumed generator must stay ONE node, never phantom calls")
+    expect(gens[0]["resumes"] == 1 and gens[0]["ret"] is None,
+           f"gen: one resume, still suspended (never exhausted): {gens}")
+    expect(all("n" in e.get("ch", {}) for e in p["events"]
+               if e["e"] == "call" and e["fn"] == "fib"),
+           "arguments must ride every call event (the tree's labels)")
 
 
 # ---------------------------------------------------------------- runner

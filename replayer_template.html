@@ -262,6 +262,37 @@
     opacity: .4; }
   .cfgt { font-size: 8.5px; }
   .cfgt.ghost { opacity: .5; }
+  #treebox { border-top: 1px solid var(--border); padding: 6px 10px;
+    font-size: 11px; color: var(--dim); }
+  #treebox summary { cursor: pointer; color: var(--text); }
+  #treebox #treestat { color: var(--dim); font-weight: 400; }
+  #treelevels { margin: 4px 0; color: var(--dim); font-size: 10px;
+    line-height: 1.7; }
+  #treelevels b { color: var(--accent); font-weight: 600; }
+  #calltree { position: relative; max-height: 340px; overflow: auto;
+    background: #171a22; border: 1px solid var(--border);
+    border-radius: 4px; padding: 3px 6px; }
+  .tnode { margin-left: 14px; }
+  #calltree > .tnode { margin-left: 0; }
+  details.tnode > summary { cursor: pointer; list-style: none;
+    white-space: nowrap; }
+  details.tnode > summary::before { content: "▸ "; color: var(--dim); }
+  details.tnode[open] > summary::before { content: "▾ "; }
+  .tnode.leaf { padding-left: 12px; white-space: nowrap; }
+  .tnode .tfn { color: var(--call); font-weight: 600; }
+  .tnode .targ { color: var(--text); }
+  .tnode .tret { color: var(--ret); }
+  .tnode .tmeta { color: var(--dim); font-size: 9.5px; }
+  .tnode .tj { cursor: pointer; color: var(--accent); }
+  .tnode .tj:hover { color: var(--changed-text); }
+  .tnode.cur > summary, .tnode.leaf.cur { background: var(--changed-bg);
+    border-radius: 3px; }
+  .tnode.cur > summary .tfn, .tnode.leaf.cur .tfn {
+    color: var(--changed-text); }
+  .tnode.dead > summary .tfn, .tnode.leaf.dead .tfn {
+    color: var(--err); }
+  .tlane { color: var(--changed-text); font-size: 10px;
+    margin-top: 3px; }
   #qmarks { position: relative; height: 7px; margin: 0 7px 2px; }
   .qmark {
     position: absolute; top: 0; width: 4px; height: 7px;
@@ -525,6 +556,11 @@
       <h2>Console <span id="constat"></span></h2>
       <div id="console"></div>
     </section>
+    <details id="treebox" title="#133: the run's call tree — the recurrence, drawn; every node a frame with its arguments and return">
+      <summary>Call tree <span id="treestat"></span></summary>
+      <div id="treelevels"></div>
+      <div id="calltree"></div>
+    </details>
     <details id="anatbox" title="#85: what this line IS to the interpreter — the syntax tree above it, the instructions below it">
       <summary>Anatomy <span id="anatname"></span></summary>
       <div id="anatomy"></div>
@@ -2220,6 +2256,192 @@ let collapsed = false;   // variables panel: show only changing vars
 let historyVar = null;   // label whose life strip is unfolded
 let lastFnq = "?/";      // view-pref qualifier of the last rendered frame
 
+/* #133: the call tree — not lanes, not a flame chart: the run's
+   recursion as the tree it is, every node a frame carrying its
+   arguments and return value, the cursor descending live. A pure
+   projection of recorded call/return nesting — nothing new measured.
+   Generator resumes re-enter their ORIGINAL node (no phantom calls);
+   a frame that never returned is marked, never guessed. */
+const treeBox = $("treebox");
+const TREE_CAP = 4000;
+let treeData = null, treeEls = null, treeCur = -1;
+function treeVal(enc) {
+  if (!enc) return "?";
+  if (enc.t === "p")
+    return String(enc.v).length > 22
+      ? String(enc.v).slice(0, 20) + "…" : String(enc.v);
+  if (enc.n !== undefined) return (enc.c || enc.t) + "[" + enc.n + "]";
+  return enc.c || enc.t;
+}
+function buildTree() {
+  const nodes = [], roots = [], levels = [];
+  const nodeAt = new Int32Array(events.length).fill(-1);
+  const stacks = {}, genSaved = {};
+  const lanesSeen = new Set();
+  for (let i = 0; i < events.length; i++) {
+    const ev = events[i];
+    const lane = (ev.t || "main") + (ev.tk ? " · " + ev.tk : "");
+    const st = stacks[lane] || (stacks[lane] = []);
+    if (ev.e === "call") {
+      const gm = ev.g;
+      if (gm && gm.s === "r" && genSaved[gm.i] !== undefined) {
+        const nid = genSaved[gm.i];
+        delete genSaved[gm.i];
+        nodes[nid].resumes++;
+        st.push(nid);
+        nodeAt[i] = nid;
+        levels[nodes[nid].depth].evs++;
+        continue;
+      }
+      const depth = st.length;
+      const parent = st.length ? st[st.length - 1] : -1;
+      const id = nodes.length;
+      nodes.push({ id, fn: ev.fn, f: ev.f, callEv: i, retEv: -1,
+        ret: null, args: ev.ch || {}, parent, kids: [], lane, depth,
+        evs: 1, resumes: 0, yielded: false });
+      if (parent >= 0) nodes[parent].kids.push(id);
+      else { roots.push(id); lanesSeen.add(lane); }
+      st.push(id);
+      nodeAt[i] = id;
+      (levels[depth] || (levels[depth] = { calls: 0, evs: 0 }))
+        .calls++;
+      levels[depth].evs++;
+      continue;
+    }
+    const top = st.length ? st[st.length - 1] : -1;
+    if (top >= 0) {
+      nodeAt[i] = top;
+      nodes[top].evs++;
+      levels[nodes[top].depth].evs++;
+    }
+    if (ev.e === "return" && top >= 0) {
+      const gm = ev.g;
+      if (gm && gm.s === "y") {
+        genSaved[gm.i] = top;
+        nodes[top].yielded = true;
+      } else {
+        nodes[top].retEv = i;
+        nodes[top].ret = ev.ret;
+        nodes[top].yielded = false;
+      }
+      st.pop();
+    }
+  }
+  return { nodes, nodeAt, roots, levels,
+           multiLane: lanesSeen.size > 1 };
+}
+function fmtArgs(args) {
+  const ks = Object.keys(args);
+  const parts = ks.slice(0, 3).map(k => k + "=" + treeVal(args[k]));
+  if (ks.length > 3) parts.push("…");
+  return parts.join(", ");
+}
+function nodeLabel(n) {
+  let ret;
+  if (n.retEv >= 0)
+    ret = ' <span class="tret">→ ' + esc2(treeVal(n.ret)) + "</span>";
+  else if (n.yielded)
+    ret = ' <span class="tret">⇢ suspended</span>';
+  else
+    ret = ' <span class="tmeta">↯ no return recorded</span>';
+  return '<span class="tfn">' + esc2(n.fn) + '</span><span class="targ">(' +
+    esc2(fmtArgs(n.args)) + ")</span>" + ret +
+    ' <span class="tmeta">· ' + n.evs + " ev" +
+    (n.resumes ? " · " + n.resumes + " resumes" : "") + "</span>" +
+    ' <span class="tj" data-goto="' + n.callEv +
+    '" title="jump to this call">⤷</span>';
+}
+function renderTree() {
+  if (treeData) return;
+  treeData = buildTree();
+  const { nodes, roots, levels } = treeData;
+  $("treelevels").innerHTML = levels.map((lv, d) =>
+    "<b>L" + d + "</b> " + lv.calls + "× / " + lv.evs + " ev")
+    .join(" · ") +
+    ' <span title="calls at each depth × events recorded at that ' +
+    'depth — work per level, countable">ⓘ</span>';
+  $("treestat").textContent = "· " + nodes.length + " calls";
+  let count = 0;
+  const els = new Array(nodes.length).fill(null);
+  function makeEl(id) {
+    if (count >= TREE_CAP) return null;
+    count++;
+    const n = nodes[id];
+    let el;
+    if (n.kids.length) {
+      el = document.createElement("details");
+      el.className = "tnode";
+      const s = document.createElement("summary");
+      s.innerHTML = nodeLabel(n);
+      el.appendChild(s);
+      for (const k of n.kids) {
+        const kel = makeEl(k);
+        if (!kel) {
+          const more = document.createElement("div");
+          more.className = "tnode leaf tmeta";
+          more.textContent = "… render cap " + TREE_CAP +
+            " reached — the trace holds all " + nodes.length +
+            " calls";
+          el.appendChild(more);
+          break;
+        }
+        el.appendChild(kel);
+      }
+    } else {
+      el = document.createElement("div");
+      el.className = "tnode leaf";
+      el.innerHTML = nodeLabel(n);
+    }
+    if (n.retEv < 0 && !n.yielded) el.classList.add("dead");
+    els[id] = el;
+    return el;
+  }
+  const box = $("calltree");
+  box.innerHTML = "";
+  for (const r of roots) {
+    if (treeData.multiLane) {
+      const lane = document.createElement("div");
+      lane.className = "tlane";
+      lane.textContent = nodes[r].lane;
+      box.appendChild(lane);
+    }
+    const el = makeEl(r);
+    if (!el) break;
+    el.open = true;
+    box.appendChild(el);
+  }
+  treeEls = els;
+}
+function updateTree() {
+  if (!treeBox.open) return;
+  renderTree();
+  const nid = treeData.nodeAt[idx];
+  if (nid === treeCur) return;
+  if (treeCur >= 0 && treeEls[treeCur])
+    treeEls[treeCur].classList.remove("cur");
+  treeCur = nid;
+  const el = nid >= 0 && treeEls[nid];
+  if (!el) return;
+  el.classList.add("cur");
+  for (let p = treeData.nodes[nid].parent; p >= 0;
+       p = treeData.nodes[p].parent)
+    if (treeEls[p] && treeEls[p].tagName === "DETAILS")
+      treeEls[p].open = true;
+  const box = $("calltree");
+  box.scrollTop = el.offsetTop - box.clientHeight / 2;
+}
+treeBox.addEventListener("toggle", () => {
+  treeCur = -1;
+  updateTree();
+});
+$("calltree").addEventListener("click", e => {
+  if (e.target.classList && e.target.classList.contains("tj")) {
+    e.preventDefault();
+    stop();
+    goto(parseInt(e.target.dataset.goto, 10));
+  }
+});
+
 /* #85: the anatomy panel — the innermost enclosing record's AST tree
    and dis listing, current line lit in both. Static truth only: the
    instructions are compiled fresh from the source; the adaptive
@@ -2988,6 +3210,7 @@ function render() {
 
   renderConsole();
   updateAnatomy();
+  updateTree();
   $("counter").textContent = (idx + 1) + " / " + events.length;
   $("scrub").value = idx;
   updateHash();

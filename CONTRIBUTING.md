@@ -7,7 +7,7 @@ can pick an item and implement it. Features are numbered **#63 onward**, continu
 in FEATURES.md. Fifteen roadmap items have shipped since the list was
 written (63, 64, 65, 70, 77, 79, 80, 98, 101 v1, 103, 104 Tier 1,
 106, 109, 118, 120 v1) — their rows below are struck through;
-**31 remain unbuilt** (plus the stated remainders of 66/74/75/85/88/89/101/104/119/120/126/127/128/132/134).
+**34 remain unbuilt** (plus the stated remainders of 66/74/75/85/88/89/101/104/119/120/126/127/128/132/134).
 
 ## Start here — how to contribute
 
@@ -142,6 +142,9 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
 | 133 | ~~Recursion tree view~~ **shipped** | S | ★★ |
 | 134 | ~~Subproblem DAG (memo dependency view)~~ **shipped (cross-frame edges remain with #75)** | M | ★★ |
 | 135 | ~~Motion layer (tweened transitions, honest)~~ **shipped** | M | ★★ |
+| 136 | Sequence diagram — lifelines from the log | M | ★★★ |
+| 137 | Observed decision table (guard truth summary) | S | ★★ |
+| 138 | Classic grammar skins: flowchart / structogram | S–M | ★ |
 
 ---
 
@@ -1419,6 +1422,93 @@ per algorithm.
 5. **#74** — invariant mining: conserved quantities inferred from
    recorded trajectories — the trace-to-theory bridge everything
    else feeds.
+
+## Section 12 — the atlas pass (2026-08-01)
+
+The Representation Atlas (a separate study: one problem — sorting —
+ten algorithms, 49 representations, 490 cells, each an artifact or a
+reasoned refusal) doubled as an EXPERIMENT in generality: every
+artifact is badged by how it was produced. The census is the finding:
+**13 representations generated mechanically from canonical source, 6
+from the event log, 30 requiring authored insight** — and the n/a
+cells cluster exactly where generality dies (spreadsheets can't hold
+unbounded control; circuits can't hold data-dependent comparisons;
+cellular automata fit only local-rule algorithms). The 13 source-auto
+grammars encode just TWO data sets — the syntax tree and the
+control/data-flow graph — both already recorded here (#85, #131,
+build_dataflow). The 30 authored rows are algorithm-pedagogy and stay
+in the atlas: porting them would break the no-authored-scenes rule.
+What remains for THIS tool is the log-auto family's one missing view
+and two small completions:
+
+### 136. The sequence diagram — lifelines from the log
+*(belongs with Section 7 — the replayer as a medium)*
+- **What:** a `seq` view over a WINDOW of the trace (a chapter, a
+  selection, or between two bookmarks — a whole run is too tall and
+  the cap says so): lifelines = the modules (or classes, where the
+  MRO machinery knows `self`) that act in the window; arrows = call
+  events in order, labeled with the function name; activation bars =
+  the call's extent (the #133 nesting, redrawn); returns close the
+  bar, exceptions mark it. Threads/tasks come for free: a lane is a
+  lifeline group. Time flows down in EVENT order — not wall time,
+  stated in the corner. Click an arrow = jump to that call.
+- **Why:** the classic onboarding question is "who talks to whom, in
+  what order". The call tree aggregates it (identity, no sequence
+  between siblings' subtrees at a glance); the lanes show
+  interleaving (no interaction grammar). The sequence diagram is the
+  missing third projection of the SAME call/return events — and the
+  atlas proved the row log-auto on all ten algorithms.
+- **How:** pure projection, renderer-only, zero schema change: the
+  #133 builder already computes nesting; group frames by module (or
+  class via the recorded MRO supplier), lay lifelines left-to-right
+  by first appearance, draw arrows per call event in the window.
+  Cap lifelines (~12) and arrows (~400), both announced; composes
+  with chapters (#98: one diagram per test) and deep links (#106).
+- **Effort:** M.
+- **Prior art:** UML sequence diagrams; Jacobson interaction
+  diagrams; the atlas's H4 row (generated from event log, 10/10).
+
+### 137. The observed decision table
+*(belongs with Section 2 — deeper causality; sibling of #77/#86)*
+- **What:** per function, the branching truth summary AS A TABLE:
+  one row per guard (the CFG already knows them) — ran N× · true
+  T× · false F× — with never-true / never-false flagged and each
+  cell a jump to its first occurrence. The atlas's G1 row, made
+  OBSERVED: not the combinations that could happen, the ones that
+  did. When #86's BRANCH events land, compound guards (`a and b`)
+  gain sub-condition columns; until then whole-guard rows, said
+  plainly.
+- **Why:** the verdicts exist per event (#31) and the whyline
+  answers one line at a time (#77); nothing shows a function's
+  WHOLE branching behavior in one compact, jumpable table.
+  Coverage tools count branches; none show the truth summary
+  inline with the moments.
+- **How:** pure aggregation of recorded cond events per guard line,
+  rendered as a table in the Anatomy panel beside the CFG (same
+  record resolution). Zero schema change.
+- **Effort:** S.
+- **Prior art:** decision tables (the atlas's G1, log-auto 8/10 —
+  two reasoned refusals); coverage.py branch counts, which count
+  but never show.
+
+### 138. Classic grammar skins — flowchart and structogram
+*(belongs with Section 7; presentation-only, explicitly optional)*
+- **What:** alternate DRAWINGS of data already recorded, as a
+  select in the Anatomy panel: #131's CFG rendered as a classic
+  flowchart (diamonds, yes/no labels, orthogonal routing, rounded
+  terminals) and #85's structured AST as a Nassi–Shneiderman
+  structogram. The observed weights, ghost edges and current-block
+  token carry over — the skin changes, the truth doesn't.
+- **Why:** readability and teaching: these are the grammars people
+  already know how to read; the ladder is denser but unfamiliar.
+  No new information — added on the atlas's evidence that both are
+  total functions of source (B1/B2, 10/10 auto), and worth building
+  only when the classic look is wanted.
+- **How:** renderer-only layout modes over the existing cfg/anatomy
+  payloads.
+- **Effort:** S–M per skin.
+- **Prior art:** ISO 5807 flowcharts; Nassi & Shneiderman (1973);
+  the atlas's B1/B2 rows.
 
 ## Deliberately still rejected
 

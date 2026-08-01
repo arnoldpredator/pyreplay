@@ -137,6 +137,18 @@
     transform: translateX(-2px);
   }
   .bmark:hover { background: #aee4ff; }
+  #tripmarks { position: relative; height: 7px; margin: 0 7px 2px; }
+  .tmark {
+    position: absolute; top: 0; width: 4px; height: 7px;
+    background: #e5c07b; border-radius: 2px; cursor: pointer;
+    transform: translateX(-2px);
+  }
+  .tmark.tfirst { width: 6px; transform: translateX(-3px);
+    box-shadow: 0 0 4px #e5c07b; }
+  .tmark:hover { background: #ffe0a3; }
+  .gly.trip { color: #e5c07b; }
+  .tripnote { cursor: pointer; text-decoration: underline;
+    text-underline-offset: 2px; }
   #thread { color: var(--changed-text); margin-left: 8px; }
   #where { color: var(--dim); margin-top: 6px; word-break: break-all; }
   #retval { margin-top: 6px; color: var(--ret); word-break: break-all; }
@@ -414,6 +426,32 @@ if (DATA.error || DATA.truncated) {
     "] — everything before it ran normally but is NOT in this trace. " +
     "The first events reconstruct the call stack and variables at that moment.";
 }
+/* NaN/Inf tripwire (--trip nan): announce the FIRST birth loudly.
+   Appended after the error/trigger text (textContent above would erase
+   a child added earlier), clickable to jump to the moment. */
+if (DATA.trip) {
+  const ft = events.findIndex(e => e.trip);
+  const b = $("banner");
+  if (!b.style.display || b.style.display === "none") {
+    b.className = "info";
+    b.style.display = "block";
+  }
+  const note = document.createElement("span");
+  if (ft >= 0) {
+    const t0 = events[ft].trip[0];
+    note.className = "tripnote";
+    note.textContent = " ☢ first " + (t0.k === "nan" ? "NaN" : "Inf") +
+      " born at event " + (ft + 1) + " — " +
+      (t0.v === "<return>" ? "returned by " + events[ft].fn + "()"
+                           : t0.v + " in " + events[ft].fn) +
+      " (" + events[ft].f + ":" + events[ft].l + "). Click to jump.";
+    note.onclick = () => { stop(); goto(ft); };
+  } else {
+    note.textContent = " ☢ tripwire armed — no NaN/Inf appeared in any " +
+      "recorded value.";
+  }
+  b.appendChild(note);
+}
 
 /* ---------- code panes: one pre-rendered pane per source file ---------- */
 const panes = {};
@@ -622,6 +660,37 @@ function parseNum(s) {
   if (s === "-inf") return -Infinity;
   if (s === "nan") return NaN;
   return Number(s);   // NaN on garbled reprs (unlike parseFloat)
+}
+/* mirror of the tracer's _poison_kind: does this ENCODED value visibly
+   hold a NaN/Inf leaf? Used to place the ☢ glyph on exactly the rows
+   (incl. promoted attrs) whose displayed value carries the poison. */
+function poisonIn(enc) {
+  if (!enc || typeof enc !== "object") return null;
+  if (enc.t === "p") {
+    const v = enc.v;
+    if (typeof v !== "string") return null;
+    if (v === "nan" || v === "-nan" || v.endsWith("(nan)") ||
+        v.endsWith("(-nan)")) return "nan";
+    if (v === "inf" || v === "-inf" || v.endsWith("(inf)") ||
+        v.endsWith("(-inf)")) return "inf";
+    if ((enc.c || "").includes("complex")) {
+      if (v.includes("nan")) return "nan";
+      if (v.includes("inf")) return "inf";
+    }
+    return null;
+  }
+  let kids = [];
+  if (["list", "tuple", "set"].includes(enc.t)) kids = enc.v || [];
+  else if (["dict", "obj"].includes(enc.t))
+    kids = (enc.v || []).map(p => p && p[1]);
+  else return null;
+  let inf = null;
+  for (const k of kids) {
+    const r = poisonIn(k);
+    if (r === "nan") return "nan";
+    if (r === "inf") inf = "inf";
+  }
+  return inf;
 }
 function viewOptions(enc) {
   const opts = ["cells"];
@@ -1670,6 +1739,17 @@ function render() {
         gly += '<span class="gly def" title="⚠ this argument IS the ' +
           'function’s shared mutable default — it persists ' +
           'across calls">⚠def</span>';
+      // tripwire: the poison is born at THIS event; glyph only the rows
+      // whose displayed value actually carries it (an object trip lands
+      // on the poisoned attribute rows, not every attribute)
+      if (ev.trip && ev.trip.some(t => t.v === base)) {
+        const pk = poisonIn(r.enc);
+        if (pk)
+          gly += '<span class="gly trip" title="☢ became ' +
+            (pk === "nan" ? "NaN" : "Infinity") + ' at THIS event — ' +
+            'the birth of the poison; downstream values inherit it, ' +
+            'the crash comes later">☢</span>';
+      }
       // provenance: what produced this variable's new value — each source
       // operand from the static data-flow, linked to where IT was last set
       // (the change index). Static names + dynamic "when" = "why this value".
@@ -1905,6 +1985,31 @@ $("scrub").max = Math.max(0, events.length - 1);
     m.className = "xmark";
     m.style.left = (i / total * 100) + "%";
     m.title = e.x.t + " — " + e.f + ":" + e.l + " (event " + (i + 1) + ")";
+    m.onclick = () => { stop(); goto(i); };
+    box.appendChild(m);
+  });
+  if (box.children.length) {
+    const footer = document.querySelector("footer");
+    footer.insertBefore(box, footer.firstChild);
+  }
+})();
+/* trip markers: every NaN/Inf birth, amber; the first one glows */
+(function () {
+  if (!DATA.trip) return;
+  const box = document.createElement("div");
+  box.id = "tripmarks";
+  const total = Math.max(1, events.length - 1);
+  let first = true;
+  events.forEach((e, i) => {
+    if (!e.trip) return;
+    const m = document.createElement("span");
+    m.className = "tmark" + (first ? " tfirst" : "");
+    first = false;
+    m.style.left = (i / total * 100) + "%";
+    m.title = "☢ " + e.trip.map(t =>
+      (t.v === "<return>" ? "return value" : t.v) + " → " +
+      (t.k === "nan" ? "NaN" : "Inf")).join(", ") +
+      " — " + e.f + ":" + e.l + " (event " + (i + 1) + ")";
     m.onclick = () => { stop(); goto(i); };
     box.appendChild(m);
   });

@@ -1130,6 +1130,47 @@ deco(1); deco(2)
            f"decorator must record the FIRST call only: {wd}")
 
 
+@check("trip: NaN/Inf births marked at kind changes, recovery re-arms (#79)")
+def _():
+    fx = fixture("fx_trip.py", (
+        "def f():\n"
+        "    return float('nan')\n"
+        "a = 1.0\n"
+        "a = a * 1e308 * 10\n"                        # inf birth
+        "a = 2.0\n"                                    # recovery
+        "a = a * 1e308 * 10\n"                        # relapse: marks again
+        "a = a - a\n"                                  # inf -> nan: NEW birth
+        "b = [0.0, float('inf') - float('inf')]\n"    # nan inside a container
+        "c = f()\n"                                    # nan via return value
+        "d = 5\n"))
+    p = run_trace(fx, "--trip", "nan", name="fx_trip_on")
+    expect(p["trip"] == "nan", "payload must carry the trip mode")
+    seq = [(t["v"], t["k"]) for e in p["events"]
+           for t in e.get("trip", [])]
+    expect(seq == [("a", "inf"), ("a", "inf"), ("a", "nan"),
+                   ("b", "nan"), ("<return>", "nan"), ("c", "nan")],
+           f"trip sequence wrong: {seq}")
+    p2 = run_trace(fx, name="fx_trip_off")
+    expect(p2["trip"] is None
+           and not any(e.get("trip") for e in p2["events"]),
+           "no --trip flag must mean no trip marks (unmeasured = unmarked)")
+    # sleeping generators keep their poison memory: a yield must not
+    # re-mark on resume, only the true birth marks
+    fx2 = fixture("fx_trip_gen.py", (
+        "def g():\n"
+        "    x = float('nan')\n"
+        "    yield 1\n"
+        "    x = x + 0\n"                   # still nan: NOT a new birth
+        "    yield 2\n"
+        "for _ in g():\n"
+        "    pass\n"))
+    p3 = run_trace(fx2, "--trip", "nan", name="fx_trip_gen")
+    gseq = [(t["v"], t["k"]) for e in p3["events"]
+            for t in e.get("trip", []) if e["fn"] == "g"]
+    expect(gseq == [("x", "nan")],
+           f"generator poison must mark ONCE across yields: {gseq}")
+
+
 @check("deep links: fragment state machinery wired into the artifact")
 def _():
     # #106 is renderer-side (URL fragment -> viewer state), so the

@@ -13,6 +13,7 @@ overwritten. Use --out NAME.html to pick a name (that one DOES overwrite).
     python tracer.py --start-at myfile.py:42 <script.py> [args...]
     python tracer.py --start-at myfile.py:42 --start-count 57 <script.py>
     python tracer.py --start-when "i == 56" <script.py> [args...]
+    python tracer.py --trip nan <script.py>            # NaN/Inf tripwire
     python tracer.py -m pytest tests/                  # trace a test suite
     python tracer.py --root brian2 -m pytest           # pytest scoped to --root
     python tracer.py --root . -m pytest tests/ -q      # explicit test path
@@ -46,6 +47,13 @@ is, starting with a reconstruction of the live call stack and variables.
 --start-count N arms on the Nth hit instead of the first.
 --start-when EXPR arms when EXPR (evaluated with the frame's variables)
 is true — at the --start-at line if given, else checked on every line.
+
+--trip nan marks the moment each variable first turns NaN/Inf (and each
+return value that carries one out): amber ☢ markers over the scrubber,
+a banner naming the FIRST birth — where the poison was born, not where
+it finally crashed. Line granularity only; marks only what the encoded
+values visibly show (beyond a cap or window = unknown = unmarked; the
+inside of C objects, e.g. arrays, stays invisible).
 
 Traces every file inside the SCOPE ROOT — by default the entry script's
 directory tree (your project). Pass --root DIR to set it explicitly; that is
@@ -543,12 +551,50 @@ def _mro_info(frame):
     return info
 
 
+def _poison_kind(enc):
+    """Scan an ENCODED value for visible NaN/Inf leaves ("nan" beats
+    "inf" when both appear). Working on the encoding — not the live
+    object — keeps the cost bounded by the existing caps and the claim
+    honest: only poison the artifact actually SHOWS is marked; anything
+    beyond a window or item cap stays unknown = unmarked. Reprs like
+    "np.float64(nan)" (numpy 2 scalars are float subclasses) are
+    recognized by their suffix; exotic float-subclass reprs may not be —
+    they stay unmarked, never mismarked."""
+    if not isinstance(enc, dict):
+        return None
+    t = enc.get("t")
+    if t == "p":
+        v = enc.get("v")
+        if not isinstance(v, str):
+            return None
+        if v in ("nan", "-nan") or v.endswith("(nan)") or v.endswith("(-nan)"):
+            return "nan"
+        if v in ("inf", "-inf") or v.endswith("(inf)") or v.endswith("(-inf)"):
+            return "inf"
+        if "complex" in (enc.get("c") or ""):
+            if "nan" in v:
+                return "nan"
+            if "inf" in v:
+                return "inf"
+        return None
+    if t in ("list", "tuple", "set"):
+        kinds = [_poison_kind(x) for x in enc.get("v") or []]
+    elif t in ("dict", "obj"):
+        kinds = [_poison_kind(p[1]) for p in enc.get("v") or []
+                 if isinstance(p, (list, tuple)) and len(p) == 2]
+    else:
+        return None
+    if "nan" in kinds:
+        return "nan"
+    return "inf" if "inf" in kinds else None
+
+
 class Tracer:
     """Callable trace hook: records call/line/return events + variable diffs."""
 
     def __init__(self, root, max_events=MAX_EVENTS, start_at=None,
                  start_when=None, start_count=1, include=None,
-                 exclude=None, granularity="line"):
+                 exclude=None, granularity="line", trip=None):
         self.root = os.path.realpath(root)
         self.max_events = max_events
         self.start_at = start_at        # (filename, lineno) trigger or None
@@ -557,6 +603,8 @@ class Tracer:
         self.include = include or []    # glob patterns (project-relative)
         self.exclude = exclude or []
         self.granularity = granularity  # "line" | "fn"
+        self.trip = trip                # "nan" -> mark NaN/Inf births
+        self._poisoned = {}   # id(frame) -> {var names currently NaN/Inf}
         self._hits = 0
         self._last_ts = time.perf_counter_ns() // 1000
         self._gen_ids = {}    # id(frame) -> generator instance number
@@ -971,11 +1019,39 @@ class Tracer:
         self._snapshots[id(frame)] = cur
         ali = [v for v in by_oid.values() if len(v) > 1]
 
+        # NaN/Inf tripwire (--trip nan): mark the moment a variable's
+        # poison KIND changes — clean -> nan/inf, and also inf -> nan
+        # (an inf that collapses to nan IS a new birth; without the
+        # kind memory the run's first NaN could hide inside an
+        # already-inf variable). Stable poison re-marks nothing; a
+        # recovery re-arms, so a relapse marks again.
+        trips = []
+        if self.trip:
+            pmap = self._poisoned.setdefault(id(frame), {})
+            for name, encv in changed.items():
+                kind = _poison_kind(encv)
+                if kind:
+                    if pmap.get(name) != kind:
+                        pmap[name] = kind
+                        trips.append({"v": name, "k": kind})
+                else:
+                    pmap.pop(name, None)   # recovered — a relapse re-marks
+
         ev = {"e": "exc" if event == "exception" else event,
               "f": rel, "l": frame.f_lineno,
               "fn": frame.f_code.co_name, "ch": changed}
         if event == "return":
             ev["ret"] = encode(arg)
+            if self.trip:
+                # poison leaving THROUGH the return value — visible even
+                # when the caller never assigns it (print(f(x)))
+                rkind = _poison_kind(ev["ret"])
+                if rkind and (gm is None or gm["s"] != "y"):
+                    trips.append({"v": "<return>", "k": rkind})
+            if gm is None or gm["s"] != "y":
+                # true frame death (a yield keeps its poison memory — a
+                # resumed generator's NaN is old news, not a new birth)
+                self._poisoned.pop(id(frame), None)
         elif event == "exception":
             ev["x"] = _exc_info(arg)
         elif event == "call":
@@ -995,6 +1071,8 @@ class Tracer:
             ev["mut"] = muts
         if ali:
             ev["ali"] = ali
+        if trips:
+            ev["trip"] = trips
         tname = self._thread_label()
         if tname != "MainThread":
             ev["t"] = tname
@@ -1728,6 +1806,7 @@ def _write_trace(tr, out, granularity, entry_label, error,
         "truncated": tr.truncated,
         "error": error,
         "startAt": trigger_desc,
+        "trip": getattr(tr, "trip", None),
     }
     template_path = os.path.join(os.path.dirname(SELF),
                                  "replayer_template.html")
@@ -1791,12 +1870,16 @@ class watch:
 
     def __init__(self, out=None, granularity="line", root=None,
                  include=None, exclude=None, max_events=MAX_EVENTS,
-                 once=True):
+                 once=True, trip=None):
         if callable(out):
             raise TypeError("use @watch() with parentheses, not @watch")
         if granularity not in ("line", "fn"):
             raise ValueError("granularity must be 'line' or 'fn'")
+        if trip and granularity == "fn":
+            raise ValueError("trip='nan' needs line granularity "
+                             "(variable values live in line events)")
         self.out = out
+        self.trip = trip
         self.granularity = granularity
         self.root = root
         self.include = include
@@ -1826,7 +1909,7 @@ class watch:
                            else "watch @ <interactive>")
         self._tr = Tracer(root, self.max_events, include=self.include,
                           exclude=self.exclude,
-                          granularity=self.granularity)
+                          granularity=self.granularity, trip=self.trip)
         self._tr.abort_on_cap = False   # never kill the host program
         _watch_active = True
         self._caller = caller
@@ -1902,6 +1985,7 @@ def main(argv):
     module = None
     module_argv = []
     doctor = False
+    trip = None
     while argv and (argv[0].startswith("--") or argv[0] == "-m"):
         if argv[0] == "-m" and len(argv) >= 2:
             # -m MODULE runs a module as __main__ (e.g. -m pytest tests/).
@@ -1943,6 +2027,11 @@ def main(argv):
                 print("error: --max-events expects a positive integer")
                 return 2
             max_events, argv = int(argv[1]), argv[2:]
+        elif argv[0] == "--trip" and len(argv) >= 2:
+            if argv[1] != "nan":
+                print("error: --trip expects 'nan' (NaN/Inf tripwire)")
+                return 2
+            trip, argv = argv[1], argv[2:]
         elif argv[0] == "--start-at" and len(argv) >= 2:
             fname, _, lineno = argv[1].rpartition(":")
             if not fname or not lineno.isdigit():
@@ -1988,6 +2077,11 @@ def main(argv):
     if granularity == "fn" and (start_at or start_when):
         print("error: --start-at/--start-when need line events; "
               "they can't combine with --granularity fn")
+        return 2
+    if trip and granularity == "fn":
+        print("error: --trip nan reads variable values, which only line "
+              "events record — drop --granularity fn (or scope the cost "
+              "with --include instead)")
         return 2
     if backend == "monitoring":
         if MON is None:
@@ -2064,7 +2158,7 @@ def main(argv):
         perfetto = os.path.abspath(perfetto)
 
     tracer = Tracer(root, max_events, start_at, start_when, start_count,
-                    include, exclude, granularity)
+                    include, exclude, granularity, trip=trip)
     old_argv, old_path = sys.argv, sys.path[:]
     if module is not None:
         # pytest discovers tests from its positional paths, or the CWD if it

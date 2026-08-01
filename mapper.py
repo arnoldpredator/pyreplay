@@ -905,6 +905,119 @@ def _graph_lens(modules, imports, heat):
 LEAK_CAP = 100
 
 
+# ---- #96: layering rules — the declared architecture, enforced.
+# An optional .pyreplay-layers file names the layers and their order;
+# the map paints violating import edges red and --check-layers exits
+# non-zero for CI. Grammar (comments with #, blank lines ignored):
+#   layers: ui -> logic -> data     # order = permission: a layer may
+#                                   # import DOWNWARD, never upward
+#   layer ui: main, cli.*           # membership by fnmatch on the
+#   layer logic: cart, discounts    # dotted module id
+#   layer data: store*
+#   forbid cli.* -> store*          # extra explicit ban (module globs)
+# A malformed file REFUSES to enforce (partial rules would pretend
+# the architecture is safe); modules matching no layer are counted,
+# never guessed into one.
+
+def _load_layers(root_dir, override=None):
+    path = override or os.path.join(root_dir, ".pyreplay-layers")
+    if not os.path.exists(path):
+        return None
+    chains, members, forbids, errors = [], {}, [], []
+    order = []   # layer declaration order (first match wins)
+    with open(path, encoding="utf-8") as fh:
+        for ln, raw in enumerate(fh, 1):
+            line = raw.split("#", 1)[0].strip()
+            if not line:
+                continue
+            if line.startswith("layers:"):
+                names = [p.strip() for p in
+                         line[len("layers:"):].split("->")]
+                if len(names) < 2 or not all(names):
+                    errors.append(f"line {ln}: a chain needs at least "
+                                  f"two layer names: {raw.strip()!r}")
+                else:
+                    chains.append(names)
+            elif line.startswith("layer "):
+                head, _, rest = line[len("layer "):].partition(":")
+                name = head.strip()
+                pats = [p.strip() for p in rest.split(",") if p.strip()]
+                if not name or not pats:
+                    errors.append(f"line {ln}: expected 'layer NAME: "
+                                  f"glob, …': {raw.strip()!r}")
+                elif name in members:
+                    errors.append(f"line {ln}: layer {name!r} declared "
+                                  f"twice")
+                else:
+                    members[name] = pats
+                    order.append(name)
+            elif line.startswith("forbid "):
+                parts = [p.strip() for p in
+                         line[len("forbid "):].split("->")]
+                if len(parts) != 2 or not all(parts):
+                    errors.append(f"line {ln}: expected 'forbid GLOB "
+                                  f"-> GLOB': {raw.strip()!r}")
+                else:
+                    forbids.append(parts)
+            else:
+                errors.append(f"line {ln}: unrecognized: {raw.strip()!r}")
+    for chain in chains:
+        for name in chain:
+            if name not in members:
+                errors.append(f"chain names undeclared layer {name!r} "
+                              f"(add a 'layer {name}: …' line)")
+    return {"file": os.path.basename(path), "chains": chains,
+            "members": members, "order": order, "forbids": forbids,
+            "errors": errors}
+
+
+def _layer_violations(rules, imports, internal):
+    """Classify every internal import edge against the declared
+    architecture. Violation = importing UPWARD in a chain (a layer may
+    use what is below it, never what is above), or an explicit forbid.
+    Modules matching no layer are unconstrained and counted."""
+    import fnmatch
+    assign = {}
+    for mod in internal:
+        for name in rules["order"]:
+            if any(fnmatch.fnmatchcase(mod, pat)
+                   for pat in rules["members"][name]):
+                assign[mod] = name
+                break
+    rank = {}   # (chain_idx, layer) -> position; 0 = top
+    for ci, chain in enumerate(rules["chains"]):
+        for pos, name in enumerate(chain):
+            rank.setdefault(name, {})[ci] = pos
+    viol = []
+    seen = set()
+    for e in imports:
+        s, d = e["s"], e["d"]
+        if d not in internal or (s, d) in seen:
+            continue
+        seen.add((s, d))
+        ls, ld = assign.get(s), assign.get(d)
+        rule = None
+        if ls and ld and ls != ld:
+            for ci, chain in enumerate(rules["chains"]):
+                ps = rank.get(ls, {}).get(ci)
+                pd = rank.get(ld, {}).get(ci)
+                if ps is not None and pd is not None and pd < ps:
+                    rule = (f"{ls} may not import {ld} — the chain "
+                            f"says {' -> '.join(chain)}")
+                    break
+        if rule is None:
+            for fa, fb in rules["forbids"]:
+                if fnmatch.fnmatchcase(s, fa) and \
+                        fnmatch.fnmatchcase(d, fb):
+                    rule = f"forbidden: {fa} -> {fb}"
+                    break
+        if rule is not None:
+            viol.append({"s": s, "d": d, "ls": ls, "ld": ld,
+                         "rule": rule})
+    unassigned = sorted(m for m in internal if m not in assign)
+    return {"assign": assign, "viol": viol, "unassigned": unassigned}
+
+
 def _api_leaks(imports, name_imports, all_decls, star_imports):
     def inside(importer, pkg):
         return pkg is not None and (
@@ -1016,15 +1129,22 @@ def main(argv):
     churn_since = "12 months ago"   # #95: git's --since vocabulary
     heat_out = None
     include, exclude = [], []
+    layers_file = None
+    check_layers = False
     while argv[:1] and argv[0] in ("--out", "--trace", "--no-trace",
                                    "--include", "--exclude", "--heat-out",
-                                   "--churn-since", "--no-churn"):
+                                   "--churn-since", "--no-churn",
+                                   "--layers", "--check-layers"):
         if argv[0] == "--no-trace":   # boolean: refuses auto-heat
             no_trace = True
             argv = argv[1:]
             continue
         if argv[0] == "--no-churn":   # boolean: skip git history
             no_churn = True
+            argv = argv[1:]
+            continue
+        if argv[0] == "--check-layers":   # #96: CI gate
+            check_layers = True
             argv = argv[1:]
             continue
         if len(argv) < 3:
@@ -1038,6 +1158,8 @@ def main(argv):
             heat_out = argv[1]
         elif argv[0] == "--churn-since":
             churn_since = argv[1]
+        elif argv[0] == "--layers":
+            layers_file = argv[1]
         elif argv[0] == "--include":
             include.append(argv[1])
         else:
@@ -1412,9 +1534,45 @@ def main(argv):
                   f"propagation) — compare them against the package "
                   f"boxes on the map")
 
+    # #96: the declared architecture, checked against every internal
+    # import edge — a malformed rules file refuses to enforce
+    layers = None
+    rules = _load_layers(root_dir, layers_file)
+    if rules is not None:
+        if rules["errors"]:
+            print(f"layers: {rules['file']} has "
+                  f"{len(rules['errors'])} problem(s) — NOT enforced "
+                  f"(partial rules would pretend the architecture is "
+                  f"safe):")
+            for msg in rules["errors"][:8]:
+                print(f"    {msg}")
+            layers = {"file": rules["file"], "errors": rules["errors"],
+                      "viol": [], "assign": {}, "unassigned": [],
+                      "chains": rules["chains"]}
+        else:
+            checked = _layer_violations(rules, imports, internal)
+            layers = {"file": rules["file"], "errors": [],
+                      "chains": rules["chains"],
+                      "assign": checked["assign"],
+                      "viol": checked["viol"],
+                      "unassigned": checked["unassigned"]}
+            chain_txt = "; ".join(" -> ".join(c)
+                                  for c in rules["chains"])
+            print(f"layers ({rules['file']}): {chain_txt or '(no chain)'}"
+                  f" · {len(checked['assign'])} module(s) assigned, "
+                  f"{len(checked['unassigned'])} outside every layer")
+            for v in checked["viol"][:8]:
+                print(f"    VIOLATION: {v['s']} imports {v['d']} — "
+                      f"{v['rule']}")
+            if len(checked["viol"]) > 8:
+                print(f"    … {len(checked['viol']) - 8} more")
+            if not checked["viol"]:
+                print("    no violations — the architecture holds")
+
     payload = {
         "root": name,
         "rootPath": root,
+        "layers": layers,         # #96: declared architecture audit
         "modules": modules,
         "imports": imports,
         "graphlens": graphlens,   # #129, or null on tiny maps
@@ -1452,6 +1610,18 @@ def main(argv):
     if errors:
         print(f"note: {len(errors)} file(s) failed to parse "
               f"(shown on the map)")
+    if check_layers:
+        if layers is None:
+            print("--check-layers: no .pyreplay-layers file found — "
+                  "nothing to check")
+            return 2
+        if layers["errors"]:
+            return 2      # a broken rules file must fail the gate
+        if layers["viol"]:
+            print(f"--check-layers: {len(layers['viol'])} "
+                  f"violation(s) — exit 4")
+            return 4
+        print("--check-layers: architecture holds — exit 0")
     return 0
 
 

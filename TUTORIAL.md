@@ -44,6 +44,18 @@ Cross-package edges always draw. And **hovering any box** — module
 or package, folded or open — lights its arrows instantly while the
 rest recede; no click needed (click keeps meaning fold/expand).
 
+**Layering rules.** Drop a `.pyreplay-layers` file at the root and
+the map becomes the architecture's guardian: `layers: ui -> logic ->
+data` declares the order (a layer may import downward, never upward),
+`layer NAME: glob, …` assigns modules, `forbid A -> B` adds explicit
+bans. Violating imports turn solid red with the broken rule in the
+tooltip, the banner counts them, and the walls panel lists each one.
+Modules outside every layer are counted as unconstrained — never
+guessed. A malformed file refuses to enforce (and says so): partial
+rules would pretend the architecture is safe. In CI,
+`python3 mapper.py --check-layers .` exits 0 when the architecture
+holds, 4 on violations, 2 on a broken rules file.
+
 **Walls** (header button): the top-10 modules by fan-in — how many
 modules import me (←N) vs how many I import (→M). This is how you find
 a codebase's load-bearing walls: in brian2, `brian2/__init__` is

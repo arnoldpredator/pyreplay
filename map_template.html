@@ -67,6 +67,7 @@
   .mod .defrow.hit { fill: var(--warn); font-weight: 700; }
   .mod .defrow.ghost { fill: #79839a; font-style: italic; }
   .iedge.apileak { stroke: #e06c75; stroke-dasharray: 6 4; }
+  .iedge.layerviol { stroke: #ff4d5e; opacity: .95; }
   .mod .gh { fill: #9aa3b8; font-size: 8.5px; }
   /* intra-file call graph: focused function + its neighbours */
   .mod .fnname.caller { fill: var(--warn); font-weight: 700; }
@@ -368,6 +369,17 @@ function buildNote(allCycles) {
             "is complex AND carries the runtime"
           : " — switch the lens to churn × cx to see it"));
   }
+  if (DATA.layers) {                       // #96 declared architecture
+    if (DATA.layers.errors && DATA.layers.errors.length)
+      bits.push("⛔ layers file has " + DATA.layers.errors.length +
+        " problem(s) — NOT enforced");
+    else if (DATA.layers.viol.length)
+      bits.push("⛔ " + DATA.layers.viol.length +
+        " layering violation(s) — red edges; list in walls");
+    else
+      bits.push("⛔̸ architecture holds (" +
+        esc(DATA.layers.file) + ")");
+  }
   if (DATA.apileaks && (DATA.apileaks.modLeaks.length ||
       DATA.apileaks.nameLeaks.length)) {
     bits.push("🔓 " + DATA.apileaks.modLeaks.length +
@@ -432,6 +444,10 @@ if (DATA.heat && DATA.heat.dark && DATA.heat.dark.length)
 /* #100: the leak edge set + toggle */
 const LEAKS = new Set(((DATA.apileaks || {}).edges || [])
   .map(([s, d]) => s + "|" + d));
+/* #96: violating pairs — always painted; a violation is a violation */
+const LVIOL = new Map();
+if (DATA.layers) DATA.layers.viol.forEach(v =>
+  LVIOL.set(v.s + "|" + v.d, v.rule));
 if (LEAKS.size) $("apileaklbl").style.display = "";
 $("showapileaks").onchange = render;
 if (DATA.churn || DATA.graphlens) {   // #95 lenses need history;
@@ -808,9 +824,12 @@ function render() {
                                   intra: gidOf(e.s) === gidOf(e.d) });
     const cyc = isCycEdge(e.s, e.d);
     const lk = LEAKS.has(e.s + "|" + e.d);
-    rec.pairs.push({ t: e.s + "  imports  " + e.d, c: cyc, lk });
+    const vrule = LVIOL.get(e.s + "|" + e.d);
+    rec.pairs.push({ t: e.s + "  imports  " + e.d +
+      (vrule ? "\n   ⛔ " + vrule : ""), c: cyc, lk, vl: !!vrule });
     if (cyc) rec.nCyc++;
     if (lk) rec.nLk++;
+    if (vrule) rec.nViol = (rec.nViol || 0) + 1;
     if (filtering && hits.has(e.s) && hits.has(e.d)) rec.hit = true;
   });
   // cycle-red is DETAIL ON DEMAND: the toggle paints every cyclic edge,
@@ -879,18 +898,20 @@ function render() {
     // marked — a red bundle must say exactly which imports are cyclic
     rec.pairs.sort((a2, b2) => (b2.c ? 1 : 0) - (a2.c ? 1 : 0));
     const p = '<path class="iedge' + (red ? " cyc" : "") +
+      (rec.nViol ? " layerviol" : "") +
       (lkOn ? " apileak" : "") +
       (dim ? " dimmed" : related ? " sel" : anySel ? " fade" : "") +
       '" style="stroke-width:' + sw +
       '" d="M' + tx + " " + y1 + " C" + mx + " " + cy1 + " " + mx + " " +
       cy2 + " " + endX + " " + y2 + '" marker-end="url(#' +
-      (red ? "mx" : related ? "ms" : "mi") + ')"' +
+      (red || rec.nViol ? "mx" : related ? "ms" : "mi") + ')"' +
       (related ? ' marker-start="url(#md)"' : "") +
       ' data-ka="' + esc(rec.aKey) + '" data-kb="' + esc(rec.bKey) +
       '" data-ga="' + esc(rec.gid) + '" data-gb="' + esc(rec.gd) +
       '"><title>' +
       esc(rec.pairs.slice(0, 12).map(q =>
-          (q.c ? "⚠ " : "") + (q.lk ? "🔓 " : "") + q.t)
+          (q.vl ? "⛔ " : "") + (q.c ? "⚠ " : "") +
+          (q.lk ? "🔓 " : "") + q.t)
           .join("\n") +
           (n > 12 ? "\n+" + (n - 12) + " more" : "") +
           (rec.nCyc ? "\n⚠ " + rec.nCyc + " of " + n +
@@ -1739,6 +1760,34 @@ $("walls").onclick = () => {
         '<div class="wallrow" data-id="' + esc(id) +
         '"><span class="win">' + fmtCost(us) + "</span>" + esc(id) +
         "</div>").join("");
+  }
+  // #96: the declared architecture — violations, jumpable
+  const LY = DATA.layers;
+  if (LY && (LY.viol.length || (LY.errors && LY.errors.length))) {
+    if (LY.errors && LY.errors.length) {
+      html += '<div class="wallhead">⛔ layering rules (' +
+        esc(LY.file) + ") — NOT enforced: the file has problems</div>" +
+        LY.errors.slice(0, 6).map(msg =>
+          '<div class="wallrow">' + esc(msg) + "</div>").join("");
+    } else {
+      html += '<div class="wallhead">⛔ layering violations — the ' +
+        "declared architecture (" +
+        esc(LY.chains.map(c => c.join(" → ")).join("; ")) +
+        ") vs the real imports</div>" +
+        LY.viol.slice(0, 30).map(v =>
+          '<div class="wallrow" data-id="' + esc(v.s) + '" title="' +
+          esc(v.rule + " — click to spotlight the importer") +
+          '"><span class="win">⛔</span>' + esc(v.s) + " → " +
+          esc(v.d) + "</div>").join("") +
+        (LY.viol.length > 30
+          ? '<div class="wallnote">… ' + (LY.viol.length - 30) +
+            " more</div>" : "") +
+        '<div class="wallnote">' +
+        Object.keys(LY.assign).length + " module(s) assigned to " +
+        "layers · " + LY.unassigned.length + " outside every layer " +
+        "(unconstrained, never guessed) · violating edges are " +
+        "solid red on the map.</div>";
+    }
   }
   // #100: the leak audit — intended vs real interface
   const AL = DATA.apileaks;

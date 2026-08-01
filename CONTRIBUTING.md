@@ -7,7 +7,7 @@ can pick an item and implement it. Features are numbered **#63 onward**, continu
 in FEATURES.md. Fifteen roadmap items have shipped since the list was
 written (63, 64, 65, 70, 77, 79, 80, 98, 101 v1, 103, 104 Tier 1,
 106, 109, 118, 120 v1) — their rows below are struck through;
-**30 remain unbuilt** (plus the stated remainders of 66/74/75/85/88/89/101/104/119/120/126/127/128/132/134).
+**29 remain unbuilt** (plus the stated remainders of 66/74/75/85/88/89/101/104/119/120/126/127/128/132/134).
 
 ## Start here — how to contribute
 
@@ -102,7 +102,7 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
 | 93 | Attach to a running process (PEP 768) | M | ★★★ |
 | 94 | ~~Project-wide static call graph~~ **shipped (drawn edges remain)** | L | ★★★ |
 | 95 | ~~Git churn × complexity overlay~~ **shipped** | — | ★★★ |
-| 96 | Declared layering rules; violations in red | S | ★★ |
+| 96 | ~~Declared layering rules; violations in red~~ **shipped** | S | ★★ |
 | 97 | ~~Dead-code evidence (static x dynamic join)~~ **shipped** | M | ★★ |
 | 98 | ~~Per-test chapters in suite traces~~ **shipped** | — | ★★★ |
 | 99 | ~~Startup import-cost view~~ **shipped** | — | ★★ |
@@ -662,6 +662,7 @@ software.
   (commercial) — none of it free and local.
 
 ### 96. Layering rules (declared architecture, enforced visually)
+**Shipped 2026-08-01** — now catalog entry #96 in [FEATURES.md](FEATURES.md): `.pyreplay-layers` chains/membership/forbids, upward imports red with the rule in the tooltip, walls violation list, unassigned counted never guessed, malformed file refuses to enforce, `--check-layers` exits 0/4/2 for CI.
 - **What:** an optional `.pyreplay-layers` file ("ui → logic → data;
   data must not import ui"); the map paints violating import edges
   red with a VIOLATION list in the notes.

@@ -2157,6 +2157,37 @@ dead or invented panel; every cap and truncation is announced.
 
   [![Feature 97 — dead code](screenshots/97-dead-code.png)](screenshots/97-dead-code.png)
 
+### 96. Layering rules — the declared architecture, enforced visually
+- **Measured:** an optional `.pyreplay-layers` file at the mapped
+  root (or `--layers FILE`) declares the architecture: `layers: ui
+  -> logic -> data` (order is permission — a layer may import
+  downward, never upward), `layer NAME: glob, …` membership by
+  fnmatch on dotted module ids (first declaration wins), `forbid A
+  -> B` explicit bans. Every internal import edge is classified;
+  modules matching no layer are counted as unconstrained, never
+  guessed into one. A malformed rules file REFUSES to enforce —
+  partial rules would pretend the architecture is safe — and says so.
+- **Displayed:** violating edges are solid red with the violated
+  rule in the tooltip (`⛔ data may not import ui — the chain says ui
+  -> logic -> data`); the banner counts violations or states "⛔̸
+  architecture holds"; the walls panel lists every violation,
+  click-to-spotlight, with the assigned/unassigned tallies.
+- **Why:** every codebase has an intended architecture that erodes
+  silently; the map already draws every import — one config file
+  turns it into the architecture's guardian. The visual half is what
+  import-linter never had.
+- **Use case:** the classic sin — `store.py` (data) importing
+  `ui.py` for a formatting helper — is one red edge and one walls
+  row naming the rule it broke, the moment the map opens.
+- **Command:** write `.pyreplay-layers`, re-map. For CI:
+  `python3 mapper.py --check-layers .` — exit 0 when the
+  architecture holds, 4 on violations, 2 on a broken or missing
+  rules file.
+- **Screenshot** — layerdemo: the upward import solid red among
+  blue edges, the banner counting it:
+
+  [![Feature 96 — layers](screenshots/96-layers.png)](screenshots/96-layers.png)
+
 ### 100. API-surface honesty — encapsulation leaks, measured
 - **Measured:** the gap between the intended interface and the real
   one. Three leak classes, pure aggregation over what the map

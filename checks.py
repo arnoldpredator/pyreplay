@@ -2904,6 +2904,100 @@ def _():
         expect(probe in tpl, f"seq contract missing: {probe}")
 
 
+@check("layers: chain ranks, violations, CI exits, refusal (#96)")
+def _():
+    proj = os.path.join(TMP, "layers96")
+    os.makedirs(proj, exist_ok=True)
+    files = {
+        "ui.py": "import logic\n",
+        "logic.py": "import store\n",
+        "store.py": "import ui\n",   # the sin: data reaching up
+        "free.py": "x = 1\n",        # matches no layer
+        ".pyreplay-layers": (
+            "# declared architecture\n"
+            "layers: ui -> logic -> data\n"
+            "layer ui: ui\n"
+            "layer logic: logic\n"
+            "layer data: store\n"),
+    }
+    for name, body in files.items():
+        with open(os.path.join(proj, name), "w", encoding="utf-8") as fh:
+            fh.write(body)
+
+    def run(*flags, name="m96"):
+        out = os.path.join(TMP, name + ".html")
+        r = subprocess.run(
+            [PY, os.path.join(HERE, "mapper.py"), "--out", out,
+             *flags, proj],
+            capture_output=True, text=True, cwd=TMP,
+            stdin=subprocess.DEVNULL, timeout=120)
+        return r, (payload(out) if os.path.exists(out) else None)
+
+    r, p = run()
+    ly = p["layers"]
+    expect(ly and not ly["errors"], f"rules must parse clean: {ly}")
+    expect(ly["assign"] == {"ui": "ui", "logic": "logic",
+                            "store": "data"},
+           f"membership by glob, first declaration wins: {ly['assign']}")
+    expect(ly["unassigned"] == ["free"],
+           "a module matching no layer is counted, never guessed")
+    expect(len(ly["viol"]) == 1 and ly["viol"][0]["s"] == "store"
+           and ly["viol"][0]["d"] == "ui",
+           f"exactly the upward import violates: {ly['viol']}")
+    expect("data may not import ui" in ly["viol"][0]["rule"],
+           f"the rule must name itself: {ly['viol'][0]['rule']}")
+    expect(r.returncode == 0,
+           "without --check-layers the map is informational — exit 0")
+
+    r, _ = run("--check-layers", name="m96b")
+    expect(r.returncode == 4,
+           f"--check-layers with violations must exit 4: "
+           f"{r.returncode}\n{r.stdout}")
+
+    # downward + same-layer imports hold; forbid adds an explicit ban
+    with open(os.path.join(proj, "store.py"), "w",
+              encoding="utf-8") as fh:
+        fh.write("y = 2\n")
+    r, p = run("--check-layers", name="m96c")
+    expect(r.returncode == 0 and not p["layers"]["viol"],
+           f"ui->logic->store downward must hold: "
+           f"{p['layers']['viol']} exit {r.returncode}")
+    with open(os.path.join(proj, ".pyreplay-layers"), "a",
+              encoding="utf-8") as fh:
+        fh.write("forbid ui -> store\n")
+    r, p = run("--check-layers", name="m96d")
+    # ui does not import store directly — the forbid must NOT fire
+    expect(r.returncode == 0 and not p["layers"]["viol"],
+           f"forbid matches EDGES, not reachability: {p['layers']['viol']}")
+    with open(os.path.join(proj, "ui.py"), "a",
+              encoding="utf-8") as fh:
+        fh.write("import store\n")
+    r, p = run("--check-layers", name="m96e")
+    expect(r.returncode == 4 and len(p["layers"]["viol"]) == 1
+           and "forbidden" in p["layers"]["viol"][0]["rule"],
+           f"the explicit ban must trip on the direct edge: "
+           f"{p['layers']['viol']}")
+
+    # a malformed file refuses to enforce and fails the gate
+    with open(os.path.join(proj, ".pyreplay-layers"), "w",
+              encoding="utf-8") as fh:
+        fh.write("layers: a ->\nnonsense\n")
+    r, p = run("--check-layers", name="m96f")
+    expect(r.returncode == 2, f"broken rules must exit 2: {r.returncode}")
+    expect(p["layers"]["errors"] and not p["layers"]["viol"],
+           "broken rules must be carried as errors and enforce NOTHING")
+    expect("NOT enforced" in r.stdout,
+           "the refusal must say itself in the terminal")
+
+    with open(os.path.join(HERE, "map_template.html"),
+              encoding="utf-8") as fh:
+        tpl = fh.read()
+    for probe in ("layerviol", "NOT enforced",
+                  "layering violation(s)",
+                  "unconstrained, never guessed"):
+        expect(probe in tpl, f"layers surface missing: {probe}")
+
+
 @check("records table: shape rule, per-cell diff, sort honesty (#112)")
 def _():
     src = fixture("rec112.py", (

@@ -7,7 +7,7 @@ can pick an item and implement it. Features are numbered **#63 onward**, continu
 in FEATURES.md. Fifteen roadmap items have shipped since the list was
 written (63, 64, 65, 70, 77, 79, 80, 98, 101 v1, 103, 104 Tier 1,
 106, 109, 118, 120 v1) — their rows below are struck through;
-**37 remain unbuilt** (plus the stated remainders of 74/75/85/88/89/101/104/119/120/126/127/128/132/134).
+**36 remain unbuilt** (plus the stated remainders of 66/74/75/85/88/89/101/104/119/120/126/127/128/132/134).
 
 ## Start here — how to contribute
 
@@ -72,7 +72,7 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
 | 63 | ~~Run it N times; count outcomes, catch flakes~~ **shipped** | — | ★★★ |
 | 64 | ~~First event where two runs diverge~~ **shipped (v1)** | — | ★★★ |
 | 65 | ~~Color lines by failing-run correlation (SBFL)~~ **shipped** | — | ★★★ |
-| 66 | Auto-shrink a failing input (ddmin) | M | ★★ |
+| 66 | ~~Input shrinking: ddmin over stdin/argv~~ **shipped (argv model remains)** | M | ★★ |
 | 67 | Random-input entry with seed capture | M | ★★ |
 | 68 | ~~Perturb thread/task schedules to flush races~~ **shipped** | — | ★★★ |
 | 69 | Inject exceptions/latency on purpose | L | ★★ |
@@ -162,6 +162,7 @@ software.
 **Shipped 2026-08-01** — now catalog entry #65 in [FEATURES.md](FEATURES.md), with the full measured/displayed/why/use-case record.
 
 ### 66. Automatic input shrinking (delta debugging)
+**Shipped 2026-08-01** — now catalog entry #66 in [FEATURES.md](FEATURES.md): `--shrink` + `--shrink-model lines|tokens|bytes` + `--shrink-cap` — ddmin with the --check oracle or the same-crash-type oracle, minimal input written + auto-traced at line level + rerun command composed. What remains: shrinking argv (stdin only today) and the #126 hookup (shrink a violated relation's input automatically).
 - **What:** `--shrink` — given a failing run and a failure predicate
   (exception type/site or `--start-when`-style expression), minimize
   the stdin/argv that still reproduces it (ddmin: remove chunks,

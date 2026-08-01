@@ -3419,6 +3419,81 @@ def _():
     expect(b.returncode == 2, "--relation-trials needs --relation")
 
 
+@check("shrink: ddmin to the failing core, same-failure oracle (#66)")
+def _():
+    tgt = fixture("shr66.py", (
+        "import sys\n"
+        "total = 0\n"
+        "for line in sys.stdin:\n"
+        "    parts = line.split()\n"
+        "    if not parts:\n"
+        "        continue\n"
+        "    if parts[0] == 'order':\n"
+        "        total += int(parts[1])\n"
+        "    elif parts[0] == 'refund':\n"
+        "        total -= int(parts[1])\n"
+        "    elif parts[0] == 'audit':\n"
+        "        assert total >= 0, 'books negative'\n"
+        "print(total)\n"))
+    big = "".join(f"order {5 + i % 7}\n" for i in range(30)) \
+        + "refund 999\naudit\n" \
+        + "".join(f"order {3 + i % 5}\n" for i in range(30))
+
+    def shrink(*flags, stdin_text):
+        return subprocess.run([PY, os.path.join(HERE, "tracer.py"),
+                               "--shrink", *flags,
+                               os.path.join(TMP, "shr66.py")],
+                              capture_output=True, text=True, cwd=TMP,
+                              input=stdin_text, timeout=600)
+    r = shrink(stdin_text=big)
+    expect(r.returncode == 0 and "1-minimal" in r.stdout,
+           f"the shrink must reach a 1-minimal core: {r.stdout[-200:]}")
+    with open(os.path.join(TMP, "shrunk_shr66.txt")) as fh:
+        core = fh.read()
+    expect(core == "refund 999\naudit\n",
+           f"62 lines must ddmin to exactly the 2-line cause: {core!r}")
+    expect("SAME failure" in r.stdout and "AssertionError" in r.stdout,
+           "the oracle names the pinned exception type")
+    tr = os.path.join(TMP, "trace_shrunk_shr66.html")
+    p = payload(tr)
+    expect(p["granularity"] == "line"
+           and (p["error"] or "").startswith("AssertionError"),
+           "the minimal case is auto-traced at LINE level with the "
+           "same failure")
+    # the --check oracle: minimize while the check still hits
+    r2 = shrink("--check", "'9' in output and error is None",
+                stdin_text="order 5\norder 900\norder 7\naudit\n")
+    expect(r2.returncode == 0, f"check-oracle shrink: {r2.stdout[-200:]}")
+    with open(os.path.join(TMP, "shrunk_shr66.txt")) as fh:
+        expect("900" in fh.read().strip(),
+               "the check-hitting line survives the shrink")
+    # tokens model + cap honesty
+    tok = fixture("shr66t.py", (
+        "import sys\n"
+        "toks = sys.stdin.read().split()\n"
+        "assert 'boom' not in toks\n"
+        "print(len(toks))\n"))
+    r3 = subprocess.run([PY, os.path.join(HERE, "tracer.py"),
+                         "--shrink", "--shrink-model", "tokens",
+                         os.path.join(TMP, "shr66t.py")],
+                        capture_output=True, text=True, cwd=TMP,
+                        input="a b boom c d e f g", timeout=600)
+    with open(os.path.join(TMP, "shrunk_shr66t.txt")) as fh:
+        expect(fh.read().strip() == "boom",
+               "token model must isolate the single failing token")
+    r4 = subprocess.run([PY, os.path.join(HERE, "tracer.py"),
+                         "--shrink", "--shrink-cap", "2",
+                         os.path.join(TMP, "shr66.py")],
+                        capture_output=True, text=True, cwd=TMP,
+                        input=big, timeout=600)
+    expect("CAP REACHED" in r4.stdout and "best so far" in r4.stdout,
+           "a bitten cap must be announced, never silent")
+    # honesty: a clean input has nothing to shrink toward
+    r5 = shrink(stdin_text="order 5\naudit\n")
+    expect(r5.returncode == 2 and "does not crash" in r5.stdout,
+           "no failure on the full input -> refused with the reason")
+
+
 # ---------------------------------------------------------------- runner
 
 def main():

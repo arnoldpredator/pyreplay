@@ -3993,6 +3993,188 @@ def _build_fsm(events, expr, declared):
             "edges": edge_list, "obs": obs, "viol": n_viol}
 
 
+# ---- #66: automatic input shrinking (ddmin) -----------------------------
+# A 2 MB input that crashes is a chore; the 3-line core that still
+# crashes is a diagnosis. --shrink minimizes the piped stdin against
+# an oracle: with --check EXPR, "the check hits" (child exit 1); with
+# none, "the target crashes with the SAME exception type as the full
+# input" (ddmin must preserve THE failure, never swap it for another).
+# Classic Zeller ddmin over lines / whitespace tokens / bytes, with a
+# per-attempt cap announced when it bites; the minimal input is
+# written to a file and auto-traced at line level.
+
+def _ddmin(units, fails, cap):
+    """Zeller & Hildebrandt 2002, complement-only variant. Returns
+    (minimal units, attempts, capped)."""
+    attempts = [0]
+
+    def test(u):
+        attempts[0] += 1
+        return fails(u)
+    n = 2
+    while len(units) >= 2:
+        if attempts[0] >= cap:
+            return units, attempts[0], True
+        chunk = max(1, len(units) // n)
+        reduced = False
+        i = 0
+        while i < len(units):
+            if attempts[0] >= cap:
+                return units, attempts[0], True
+            comp = units[:i] + units[i + chunk:]
+            if comp and test(comp):
+                units = comp
+                n = max(n - 1, 2)
+                reduced = True
+                break
+            i += chunk
+        if not reduced:
+            if n >= len(units):
+                break
+            n = min(n * 2, len(units))
+    # final single-unit pass: try dropping each remaining unit once
+    i = 0
+    while i < len(units) and len(units) > 1:
+        if attempts[0] >= cap:
+            return units, attempts[0], True
+        comp = units[:i] + units[i + 1:]
+        if test(comp):
+            units = comp
+        else:
+            i += 1
+    return units, attempts[0], False
+
+
+def _shrink_harness(orig_argv, model, cap, check_active, entry_label,
+                    granularity, module, script):
+    stem = (module.replace(".", "_") if module is not None
+            else os.path.splitext(os.path.basename(script))[0])
+    valued = {"--out", "--root", "--export-perfetto", "--include",
+              "--exclude", "--granularity", "--max-events",
+              "--start-at", "--start-count", "--start-when",
+              "--backend", "--trip", "--runs", "--check",
+              "--chaos-schedule", "--sweep", "--gen", "--predict",
+              "--sweep-seed", "--fsm", "--fsm-declare", "--memo",
+              "--relation", "--relation-trials", "--relation-seed",
+              "--shrink-model", "--shrink-cap"}
+    strip = {"--shrink", "--shrink-model", "--shrink-cap", "--out"}
+    child_flags, i = [], 0
+    while i < len(orig_argv):
+        tok = orig_argv[i]
+        if tok == "-m" or not tok.startswith("--"):
+            child_flags.extend(orig_argv[i:])
+            break
+        step = 2 if tok in valued and i + 1 < len(orig_argv) else 1
+        if tok not in strip:
+            child_flags.extend(orig_argv[i:i + step])
+        i += step
+    child_flags = ["--granularity", granularity] + child_flags
+
+    data = b""
+    if not sys.stdin.isatty():
+        try:
+            import select
+            ready, _, _ = select.select([sys.stdin], [], [], 0.5)
+        except Exception:
+            ready = [sys.stdin]
+        if ready:
+            print("pyreplay: reading stdin to EOF (the input to "
+                  "shrink)…", flush=True)
+            try:
+                data = sys.stdin.buffer.read()
+            except Exception:
+                data = b""
+    if not data:
+        print("error: --shrink needs a piped stdin — the input IS "
+              "the thing being minimized")
+        return 2
+
+    if model == "lines":
+        units = data.decode(errors="replace").splitlines(keepends=True)
+        join = "".join
+    elif model == "tokens":
+        units = data.decode(errors="replace").split()
+        join = " ".join
+    else:                                  # bytes
+        units = [data[i:i + 1] for i in range(len(data))]
+        join = b"".join
+
+    tmp_out = os.path.abspath(f".shrink_{stem}_probe.html")
+
+    def run_probe(u):
+        payload_in = join(u)
+        b = payload_in.encode() if isinstance(payload_in, str) \
+            else payload_in
+        cmd = [sys.executable, SELF, "--out", tmp_out] + child_flags
+        r = subprocess.run(cmd, input=b, capture_output=True)
+        err = None
+        if os.path.exists(tmp_out):
+            try:
+                err = _extract_payload(tmp_out).get("error")
+            except Exception:
+                err = "unreadable"
+            finally:
+                try:
+                    os.remove(tmp_out)
+                except OSError:
+                    pass
+        return r.returncode, err
+
+    rc0, err0 = run_probe(units)
+    if check_active:
+        oracle_desc = "the --check expression hits (child exit 1)"
+        if rc0 != 1:
+            print(f"error: the full input does not hit the check "
+                  f"(child exit {rc0}) — the failure must reproduce "
+                  f"BEFORE it can be shrunk")
+            return 2
+
+        def fails(u):
+            return run_probe(u)[0] == 1
+    else:
+        if not err0:
+            print("error: the full input does not crash the target — "
+                  "give --shrink an oracle (--check EXPR) or a "
+                  "crashing input")
+            return 2
+        kind0 = err0.split(":")[0].strip()
+        oracle_desc = (f"the target crashes with {kind0} — the SAME "
+                       f"failure, never a different one")
+
+        def fails(u):
+            _rc, err = run_probe(u)
+            return bool(err) and err.split(":")[0].strip() == kind0
+
+    n0 = len(units)
+    print(f"pyreplay shrink: {entry_label} · {n0} {model} · oracle: "
+          f"{oracle_desc} · cap {cap} attempts", flush=True)
+    minimal, attempts, capped = _ddmin(units, fails, cap)
+    out_txt = join(minimal)
+    out_bytes = (out_txt.encode() if isinstance(out_txt, str)
+                 else out_txt)
+    shrunk_path = os.path.abspath(f"shrunk_{stem}.txt")
+    with open(shrunk_path, "wb") as fh:
+        fh.write(out_bytes)
+    trace_path = os.path.abspath(f"trace_shrunk_{stem}.html")
+    cmd = [sys.executable, SELF, "--out", trace_path,
+           "--granularity", "line"] + child_flags[2:]
+    subprocess.run(cmd, input=out_bytes, capture_output=True)
+    print(f"  {n0} → {len(minimal)} {model} "
+          f"({len(data)} → {len(out_bytes)} bytes) in {attempts} "
+          f"attempt(s)"
+          + (f" — CAP REACHED: this is the best so far, not a local "
+             f"minimum (raise --shrink-cap)" if capped else
+             " — 1-minimal: removing any single "
+             + model.rstrip('s') + " un-fails it"), flush=True)
+    print(f"  minimal input -> {os.path.basename(shrunk_path)}")
+    print(f"  line-level trace of the minimal case -> "
+          f"{os.path.basename(trace_path)}")
+    print(f"  rerun: python3 {os.path.basename(SELF)} "
+          + " ".join(shlex.quote(t) for t in child_flags[2:])
+          + f" < {os.path.basename(shrunk_path)}")
+    return 0
+
+
 # ---- #126: the metamorphic relations harness ----------------------------
 # The oracle problem's cheapest instrument: the right answer may be
 # unknown, but its SYMMETRIES are not. --relation "T => R" declares an
@@ -5304,6 +5486,9 @@ def main(argv):
     relations = []       # #126: [{"t","r","tc","rc"}] declared symmetries
     rel_trials = None    # #126: trials per relation (default by gen)
     rel_seed = 1234
+    shrink_flag = False  # #66: ddmin the piped stdin
+    shrink_model = "lines"
+    shrink_cap = 200
     watch_list = []      # #72: [(src, code)] watch expressions
     inv_list = []        # #73: [(src, code, names)] invariants
     check = None         # #70: compiled --check expression
@@ -5483,6 +5668,19 @@ def main(argv):
                 print("error: --relation-seed expects an integer")
                 return 2
             argv = argv[2:]
+        elif argv[0] == "--shrink":
+            shrink_flag = True
+            argv = argv[1:]
+        elif argv[0] == "--shrink-model" and len(argv) >= 2:
+            if argv[1] not in ("lines", "tokens", "bytes"):
+                print("error: --shrink-model is lines | tokens | bytes")
+                return 2
+            shrink_model, argv = argv[1], argv[2:]
+        elif argv[0] == "--shrink-cap" and len(argv) >= 2:
+            if not argv[1].isdigit() or int(argv[1]) < 1:
+                print("error: --shrink-cap expects a positive integer")
+                return 2
+            shrink_cap, argv = int(argv[1]), argv[2:]
         elif argv[0] == "--start-at" and len(argv) >= 2:
             fname, _, lineno = argv[1].rpartition(":")
             if not fname or not lineno.isdigit():
@@ -5518,13 +5716,15 @@ def main(argv):
         # events, so triggers keep the line default even under -m.
         # --runs also defaults to fn: the harness pays every cost N times.
         if (module is not None or runs_n or black_box or sweep_spec
-                or relations) and not (start_at or start_when):
+                or relations or shrink_flag) \
+                and not (start_at or start_when):
             granularity = "fn"
             if not doctor:
                 what = ("-m runs" if module is not None
                         else "--runs" if runs_n
                         else "--sweep" if sweep_spec
                         else "--relation" if relations
+                        else "--shrink" if shrink_flag
                         else "--black-box")
                 print(f"pyreplay: {what} default to --granularity fn "
                       "(call-level overview) — pass --granularity line "
@@ -5598,6 +5798,14 @@ def main(argv):
     if sweep_spec and chaos_seed is not None:
         print("error: --sweep under --chaos-schedule would measure the "
               "chaos, not the algorithm — run the bench unperturbed")
+        return 2
+    if shrink_flag and (runs_n or sweep_spec or relations):
+        print("error: --shrink is its own experiment — run it without "
+              "--runs/--sweep/--relation")
+        return 2
+    if (shrink_model != "lines" or shrink_cap != 200) \
+            and not shrink_flag:
+        print("error: --shrink-model/--shrink-cap belong to --shrink")
         return 2
     if relations and (runs_n or sweep_spec):
         print("error: --relation is its own experiment — run it "
@@ -5686,6 +5894,11 @@ def main(argv):
         return _sweep_harness(orig_argv, sweep_spec, gen_file,
                               predict_src, sweep_seed, out, entry_label,
                               granularity, module, script)
+
+    if shrink_flag:
+        return _shrink_harness(orig_argv, shrink_model, shrink_cap,
+                               check is not None, entry_label,
+                               granularity, module, script)
 
     if relations:
         return _relation_harness(

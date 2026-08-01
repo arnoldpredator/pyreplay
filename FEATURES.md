@@ -2390,6 +2390,37 @@ program behavior as a distribution to be measured.
 
   [![Feature 126 — metamorphic relations](screenshots/126-relations.png)](screenshots/126-relations.png)
 
+### 66. Input shrinking — ddmin to the failing core (`--shrink`)
+- **Measured:** Zeller's delta debugging over the piped stdin: split
+  into lines (default), whitespace tokens or bytes, remove chunks,
+  re-test, recurse — every probe a real child run under the tracer.
+  The oracle: with `--check EXPR`, "the check hits"; without one,
+  "the target crashes with the SAME exception type as the full
+  input" — the failure being preserved, never swapped for another.
+  Attempts capped (`--shrink-cap`, default 200) and the cap is
+  announced when it bites: best-so-far, not a claimed minimum.
+- **Displayed:** the terminal narrative — units before → after,
+  bytes before → after, attempts, "1-minimal: removing any single
+  line un-fails it" — plus three files: the minimal input
+  (`shrunk_*.txt`), a LINE-level trace of the minimal case
+  (`trace_shrunk_*.html`), and the ready-to-paste rerun command.
+- **Why:** a 2 MB input that crashes is a chore; the 3-line core
+  that still crashes is a diagnosis — and minimal inputs make
+  minimal traces, which makes every other instrument sharper.
+- **Use case:** 78 ledger lines crash an audit assertion. Fifteen
+  probes later: `refund 999` + `audit` — the entire failure, two
+  lines, auto-traced at line level with the assertion recorded.
+- **Command:** `python3 tracer.py --shrink app.py < big_input.txt`
+  (+ `--check EXPR` for non-crash oracles, `--shrink-model
+  lines|tokens|bytes`, `--shrink-cap N`). Honesty: a full input
+  that doesn't fail is refused ("the failure must reproduce BEFORE
+  it can be shrunk"); 1-minimality is per-unit, not global
+  minimality.
+- **Screenshot** — the two-line core: oracle named, 78 → 2 lines in
+  15 attempts, the minimal input printed below.
+
+  [![Feature 66 — shrinking](screenshots/66-shrink.png)](screenshots/66-shrink.png)
+
 ## Appendix A — the manual test plan
 
 Agreed flow: work through the catalog top to bottom, ticking each

@@ -598,6 +598,18 @@ be nondeterminism (the report says to pin PYTHONHASHSEED or measure
 with --runs first), and held trials are an observation, never a
 proof. Conservation laws as tests — no oracle required.
 
+**Input shrinking (`--shrink`).** A huge input that crashes is a
+chore; the tiny core that still crashes is a diagnosis. Pipe the
+input and `--shrink` runs Zeller's ddmin over it — lines by default,
+`--shrink-model tokens|bytes` otherwise — re-testing each candidate
+in a real child run. The oracle is honest by construction: with
+`--check` it's "the check hits"; without, it's "the target crashes
+with the SAME exception type" — never a different failure quietly
+substituted. You get the minimal input file, a line-level trace of
+the minimal case, and the rerun command; the attempt cap announces
+itself when it bites. 78 ledger lines shrink to `refund 999` +
+`audit` in fifteen probes.
+
 **Invariant mining (⚗).** Every line trace now mines itself: a
 template library (constants, types, signs, lengths, sorted-at-return,
 per-call monotonicity, order pairs among numeric arguments) is checked

@@ -4,9 +4,10 @@ Everything already built is in FEATURES.md (the 62-feature catalog).
 This file is the other half — **every feature we know we want and have
 not built yet** — and how to contribute one. It's written so a stranger
 can pick an item and implement it. Features are numbered **#63 onward**, continuing the shipped catalog
-in FEATURES.md. Five roadmap items (63, 64, 79, 80, 106) have shipped
-since the list was written — their rows below say so and point at the
-catalog; **59 remain unbuilt**.
+in FEATURES.md. Fifteen roadmap items have shipped since the list was
+written (63, 64, 65, 70, 77, 79, 80, 98, 101 v1, 103, 104 Tier 1,
+106, 109, 118, 120 v1) — their rows below are struck through;
+**49 remain unbuilt** (plus the stated remainders of 101/104/120).
 
 ## Start here — how to contribute
 
@@ -70,19 +71,19 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
 |---|---------|--------|--------|
 | 63 | ~~Run it N times; count outcomes, catch flakes~~ **shipped** | — | ★★★ |
 | 64 | ~~First event where two runs diverge~~ **shipped (v1)** | — | ★★★ |
-| 65 | Color lines by failing-run correlation (SBFL) | S | ★★★ |
+| 65 | ~~Color lines by failing-run correlation (SBFL)~~ **shipped** | — | ★★★ |
 | 66 | Auto-shrink a failing input (ddmin) | M | ★★ |
 | 67 | Random-input entry with seed capture | M | ★★ |
 | 68 | Perturb thread/task schedules to flush races | L | ★★★ |
 | 69 | Inject exceptions/latency on purpose | L | ★★ |
-| 70 | git bisect driven by a trace predicate | S | ★★★ |
+| 70 | ~~git bisect driven by a trace predicate~~ **shipped** | — | ★★★ |
 | 71 | Compare implementations on the same inputs | M | ★★ |
 | 72 | Record extra expressions each line (--watch) | S | ★★ |
 | 73 | Contracts checked during the run (--invariant) | S | ★★ |
 | 74 | Mine the invariants the runs never broke | L | ★★★ |
 | 75 | Full backward slice of a value | L | ★★★ |
 | 76 | Forward taint from an input | L | ★★ |
-| 77 | "Why didn't this line run?" | M | ★★★ |
+| 77 | ~~"Why didn't this line run?"~~ **shipped** | — | ★★★ |
 | 78 | Prove a loop is stuck (state recurrence) | M | ★★ |
 | 79 | ~~Catch the first NaN/Inf at birth~~ **shipped** | — | ★★★ |
 | 80 | ~~Strip-charts + phase portraits of variables~~ **shipped** | — | ★★★ |
@@ -103,18 +104,18 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
 | 95 | Git churn × complexity overlay | M | ★★★ |
 | 96 | Declared layering rules; violations in red | S | ★★ |
 | 97 | Dead code with runtime evidence | M | ★★ |
-| 98 | Per-test chapters in suite traces | M | ★★★ |
+| 98 | ~~Per-test chapters in suite traces~~ **shipped** | — | ★★★ |
 | 99 | Startup import-cost view | S | ★★ |
 | 100 | Public-API vs actual-use leaks | M | ★★ |
-| 101 | Chunked trace + keyframes past 2M events | L | ★★★ |
+| 101 | ~~Chunked trace + keyframes~~ **shipped (v1; windowed replayer remains)** | — | ★★★ |
 | 102 | monitoring-backed cheaper LINE tracing | M | ★★ |
-| 103 | Black-box flight recorder (ring buffer) | M | ★★★ |
-| 104 | Reproducibility capsule (stdin/env/seeds) | S–XL | ★★★ |
+| 103 | ~~Black-box flight recorder (ring buffer)~~ **shipped** | — | ★★★ |
+| 104 | ~~Reproducibility capsule~~ **Tier 1 shipped; seeds/replay remain** | M–XL | ★★★ |
 | 105 | Schema spec + import/export bridges | M | ★★ |
 | 106 | ~~Deep links: a URL that opens a moment~~ **shipped** | — | ★★★ |
 | 107 | Notes pinned to events; exportable | M | ★★ |
 | 108 | Recorded walkthroughs (executable lessons) | M | ★★ |
-| 109 | Query bar over all events | M | ★★★ |
+| 109 | ~~Query bar over all events~~ **shipped** | — | ★★★ |
 | 110 | Two traces side by side, cursors synced | M | ★★ |
 | 111 | Export a panel as video/GIF | M | ★★ |
 | 112 | Sortable table view for list-of-dicts | S | ★★ |
@@ -123,9 +124,9 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
 | 115 | Text bundle of a trace slice | S | ★★ |
 | 116 | Symbolic "what input reaches this line" | XL | ★ |
 | 117 | Full deterministic record/replay | XL | ★★ |
-| 118 | Console & logging lane synced to the trace | M | ★★★ |
+| 118 | ~~Console & logging lane synced to the trace~~ **shipped** | — | ★★★ |
 | 119 | Dynamic edges: runtime relations the parse can't see | M | ★★★ |
-| 120 | Boundary schemas: observed interfaces at the borders | M–L | ★★★ |
+| 120 | ~~Boundary schemas~~ **shipped (v1; cross-run diff + map rows remain)** | M | ★★★ |
 | 121 | NVTX bridge: Python names on the GPU timeline | M | ★★ |
 | 122 | Shadowing & collision audit | S | ★★ |
 | 123 | Float-hygiene probes | S–M | ★★ |
@@ -149,21 +150,7 @@ software.
 **Shipped 2026-08-01 (v1: identical-prefix alignment)** — now catalog entry #64 in [FEATURES.md](FEATURES.md), with the full measured/displayed/why/use-case record.
 
 ### 65. Spectrum-based fault localization (SBFL)
-- **What:** with the #63 harness's passing and failing runs, score
-  every line: executed-in-failures vs executed-in-passes, Ochiai
-  suspiciousness `ef / sqrt((ef+nf)·(ef+ep))`; paint scores on the
-  source and the map as a **suspicion palette** (distinct from heat).
-- **Why:** "which lines correlate with failure" narrows a codebase to
-  a shortlist *before* you read anything — statistics doing the boring
-  half of debugging.
-- **How:** per-run line-coverage bitmaps (cheap at line granularity,
-  or per-function at fn granularity) + a 20-line scoring pass; a
-  ranked "top suspicious" panel with jump links. Honesty: correlation
-  ≠ causation, N stated, ties shown as ties.
-- **Effort:** S once #63 exists (and #98 makes it work per-test).
-- **Prior art:** Tarantula (Jones/Harrold/Stasko 2002), Ochiai (Abreu
-  et al.) — a whole academic field, almost never available to working
-  Python programmers.
+**Shipped 2026-08-01.** Full record: the commit history and the usage docstring (`python3 tracer.py` prints it); the FEATURES.md catalog entry lands with the next docs pass.
 
 ### 66. Automatic input shrinking (delta debugging)
 - **What:** `--shrink` — given a failing run and a failure predicate
@@ -238,22 +225,7 @@ software.
   break it on the bench, not in the air.
 
 ### 70. Behavioral bisect (git × tracer)
-- **What:** a documented `--check EXPR` mode: run the target, exit 0/1
-  on a predicate over the run (exception happened, output contains X,
-  event-count over N, `--start-when`-style state test) — precisely
-  what `git bisect run` needs to find **the commit where behavior
-  changed**.
-- **Why:** connects the two most powerful bisection tools the user
-  has: git's history search and the tracer's ability to *ask questions
-  about a run*. "Which commit made f() start returning None?" becomes
-  one command.
-- **How:** mostly plumbing: reuse the `--start-when` evaluator as a
-  run-level predicate + clean exit codes + a TUTORIAL recipe
-  (`git bisect start BAD GOOD; git bisect run python3 tracer.py
-  --check "..." entry.py`).
-- **Effort:** S.
-- **Prior art:** `git bisect run` — the Torvalds lens in its purest
-  form.
+**Shipped 2026-08-01.** Full record: the commit history and the usage docstring (`python3 tracer.py` prints it); the FEATURES.md catalog entry lands with the next docs pass.
 
 ### 71. Differential testing against a reference implementation
 - **What:** `--oracle brute.py fast.py --fuzz GEN.py` — run two
@@ -361,21 +333,7 @@ software.
   data-lineage tooling in databases.
 
 ### 77. Whyline queries — "why didn't this line run?"
-- **What:** click any line that never executed (or a variable that
-  never changed) and get the causal answer: "the guard at
-  cart.py:38 evaluated False on all 12 arrivals — here they are",
-  chained upward ("and that condition was False because…").
-- **Why:** debugging is half *absence*: the branch not taken, the
-  handler not reached, the function never called. We already record
-  every verdict — the missing piece is the question-answering UI.
-- **How:** static dominator analysis on the function's ast (which
-  branches guard this line) + the recorded verdicts at those guards +
-  coverage. No new events; renderer feature over existing data. The
-  chain view recurses one level per click (keeps it honest and cheap).
-- **Effort:** M.
-- **Prior art:** the Whyline (Amy Ko & Brad Myers) — repeatedly shown
-  to halve debugging time in studies, and virtually absent from real
-  tools.
+**Shipped 2026-08-01.** Full record: the commit history and the usage docstring (`python3 tracer.py` prints it); the FEATURES.md catalog entry lands with the next docs pass.
 
 ### 78. Nontermination detector (state recurrence)
 - **What:** for a loop suspected of hanging: hash (line, frame's
@@ -709,20 +667,7 @@ software.
   the join is the feature.
 
 ### 98. Per-test chapters (the suite dissected)
-- **What:** when the entry is `-m pytest`, record test boundaries as
-  chapter events (a tiny auto-injected pytest plugin): the density
-  strip gains test-colored segments with names; heat can be filtered
-  per test; "which tests touch module X" appears on every map box.
-- **Why:** a suite trace today is one undifferentiated river. Chapters
-  make it navigable — jump to test_checkout's segment — and unlock
-  the killer join: **failing test × SBFL (#65) = ranked suspect
-  lines** from one suite run.
-- **How:** we own the pytest invocation (catalog feature 11) — add `-p pyreplay_shim`
-  injecting start/end/outcome marker events; everything downstream is
-  aggregation and rendering.
-- **Effort:** M.
-- **Prior art:** pytest's own reporting; Google's test-impact
-  analysis — miniaturized to one repo.
+**Shipped 2026-08-01.** Full record: the commit history and the usage docstring (`python3 tracer.py` prints it); the FEATURES.md catalog entry lands with the next docs pass.
 
 ### 99. Import-cost view (startup autopsy)
 - **What:** a dedicated report from any fn trace: time under each
@@ -756,6 +701,8 @@ software.
 ## Section 6 — Scale & interchange
 
 ### 101. Chunked trace + keyframes (the long-planned scale unlock)
+**v1 shipped 2026-08-01** — gzip+base64 chunks past 100k events, async loading, lazy keyframes every 64k. What REMAINS of this entry is the XL sequel: the truly windowed O(window) replayer.
+
 - **What:** break the single embedded JSON into gzipped chunks with
   periodic full-state **keyframes**; the replayer loads O(window)
   around the cursor instead of O(run).
@@ -786,21 +733,11 @@ software.
   sysmon-based speedups prove the win is real.
 
 ### 103. Black-box flight recorder
-- **What:** `--black-box` — near-zero-cost fn-granularity ring buffer
-  (last N events only, in memory); on crash OR on signal
-  (`SIGUSR1`), dump the buffer as a normal trace. Run it always.
-- **Why:** the bug that happens once a week at minute 40 will never
-  happen under a full trace. A flight recorder inverts the deal: pay
-  ~nothing forever, have the last 100k events the moment it matters.
-- **How:** fixed-size deque of encoded events (fn mode + monitoring
-  backend = cheap enough); dump path reuses _write_trace(); the
-  banner states the window honestly ("events before N are lost —
-  ring buffer"). Pairs beautifully with watch() for servers.
-- **Effort:** M.
-- **Prior art:** aviation FDR/CVR; automotive EDR; VizTracer's ring
-  buffer — none produce a self-contained replayer file.
+**Shipped 2026-08-01.** Full record: the commit history and the usage docstring (`python3 tracer.py` prints it); the FEATURES.md catalog entry lands with the next docs pass.
 
 ### 104. Reproducibility capsule (tiers of rr)
+**Tier 1 shipped 2026-08-01** — capsule embedded (cmd, cwd, env facts, lazily-tee'd consumed stdin) with the viewer's Reproduce box. Tiers 2–3 below (--seed-all; deterministic replay) remain.
+
 - **What:** Tier 1 (S): every trace embeds the run's capsule — argv,
   cwd, env subset, python/platform versions, stdin **tee'd** into
   the file, PYTHONHASHSEED — plus a "reproduce" box printing the
@@ -872,20 +809,7 @@ software.
   guides; CodeTour (VS Code) — which tours *source*, not *execution*.
 
 ### 109. The query bar (omniscient search)
-- **What:** search over events, not text: `x == 42`,
-  `type:exception KeyError`, `fn:push after:5000`, `changed:total` —
-  results as a jump list + scrubber pins (the bookmarks machinery).
-- **Why:** a trace is a database currently navigable only by
-  scrubbing. "Find the three moments total exceeded 100" should be a
-  query, not an hour.
-- **How:** in-memory scan over decoded events with a tiny predicate
-  grammar (no eval of user Python in the viewer — parse a fixed
-  grammar honestly); progress + cost shown on big traces (#101 makes
-  it windowed).
-- **Effort:** M.
-- **Prior art:** Bil Lewis's Omniscient Debugger (2003); Pernosco's
-  queries — the feature that makes recorded execution *better* than
-  live debugging, not just equal.
+**Shipped 2026-08-01.** Full record: the commit history and the usage docstring (`python3 tracer.py` prints it); the FEATURES.md catalog entry lands with the next docs pass.
 
 ### 110. Dual synced replayers
 - **What:** open two traces side by side with linked cursors —
@@ -1011,26 +935,7 @@ checked against this list; most of both were already covered
 notes the section it thematically belongs to.
 
 ### 118. Console & logging lane (stdout/stderr/logging as events)
-*(belongs with Section 3 — instruments)*
-- **What:** capture everything the program prints or logs as
-  first-class events tied to the emitting frame and line: a console
-  panel in the replayer synced to the timeline — click a log line to
-  jump to the exact moment it was written, and vice versa; log levels
-  colored; with #98, output attributed per test.
-- **Why:** print-debugging is the most-used debugger on Earth and
-  logs are the one signal every codebase already emits — yet they are
-  divorced from state. Tying each line to its execution moment turns
-  the terminal dump into an index into the trace ("ERROR at line
-  40,312 of the log" becomes "event 8,214, with all variables live").
-- **How:** the runner tees `sys.stdout`/`sys.stderr` (output still
-  reaches the real terminal) and auto-attaches a `logging.Handler`;
-  each write records (stream, text, frame). Schema: LOG events.
-  Honesty: writes made by C extensions below the Python layer bypass
-  the tee — announced.
-- **Effort:** M.
-- **Prior art:** pytest's capsys; every log viewer ever — none of
-  them can jump from a log line to the program state that produced
-  it.
+**Shipped 2026-08-01.** Full record: the commit history and the usage docstring (`python3 tracer.py` prints it); the FEATURES.md catalog entry lands with the next docs pass.
 
 ### 119. Dynamic edges — what the run saw that the parse couldn't
 *(belongs with Section 5 — the map)*
@@ -1059,6 +964,8 @@ notes the section it thematically belongs to.
   layers.
 
 ### 120. Boundary schemas — observed interfaces at the borders
+**v1 shipped 2026-08-01** — per-run observed interfaces with instability warnings and deviant-call jumps. What remains: cross-run diffing, declared-schema checks, map rows.
+
 *(belongs with Section 2/3 — causality & instruments)*
 - **What:** at function/module boundaries, record the *structural
   schema* of arguments and returns — keys, types, nesting, lengths,
@@ -1237,26 +1144,27 @@ standalone gate lacks.
 
 ## If you only build five
 
-(The original five: 63+64, 98, 101, 106, 80 — four of them shipped on
-2026-08-01, so this list moved on.)
+(The previous five — 98, 101, 109, 118, 77 — all shipped on
+2026-08-01, as did the five before them. Third edition:)
 
-1. **#98** — per-test chapters: a suite trace becomes navigable, and
-   failing test × the #63 harness unlocks #65's ranked suspect lines.
-2. **#101** — chunked keyframes: every ambitious feature above hits
-   the 2M-event wall without it.
-3. **#109** — the query bar: a trace is a database; searching it should
-   be a query, not an hour of scrubbing.
-4. **#118** — the console & logging lane: every codebase already emits
-   this signal; tie each line to the exact moment (and state) that
-   produced it.
-5. **#77** — Whyline queries ("why didn't this line run?"): absence
-   made debuggable — repeatedly shown to halve debugging time, and
-   virtually absent from real tools.
+1. **#68** — schedule fuzzing: seeded interleaving perturbation ×
+   the #63 harness turns "works on my machine" into a measured rate.
+   The reliability lab's concurrency edge.
+2. **#88** — happens-before arrows: lanes show interleaving; the
+   arrows show CAUSATION — who woke whom, which put fed which get.
+3. **#119** — dynamic edges: fn traces already know the caller→callee
+   pairs the parse can't see; draw them and the map stops
+   under-reporting exactly where it matters most.
+4. **#95** — churn × complexity × heat: three axes the repo already
+   has, joined into the strongest bug predictor known.
+5. **#75** — the full backward slice: provenance's one hop, closed
+   transitively — "how did this wrong value come to be" as a
+   navigation mode.
 
 ## Good first features (S-effort, self-contained)
 
-#65 (now unblocked — #63 shipped) · #70 · #72 · #73 · #85-static ·
-#96 · #99 · #104-Tier1 · #112 · #113 · #115 · #122 · #124.
+#72 · #73 · #85-static · #96 · #99 · #112 · #113 · #115 · #122 ·
+#124.
 
 ---
 

@@ -3236,6 +3236,114 @@ def _():
            "compressibility, never bare entropy")
 
 
+@check("memo DAG: exact edges, pre/base honesty, frontiers (#134)")
+def _():
+    src = fixture("memo134.py", (
+        "def count_paths(n, m):\n"
+        "    dp = [[0] * m for _ in range(n)]\n"
+        "    for j in range(m):\n"
+        "        dp[0][j] = 1\n"
+        "    for i in range(n):\n"
+        "        dp[i][0] = 1\n"
+        "    for i in range(1, n):\n"
+        "        for j in range(1, m):\n"
+        "            dp[i][j] = dp[i - 1][j] + dp[i][j - 1]\n"
+        "    return dp[n - 1][m - 1]\n"
+        "print(count_paths(4, 5))\n"))
+    p = run_trace(src, "--memo", "dp")
+    M = p["memo"]
+    names = [c["k"] for c in M["cells"]]
+    expect(len(names) == 20 and len(M["edges"]) == 24,
+           f"4x5 grid: 20 cells, 24 edges: {len(names)}/"
+           f"{len(M['edges'])}")
+    expect(M["preReads"] == 0 and M["untracked"] == 0,
+           f"a clean forward DP has no pre-write reads and no "
+           f"frontiers: {M['preReads']}/{M['untracked']}")
+    deps = sorted(names[e["a"]] for e in M["edges"]
+                  if names[e["b"]] == "1,1")
+    expect(deps == ["0,1", "1,0"],
+           f"dp[1][1] must depend on left+above exactly: {deps}")
+    expect(len(M["fills"]) == 21,
+           f"20 first-writes + dp[0][0] rewritten = 21: "
+           f"{len(M['fills'])}")
+    expect(M["bulk"] is not None,
+           "the [[0]*m...] init is a recorded bulk moment")
+    # the wrong-order recurrence: pre-write reads flagged, base split
+    bug = fixture("memo134b.py", (
+        "def countdown(n):\n"
+        "    dp = [0] * n\n"
+        "    for i in range(n - 1):\n"
+        "        dp[i] = dp[i + 1] + 1\n"
+        "    return dp[0]\n"
+        "print(countdown(4))\n"))
+    pb = run_trace(bug, "--memo", "dp", name="memo134b")
+    nb = [c["k"] for c in pb["memo"]["cells"]]
+    kinds = {(nb[e["a"]], nb[e["b"]]): ("pre" if e["pre"] else
+             "base" if e["base"] else "ok")
+             for e in pb["memo"]["edges"]}
+    expect(kinds == {("1", "0"): "pre", ("2", "1"): "pre",
+                     ("3", "2"): "base"},
+           f"reads of later-computed cells are PRE, of never-computed "
+           f"bulk cells BASE: {kinds}")
+    # rolling knapsack: round-1 reads of later-written cells are PRE
+    # ON PURPOSE — the tool states the fact, never guesses intent
+    knap = fixture("memo134k.py", (
+        "def knapsack(items, cap):\n"
+        "    dp = [0] * (cap + 1)\n"
+        "    for w, v in items:\n"
+        "        for j in range(cap, w - 1, -1):\n"
+        "            dp[j] = max(dp[j], dp[j - w] + v)\n"
+        "    return dp[cap]\n"
+        "print(knapsack([(2, 3), (3, 4), (4, 5)], 5))\n"))
+    pk = run_trace(knap, "--memo", "dp", name="memo134k")
+    expect(pk["memo"]["preReads"] == 2
+           and any(e["base"] for e in pk["memo"]["edges"])
+           and pk["memo"]["untracked"] == 0,
+           f"rolling arrays wear PRE (amber, stated), bases dashed: "
+           f"{pk['memo']['preReads']}")
+    # a dependency routed through a CALL is the stated #75 remainder:
+    # dict-memo fib shows its cells but no cross-frame edges
+    fib = fixture("memo134f.py", (
+        "memo = {}\n"
+        "def fib(n):\n"
+        "    if n < 2:\n"
+        "        return n\n"
+        "    if n in memo:\n"
+        "        return memo[n]\n"
+        "    memo[n] = fib(n - 1) + fib(n - 2)\n"
+        "    return memo[n]\n"
+        "print(fib(6))\n"))
+    pf = run_trace(fib, "--memo", "memo", name="memo134f")
+    fk = [c["k"] for c in pf["memo"]["cells"]]
+    expect({"2", "3", "4", "5", "6"} <= set(fk),
+           f"dict-memo cells must appear: {fk}")
+    expect(len(pf["memo"]["edges"]) == 0,
+           "cross-frame dependencies (through fib's calls) are the "
+           "stated #75 remainder — never guessed as edges")
+    # slice writes are counted frontiers, never guessed
+    sl = fixture("memo134s.py", (
+        "dp = [0] * 6\n"
+        "dp[1:3] = [9, 9]\n"
+        "dp[4] = dp[3] + 1\n"
+        "print(dp)\n"))
+    ps = run_trace(sl, "--memo", "dp", name="memo134s")
+    expect(ps["memo"]["untracked"] >= 1,
+           "a slice write is an untracked frontier, counted")
+    # gates
+    r = subprocess.run([PY, os.path.join(HERE, "tracer.py"),
+                        "--memo", "a.b", src],
+                       capture_output=True, text=True, cwd=TMP,
+                       stdin=subprocess.DEVNULL, timeout=60)
+    expect(r.returncode == 2 and "plain name" in r.stdout,
+           "dotted --memo refused with the reason")
+    r = subprocess.run([PY, os.path.join(HERE, "tracer.py"),
+                        "--granularity", "fn", "--memo", "dp", src],
+                       capture_output=True, text=True, cwd=TMP,
+                       stdin=subprocess.DEVNULL, timeout=60)
+    expect(r.returncode == 2 and "LINE" in r.stdout,
+           "--memo at fn granularity refused")
+
+
 # ---------------------------------------------------------------- runner
 
 def main():

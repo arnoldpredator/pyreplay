@@ -262,6 +262,32 @@
     opacity: .4; }
   .cfgt { font-size: 8.5px; }
   .cfgt.ghost { opacity: .5; }
+  #memobox { border-top: 1px solid var(--border); padding: 6px 10px;
+    font-size: 11px; color: var(--dim); }
+  #memobox summary { cursor: pointer; color: var(--text); }
+  #memobox #memostat { color: var(--dim); font-weight: 400; }
+  #memodiag { background: #171a22; border: 1px solid var(--border);
+    border-radius: 4px; margin-top: 3px; overflow: auto;
+    max-height: 360px; }
+  #memonote { color: var(--dim); font-style: italic; font-size: 10.5px;
+    margin-top: 4px; line-height: 1.5; }
+  .mmc rect { fill: #232838; stroke: #4a5468; stroke-width: 1.2;
+    cursor: pointer; }
+  .mmc text { fill: var(--text); font-size: 9px; text-anchor: middle;
+    pointer-events: none; }
+  .mmc.unborn { opacity: .22; }
+  .mmc.justwrit rect { stroke: var(--changed-text); stroke-width: 2.4;
+    fill: #3d3320; }
+  .mmc.justwrit text { fill: var(--changed-text); }
+  .mme { fill: none; stroke: #93a1c0; stroke-width: 1.3;
+    cursor: pointer; }
+  .mme.pre { stroke: var(--warn, #e5c07b); stroke-width: 2; }
+  .mme.base { stroke: #566073; stroke-dasharray: 3 3; }
+  .mme.unborn { opacity: .12; }
+  polygon.mmah { fill: #93a1c0; }
+  polygon.mmah.pre { fill: #e5c07b; }
+  polygon.mmah.base { fill: #566073; }
+  polygon.mmah.unborn { opacity: .12; }
   #fsmbox { border-top: 1px solid var(--border); padding: 6px 10px;
     font-size: 11px; color: var(--dim); }
   #fsmbox summary { cursor: pointer; color: var(--text); }
@@ -636,6 +662,11 @@
       <h2>Console <span id="constat"></span></h2>
       <div id="console"></div>
     </section>
+    <details id="memobox" title="#134: the dependency DAG of the --memo table — fill causality, not fill order" style="display:none">
+      <summary>Subproblem DAG <span id="memostat"></span></summary>
+      <div id="memodiag"></div>
+      <div id="memonote"></div>
+    </details>
     <details id="fsmbox" title="#132: the observed state machine of the --fsm variable — mined from the recorded change stream" style="display:none">
       <summary>State machine <span id="fsmstat"></span></summary>
       <div id="fsmcur"></div>
@@ -2617,6 +2648,163 @@ $("g-reset").onclick = () => {
   gateToast("ledger cleared");
 };
 
+/* #134: the subproblem DAG — the dependency graph of the --memo
+   table, animated as it fills. The grid view shows fill ORDER; this
+   shows fill CAUSALITY: read cells → written cell, edge by edge.
+   Amber ⚠ = a pre-write read (the initialization value of a cell
+   computed later — a rolling array does it on purpose; a forward
+   recurrence doing it is usually the wrong evaluation order); gray
+   dashed = a base-case read of a bulk-initialized, never-computed
+   cell. Frontiers are counted, never guessed. */
+const memoBox = $("memobox");
+const MEMO_DIAG_CAP = 400;
+let memoBuilt = false, memoCur = -1;
+let memoCellEls = null, memoEdgeEls = null;
+function memoGrid() {
+  // all keys "int,int" with small dims -> the DP-table layout
+  const ks = DATA.memo.cells.map(c => c.k.split(","));
+  if (!ks.length || !ks.every(p => p.length === 2
+      && /^-?\d+$/.test(p[0]) && /^-?\d+$/.test(p[1]))) return null;
+  const is = ks.map(p => +p[0]), js = ks.map(p => +p[1]);
+  const i0 = Math.min(...is), i1 = Math.max(...is);
+  const j0 = Math.min(...js), j1 = Math.max(...js);
+  if (i1 - i0 > 40 || j1 - j0 > 40) return null;
+  return { i0, j0, rows: i1 - i0 + 1, cols: j1 - j0 + 1,
+           pos: ks.map(p => [+p[0] - i0, +p[1] - j0]) };
+}
+function memoBuild() {
+  if (memoBuilt) return;
+  memoBuilt = true;
+  const M = DATA.memo;
+  const cells = M.cells.slice(0, MEMO_DIAG_CAP);
+  const capped = M.cells.length > cells.length;
+  const g = memoGrid();
+  const cw = 46, chh = 30, pad = 26;
+  let posOf, W, H;
+  if (g) {
+    posOf = k => [pad + g.pos[k][1] * cw, pad + g.pos[k][0] * chh];
+    W = pad * 2 + g.cols * cw;
+    H = pad * 2 + g.rows * chh;
+  } else {
+    const perRow = 8;
+    posOf = k => [pad + (k % perRow) * cw,
+                  pad + Math.floor(k / perRow) * chh];
+    W = pad * 2 + Math.min(cells.length, perRow) * cw;
+    H = pad * 2 + Math.ceil(cells.length / perRow) * chh;
+  }
+  const parts = [];
+  const eMeta = [];
+  M.edges.forEach(e => {
+    if (e.a >= cells.length || e.b >= cells.length) return;
+    const [xa, ya] = posOf(e.a), [xb, yb] = posOf(e.b);
+    const x1 = xa + (cw - 8) / 2, y1 = ya + (chh - 8) / 2;
+    const x2 = xb + (cw - 8) / 2, y2 = yb + (chh - 8) / 2;
+    const dx = x2 - x1, dy = y2 - y1;
+    const len = Math.hypot(dx, dy) || 1;
+    const ax = x1 + dx * (1 - 16 / len), ay = y1 + dy * (1 - 16 / len);
+    const cls = e.pre ? " pre" : e.base ? " base" : "";
+    const kind = e.pre
+      ? "⚠ PRE-WRITE read: the value read was the initialization, "
+        + "not the computed one — rolling arrays do this on purpose; "
+        + "a forward recurrence doing it is usually the wrong "
+        + "evaluation order (or a write through an alias the memo "
+        + "pass cannot see)"
+      : e.base
+        ? "base-case read of a bulk-initialized cell (never computed)"
+        : "computed-value read";
+    const title = M.cells[e.a].k + " → " + M.cells[e.b].k + " ×" +
+      e.n + " · " + kind + " · click = jump to its first moment";
+    parts.push('<path class="mme' + cls + '" data-mmf="' + e.first +
+      '" data-goto="' + e.first + '" d="M' + x1 + " " + y1 + " L" +
+      ax + " " + ay + '"><title>' + esc2(title) + "</title></path>");
+    const ang = Math.atan2(dy, dx), A = 5;
+    parts.push('<polygon class="mmah' + cls + '" data-mmf="' +
+      e.first + '" points="' +
+      (ax - A * Math.cos(ang - 0.5)) + "," +
+      (ay - A * Math.sin(ang - 0.5)) + " " +
+      (ax - A * Math.cos(ang + 0.5)) + "," +
+      (ay - A * Math.sin(ang + 0.5)) + " " + ax + "," + ay + '"/>');
+    eMeta.push(e.first);
+  });
+  cells.forEach((c, k) => {
+    const [x, y] = posOf(k);
+    const born = c.first === null ? "∞" : c.first;
+    const title = M.name + "[" + c.k + "] — " +
+      (c.first === null
+        ? "never written through a tracked subscript (bulk/init only)"
+        : c.writes + " tracked write(s), first at event " +
+          (c.first + 1) + " — click to jump");
+    parts.push('<g class="mmc" data-mmb="' + born + '"' +
+      (c.first !== null ? ' data-goto="' + c.first + '"' : "") +
+      '><rect x="' + x + '" y="' + y + '" width="' + (cw - 8) +
+      '" height="' + (chh - 8) + '" rx="4"/><text x="' +
+      (x + (cw - 8) / 2) + '" y="' + (y + (chh - 8) / 2 + 3) + '">' +
+      esc2(c.k.length > 9 ? c.k.slice(0, 8) + "…" : c.k) +
+      "</text><title>" + esc2(title) + "</title></g>");
+  });
+  $("memodiag").innerHTML = '<svg width="' + W + '" height="' + H +
+    '" viewBox="0 0 ' + W + " " + H + '">' + parts.join("") + "</svg>";
+  memoCellEls = [...$("memodiag").querySelectorAll(".mmc")];
+  memoEdgeEls = [...$("memodiag").querySelectorAll("[data-mmf]")];
+  const M2 = DATA.memo;
+  $("memonote").textContent =
+    (capped ? "diagram capped at " + MEMO_DIAG_CAP + " of " +
+      M2.cells.length + " cells (announced, never silent). " : "") +
+    (M2.preReads ? "⚠ " + M2.preReads + " pre-write read edge(s) — " +
+      "initialization values read where computed ones may have been " +
+      "meant. " : "") +
+    (M2.untracked ? M2.untracked + " untracked site(s): slice/" +
+      "starred/call-bearing/unevaluable indexes — counted, never " +
+      "guessed. " : "") +
+    "Only subscript writes through the name '" + M2.name + "' are " +
+    "tracked — writes through aliases or C-level routes are not; " +
+    "absence of an edge is never evidence of absence.";
+}
+function updateMemo() {
+  if (!DATA.memo || !memoBox.open) return;
+  memoBuild();
+  // the last fill at or before the cursor = the just-written cell
+  const F = DATA.memo.fills;
+  let lo = 0, hi = F.length - 1, cur = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (F[mid][0] <= idx) { cur = mid; lo = mid + 1; }
+    else hi = mid - 1;
+  }
+  if (cur === memoCur) return;
+  memoCur = cur;
+  memoCellEls.forEach(el => {
+    const b = el.dataset.mmb;
+    const unborn = b === "∞" ? false : +b > idx;
+    el.classList.toggle("unborn", unborn);
+    el.classList.remove("justwrit");
+  });
+  if (cur >= 0) {
+    const el = memoCellEls[F[cur][1]];
+    if (el) el.classList.add("justwrit");
+  }
+  memoEdgeEls.forEach(el => {
+    el.classList.toggle("unborn", +el.dataset.mmf > idx);
+  });
+}
+if (DATA.memo) {
+  memoBox.style.display = "";
+  $("memostat").textContent = "· " + DATA.memo.name + " · " +
+    DATA.memo.cells.length + " cells · " + DATA.memo.edges.length +
+    " edges" + (DATA.memo.preReads
+      ? " · ⚠ " + DATA.memo.preReads + " pre" : "");
+  memoBox.addEventListener("toggle", () => {
+    memoCur = -2;
+    updateMemo();
+  });
+  $("memodiag").addEventListener("click", e => {
+    const t = e.target.closest("[data-goto]");
+    if (!t) return;
+    stop();
+    goto(parseInt(t.dataset.goto, 10));
+  });
+}
+
 /* #132: the observed state machine — one declared name's transition
    diagram, mined from the recorded change stream. Nodes sized by
    dwell, edges weighted with first-occurrence jumps, the current
@@ -3734,6 +3922,7 @@ function render() {
   updateAnatomy();
   updateTree();
   updateFsm();                           // #132: the token walks the machine
+  updateMemo();                          // #134: the table fills causally
   if (gateOn) gateVars();                // #128: claimable names follow
   motionKeys();                          // #135: identity for the NEXT diff
   if (msnap) motionPlay(msnap);

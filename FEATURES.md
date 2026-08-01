@@ -907,6 +907,50 @@ dead or invented panel; every cap and truncation is announced.
 
   [![Feature 75 — backward slice](screenshots/75-slice.png)](screenshots/75-slice.png)
 
+### 134. The subproblem DAG (`--memo NAME`) — fill causality, drawn
+- **Measured:** bind one memo structure and its dependency DAG is
+  mined from the trace: a static pass finds every subscript READ and
+  WRITE of the bound name with its index expressions (calls inside an
+  index are refused — no eval side effects, ever); the dynamic pass
+  reconstructs each frame's scalar namespace event by event and
+  evaluates those indexes at the exact moment each site ran — read
+  cells → written cell, per statement. This is the #75
+  container-element remainder scoped to the bound name. Edge classes,
+  honest by construction: **normal** (read after the cell's first
+  tracked write), **base** (gray dashed — a bulk-initialized,
+  never-computed cell: knapsack's zeros), and **pre** (amber ⚠ — the
+  read saw the *initialization* value of a cell computed later;
+  physically identical whether it's a rolling array on purpose or a
+  wrong-evaluation-order bug, so the tool states the fact and never
+  guesses the intent).
+- **Displayed:** the **Subproblem DAG** panel. Cells with 2-integer
+  keys lay out as the DP table itself; anything else lays out
+  linearly. The replay fills it causally: unwritten cells dim, the
+  just-written cell lit, edges appearing as they happen — the grid
+  view shows fill *order*, this shows fill *causality*. Click any
+  cell or edge to jump to its moment. Frontiers are counted in the
+  note: slice/starred/call-bearing/unevaluable indexes, plus the
+  aliasing caveat.
+- **Why:** dynamic programming is shortest-paths-in-DAGs and the DAG
+  is the part nobody ever sees. It is also a drift detector: a
+  forward recurrence full of amber pre-write reads is usually the
+  wrong evaluation order — visible at the moment it happens.
+- **Use case:** `count_paths(4,5)`: the 4×5 grid fills row by row,
+  every inner cell wearing exactly two edges (left + above), zero
+  amber. Flip the recurrence to read `dp[i+1]` in an ascending loop:
+  every compute edge turns amber ⚠ — the bug's signature, one glance.
+- **Command:** `python3 tracer.py --memo dp algo.py` (one plain name,
+  line granularity). Honesty in-panel: only subscript writes through
+  the name are tracked — aliases and C-level routes are not, and a
+  dependency routed *through a call* (`memo[n] = fib(n-1) + …`) shows
+  its cells but not the cross-frame edge: that is the #75 remainder,
+  stated, never guessed.
+- **Screenshot** — the paths table mid-fill: written cells solid,
+  the frontier dim, `dp[2][2]` just lit, dependency arrows trailing
+  behind the fill wave.
+
+  [![Feature 134 — subproblem DAG](screenshots/134-memo-dag.png)](screenshots/134-memo-dag.png)
+
 ---
 
 ### 80. The oscilloscope — strip-charts & phase portraits

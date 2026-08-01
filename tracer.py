@@ -3132,7 +3132,7 @@ def _doctor(module, script, root, entry_label, module_ok):
 
 def _write_trace(tr, out, granularity, entry_label, error,
                  trigger_desc=None, extra=None, chunked=None,
-                 fsm=None):
+                 fsm=None, memo=None):
     """Build the payload and write the self-contained replayer HTML —
     shared by the CLI run and the in-process watch() bracket, so both
     honor the same contract (line-only linevars/dataflow, the </ escape,
@@ -3178,6 +3178,10 @@ def _write_trace(tr, out, granularity, entry_label, error,
         # observations only; --runs --mine multiplies the evidence
         "mined": mine_invariants([{"events": tr.events}]),
         "fsm": fsm_data,   # #132, or null without --fsm
+        # #134: the subproblem DAG of the bound memo, or null
+        "memo": (_build_memo(tr.events, tr.sources, memo)
+                 if memo is not None and granularity == "line"
+                 else None),
     }
     if extra:
         payload.update(extra)
@@ -3613,7 +3617,7 @@ def _run_harness(orig_argv, n_runs, out, entry_label, granularity,
               "--exclude", "--granularity", "--max-events", "--start-at",
               "--start-count", "--start-when", "--backend", "--trip",
               "--runs", "--check", "--chaos-schedule", "--fsm",
-              "--fsm-declare"}
+              "--fsm-declare", "--memo"}
     # --chaos-schedule is stripped and re-issued per child with a
     # DERIVED seed (base+i-1): N runs under one seed would explore one
     # biased stream N times; N seeds explore N different ones, and any
@@ -3987,6 +3991,282 @@ def _build_fsm(events, expr, declared):
             if declared else None,
             "states": [states[v] for v in order],
             "edges": edge_list, "obs": obs, "viol": n_viol}
+
+
+# ---- #134: the subproblem DAG -------------------------------------------
+# Bind ONE memo structure (--memo dp) and the dependency DAG of its
+# table is mined from the trace: a static pass finds every subscript
+# READ and WRITE of the bound name with its index expressions; the
+# dynamic pass reconstructs frame state per event and evaluates those
+# indexes at the moment each site ran — read cells → written cell,
+# edge by edge, as the table fills. This is the #75 container-element
+# remainder RESTRICTED to the bound name (the generic slice-closure
+# crossing stays open, stated in CONTRIBUTING). Honest frontiers:
+# slice/starred/call-bearing/unevaluable indexes are counted as
+# untracked, never guessed; a read of a cell before its first tracked
+# write is the wrong-evaluation-order signature and is flagged, with
+# the aliasing caveat stated in-panel.
+
+def build_memo_sites(text, rel, name):
+    """Per line: subscript chains of NAME read and written, index
+    expressions compiled for reconstruction-time eval. Calls inside
+    an index are refused (no eval side effects — that chain becomes
+    an untracked site)."""
+    try:
+        tree = ast.parse(text, filename=rel)
+    except SyntaxError:
+        return {}
+
+    def chain_of(node):
+        # dp[i][j] -> Subscript(Subscript(Name dp, i), j) -> [i, j]
+        idxs = []
+        while isinstance(node, ast.Subscript):
+            idxs.append(node.slice)
+            node = node.value
+        if isinstance(node, ast.Name) and node.id == name:
+            return list(reversed(idxs))
+        return None
+
+    def compile_chain(idxs):
+        codes = []
+        for ix in idxs:
+            if isinstance(ix, ast.Slice):
+                return None               # slice: cells untracked
+            for sub in ast.walk(ix):
+                if isinstance(sub, (ast.Call, ast.Starred,
+                                    ast.NamedExpr)):
+                    return None           # no eval side effects, ever
+            try:
+                codes.append(compile(ast.Expression(body=ix), "<memo>",
+                                     "eval"))
+            except (SyntaxError, TypeError, ValueError):
+                return None
+        return codes
+
+    sites = {}
+
+    def site(line):
+        return sites.setdefault(line, {"w": [], "r": [], "untracked": 0,
+                                       "bulk": False})
+
+    class V(ast.NodeVisitor):
+        def visit_Subscript(self, node):
+            idxs = chain_of(node)
+            if idxs is not None:
+                codes = compile_chain(idxs)
+                st = site(node.lineno)
+                kind = ("w" if isinstance(node.ctx, (ast.Store, ast.Del))
+                        else "r")
+                if codes is None:
+                    st["untracked"] += 1
+                else:
+                    st[kind].append(codes)
+                # the chain's own inner subscripts are plumbing, but an
+                # INDEX may itself read the memo (dp[dp[0]]): walk it
+                for ix in idxs:
+                    self.visit(ix)
+                return
+            self.generic_visit(node)
+
+        def visit_Assign(self, node):
+            # dp = ... (whole-name rebind): a BULK write moment
+            for t in node.targets:
+                if isinstance(t, ast.Name) and t.id == name:
+                    site(node.lineno)["bulk"] = True
+            self.generic_visit(node)
+
+    V().visit(tree)
+    return {str(k): v for k, v in sites.items()
+            if v["w"] or v["r"] or v["untracked"] or v["bulk"]}
+
+
+def _memo_parse(enc):
+    """Encoded value -> a hashable index value (int/float/str/bool/
+    None, or a tuple of those). Anything else -> unusable."""
+    if not isinstance(enc, dict):
+        return None, False
+    t = enc.get("t")
+    if t == "p":
+        c, v = enc.get("c"), enc.get("v")
+        try:
+            if c == "int":
+                return int(v), True
+            if c == "float":
+                return float(v), True
+            if c == "bool":
+                return v == "True", True
+            if c == "NoneType":
+                return None, True
+        except (TypeError, ValueError):
+            return None, False
+        return None, False
+    if t == "s":
+        return enc.get("v"), True
+    if t == "tuple" and enc.get("n") == len(enc.get("v") or []):
+        out = []
+        for item in enc["v"]:
+            val, ok = _memo_parse(item)
+            if not ok:
+                return None, False
+            out.append(val)
+        return tuple(out), True
+    return None, False
+
+
+def _memo_eval(codes, ns):
+    """Evaluate one compiled index chain against the reconstructed
+    namespace. Any failure -> None (untracked, never guessed)."""
+    out = []
+    for code in codes:
+        try:
+            v = eval(code, {"__builtins__": {}}, dict(ns))
+        except Exception:
+            return None
+        if isinstance(v, tuple):
+            if not all(isinstance(x, (int, float, str, bool,
+                                      type(None))) for x in v):
+                return None
+        elif not isinstance(v, (int, float, str, bool, type(None))):
+            return None
+        out.append(v)
+    return out
+
+
+def _build_memo(events, sources, name):
+    """The dynamic half: reconstruct frame namespaces (scalars and
+    scalar-tuples only) event by event; at each site line, evaluate
+    the index chains against the state BEFORE the line ran (exactly
+    what the interpreter used) and grow the DAG."""
+    sites_by_file = {rel: build_memo_sites(text, rel, name)
+                     for rel, text in sources.items()}
+    cells, order = {}, []
+    fills = []
+    untracked = 0
+    bulk_ev = None
+    bulk_evs = []
+    raw_edges = []
+    stacks, gen_saved = {}, {}
+
+    def keyfmt(vals):
+        return ",".join(repr(v) for v in vals)
+
+    def cell(k):
+        if k not in cells:
+            cells[k] = {"first": None, "writes": 0, "idx": len(order)}
+            order.append(k)
+        return cells[k]
+
+    for i, ev in enumerate(events):
+        e = ev.get("e")
+        stack = stacks.setdefault(ev.get("t", "main"), [])
+        if e == "call":
+            gm = ev.get("g")
+            if gm is not None and gm.get("s") == "r" \
+                    and gm.get("i") in gen_saved:
+                stack.append(gen_saved.pop(gm["i"]))
+                continue
+            ns = {}
+            for nm, enc in (ev.get("ch") or {}).items():
+                val, ok = _memo_parse(enc)
+                if ok:
+                    ns[nm] = val
+            stack.append({"ns": ns})
+            continue
+        if not stack:
+            continue
+        fr = stack[-1]
+        if e == "return":
+            gm = ev.get("g")
+            if gm is not None and gm.get("s") == "y":
+                gen_saved[gm["i"]] = fr
+            stack.pop()
+            continue
+        # ch of event X = the PREVIOUS statement's effects, already
+        # part of the state BEFORE line X runs — absorb FIRST, then
+        # evaluate this line's sites against the fresh namespace
+        for nm, enc in (ev.get("ch") or {}).items():
+            val, ok = _memo_parse(enc)
+            if ok:
+                fr["ns"][nm] = val
+            else:
+                fr["ns"].pop(nm, None)
+            if nm == name and not fr.get("prev_w"):
+                # the memo changed and the statement that changed it
+                # had no tracked write: append/extend/alias — a bulk
+                # moment (reads of never-tracked cells attribute here)
+                bulk_ev = i
+                bulk_evs.append(i)
+        if e == "line":
+            st = sites_by_file.get(ev.get("f"), {}).get(
+                str(ev.get("l")))
+            if st is not None:
+                if st["bulk"]:
+                    bulk_ev = i
+                    bulk_evs.append(i)
+                untracked += st["untracked"]
+                rkeys = []
+                for codes in st["r"]:
+                    k = _memo_eval(codes, fr["ns"])
+                    if k is None:
+                        untracked += 1
+                    else:
+                        rkeys.append(keyfmt(k))
+                for codes in st["w"]:
+                    k = _memo_eval(codes, fr["ns"])
+                    if k is None:
+                        untracked += 1
+                        bulk_ev = i   # an untracked write is bulk-like
+                        bulk_evs.append(i)
+                        continue
+                    wk = keyfmt(k)
+                    c = cell(wk)
+                    if c["first"] is None:
+                        c["first"] = i
+                    c["writes"] += 1
+                    fills.append([i, c["idx"]])
+                    for rk in rkeys:
+                        if rk != wk:  # aug self-reads are not edges
+                            raw_edges.append((rk, wk, i))
+                for rk in rkeys:
+                    cell(rk)          # a read names the cell, even
+                                      # unwritten (the frontier shows)
+            fr["prev_w"] = bool(st and st["w"])
+
+    edge_map = {}
+    for rk, wk, ev_i in raw_edges:
+        a, b = cells[rk], cells[wk]
+        # Three honest classes. normal: read after the cell's first
+        # tracked write. base (gray dashed): a never-computed cell
+        # read after a bulk init — the legitimate base-case read
+        # (knapsack's zeros). pre (amber ⚠): the read saw the
+        # INITIALIZATION value of a cell that is computed later —
+        # physically identical whether it's a rolling array doing it
+        # on purpose or a forward recurrence in the wrong evaluation
+        # order; the tool states the fact, never guesses the intent.
+        base = pre = False
+        if a["first"] is not None and ev_i < a["first"]:
+            pre = True
+        elif a["first"] is None:
+            if any(bv <= ev_i for bv in bulk_evs):
+                base = True
+            else:
+                pre = True        # read of nothing at all — suspect
+        key = (a["idx"], b["idx"])
+        em = edge_map.setdefault(key, {"n": 0, "first": ev_i,
+                                       "pre": False, "base": False})
+        em["n"] += 1
+        em["pre"] = em["pre"] or pre
+        em["base"] = em["base"] or base
+    edge_list = [{"a": a, "b": b, "n": em["n"], "first": em["first"],
+                  "pre": em["pre"], "base": em["base"]}
+                 for (a, b), em in sorted(edge_map.items(),
+                                          key=lambda kv: kv[1]["first"])]
+    cell_list = [{"k": k, "first": cells[k]["first"],
+                  "writes": cells[k]["writes"]} for k in order]
+    return {"name": name, "cells": cell_list, "edges": edge_list,
+            "fills": fills, "untracked": untracked,
+            "preReads": sum(1 for e in edge_list if e["pre"]),
+            "bulk": bulk_ev}
 
 
 # ---- #74: invariant mining (Daikon-lite) --------------------------------
@@ -4424,7 +4704,7 @@ def _sweep_harness(orig_argv, sweep_spec, gen_file, predict_src,
               "--start-count", "--start-when", "--backend", "--trip",
               "--runs", "--check", "--chaos-schedule", "--sweep",
               "--gen", "--predict", "--sweep-seed", "--fsm",
-              "--fsm-declare"}
+              "--fsm-declare", "--memo"}
     strip = {"--sweep", "--gen", "--predict", "--sweep-seed", "--out",
              "--granularity"}
     child_flags, i = [], 0
@@ -4806,6 +5086,7 @@ def main(argv):
     mine_flag = False    # #74: --runs N --mine (multi-run mining)
     fsm_expr = None      # #132: the ONE declared state name
     fsm_declared = None  # #132: declared transitions, or None
+    memo_name = None     # #134: the ONE bound memo structure
     watch_list = []      # #72: [(src, code)] watch expressions
     inv_list = []        # #73: [(src, code, names)] invariants
     check = None         # #70: compiled --check expression
@@ -4953,6 +5234,18 @@ def main(argv):
                 print(exc)
                 return 2
             argv = argv[2:]
+        elif argv[0] == "--memo" and len(argv) >= 2:
+            if memo_name is not None:
+                print("error: --memo binds ONE structure — the DAG of "
+                      "one table, not a dashboard")
+                return 2
+            if not argv[1].isidentifier():
+                print("error: --memo expects a plain name (the local/"
+                      "global holding the table) — dotted paths are "
+                      "not bound yet")
+                return 2
+            memo_name = argv[1]
+            argv = argv[2:]
         elif argv[0] == "--start-at" and len(argv) >= 2:
             fname, _, lineno = argv[1].rpartition(":")
             if not fname or not lineno.isdigit():
@@ -5038,6 +5331,11 @@ def main(argv):
     if fsm_expr is not None and granularity == "fn":
         print("error: --fsm observes the state per LINE event — drop "
               "--granularity fn (and scope the cost with --include)")
+        return 2
+    if memo_name is not None and granularity == "fn":
+        print("error: --memo reconstructs indexes from LINE events — "
+              "drop --granularity fn (and scope the cost with "
+              "--include)")
         return 2
     if fsm_expr is not None:
         # ride the #72 watch machinery: the change stream IS the log
@@ -5460,7 +5758,8 @@ def main(argv):
                       + (f"  {src}" if src else ""))
     _write_trace(tracer, out, granularity, entry_label, error,
                  trigger_desc, extra=extra, chunked=chunked_opt,
-                 fsm=(fsm_expr, fsm_declared) if fsm_expr else None)
+                 fsm=(fsm_expr, fsm_declared) if fsm_expr else None,
+                 memo=memo_name)
     unstable = []
     for key, b in (bounds or {}).items():
         spots = [(n, d) for n, d in b["args"].items() if len(d) > 1]

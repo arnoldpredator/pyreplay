@@ -7,7 +7,7 @@ can pick an item and implement it. Features are numbered **#63 onward**, continu
 in FEATURES.md. Fifteen roadmap items have shipped since the list was
 written (63, 64, 65, 70, 77, 79, 80, 98, 101 v1, 103, 104 Tier 1,
 106, 109, 118, 120 v1) — their rows below are struck through;
-**39 remain unbuilt** (plus the stated remainders of 74/75/85/88/89/101/104/119/120/127/128/132).
+**38 remain unbuilt** (plus the stated remainders of 74/75/85/88/89/101/104/119/120/127/128/132/134).
 
 ## Start here — how to contribute
 
@@ -140,7 +140,7 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
 | 131 | ~~CFG view: the code as a graph, the run as a path~~ **shipped** | M | ★★★ |
 | 132 | ~~Observed state machine (one declared variable)~~ **shipped (row-click binding remains)** | M | ★★ |
 | 133 | ~~Recursion tree view~~ **shipped** | S | ★★ |
-| 134 | Subproblem DAG (memo dependency view) | M | ★★ |
+| 134 | ~~Subproblem DAG (memo dependency view)~~ **shipped (cross-frame edges remain with #75)** | M | ★★ |
 | 135 | ~~Motion layer (tweened transitions, honest)~~ **shipped** | M | ★★ |
 
 ---
@@ -1342,6 +1342,7 @@ per algorithm.
 
 ### 134. The subproblem DAG
 *(belongs with Section 2 — deeper causality)*
+**Shipped 2026-08-01** — now catalog entry #134 in [FEATURES.md](FEATURES.md): `--memo NAME` — static subscript-site pass + per-event frame-state reconstruction evaluate every index at the moment it ran; DP-table grid layout for 2-int keys, causal fill animation, normal/base/pre edge classes (pre = amber ⚠ init-value read — rolling array or wrong order, fact stated, intent never guessed), frontiers counted (slices, call-bearing indexes, aliases). Built as the #75 container-element remainder SCOPED to the bound name; what remains with #75: cross-frame edges (a dependency routed through a call shows cells, not the edge) and the generic slice-closure crossing.
 - **What:** bind a memo structure (`--memo dp`) and the view draws
   its entries as nodes appearing as they are written, with
   read→write dependency edges mined from the dataflow — the

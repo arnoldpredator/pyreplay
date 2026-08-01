@@ -613,6 +613,22 @@ observed machine ⊆ true machine — a missing edge is never evidence
 of absence. The refund path nobody drew on the whiteboard shows up
 as one red arrow with a pin at the exact moment it happened.
 
+**The subproblem DAG (`--memo`).** Dynamic programming is
+shortest-paths-in-DAGs, and the DAG is the part nobody ever sees.
+Bind the table — `--memo dp` — and the **Subproblem DAG** panel draws
+it: cells laid out as the DP table itself (2-integer keys) filling
+CAUSALLY as you replay — unwritten cells dim, the just-written cell
+lit, read→write dependency arrows appearing statement by statement.
+The grid view shows fill order; this shows fill causality. Edge
+colors carry the honesty: amber ⚠ means the read saw a cell's
+*initialization* value, not a computed one — a rolling array does
+that on purpose, a forward recurrence doing it is usually the wrong
+evaluation order; the tool states the fact and never guesses intent.
+Gray dashed = legitimate base-case reads of bulk-initialized cells.
+Frontiers (slice writes, call-bearing indexes, aliased writes,
+dependencies routed through calls) are counted and stated, never
+guessed.
+
 **The compressibility strip.** Under the density strip, every trace
 of ≥50 events wears a second, thinner strip: gzip bits/event per
 bucket — the run's regularity, measured. Dark = a tight loop (low

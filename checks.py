@@ -2817,6 +2817,24 @@ def _():
            "arguments must ride every call event (the tree's labels)")
 
 
+@check("motion layer: honesty legend + play-only gating (#135)")
+def _():
+    with open(os.path.join(HERE, "replayer_template.html"),
+              encoding="utf-8") as fh:
+        tpl = fh.read()
+    expect(tpl.count("only the endpoints are recorded truth") >= 2,
+           "the interpolation legend must appear on the play control "
+           "AND in presentation mode — motion may never pose as data")
+    expect("motionOn ? motionSnap()" in tpl,
+           "tweens must be gated on play — single-step stays inert")
+    expect("motionOn = false" in tpl and "motionOn = true" in tpl,
+           "stop()/play() must arm and disarm the motion layer")
+    expect("body.presenting" in tpl and 'id="presnote"' in tpl,
+           "presentation mode: chrome-hiding CSS + the on-screen note")
+    for probe in ("data-mkey", "el.animate"):
+        expect(probe in tpl, f"FLIP machinery missing: {probe}")
+
+
 # ---------------------------------------------------------------- runner
 
 def main():

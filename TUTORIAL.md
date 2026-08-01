@@ -655,6 +655,17 @@ their original node — no phantom calls), and the 4000-node render cap
 announces itself. Works at both granularities — on an fn-level trace
 of a real codebase it is the whole run's shape in one panel.
 
+**Motion & presentation.** Press ▶ Play and changes *glide*: a swap's
+two cells slide past each other, a queue advances, graph nodes drift
+to their new places — FLIP tweens over the diff the views already
+draw, with heuristic identity (value+occurrence for primitives, key
+for dict rows, node label for graphs). Single-step never tweens: at
+step speed the highlight is the change. The honesty rule rides the
+play button itself: motion between events is interpolation — only
+the endpoints are recorded truth. `P` (or 🎬) enters presentation
+mode — chrome hidden, large type, code and data side by side for a
+projector — Esc exits.
+
 ## 4f. Recording for real life: the black box, the capsule, the chunks (2026-08)
 
 **The flight recorder (`--black-box`).** Recording becomes a ring

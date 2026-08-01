@@ -905,6 +905,40 @@ dead or invented panel; every cap and truncation is announced.
 
   [![Feature 120 — boundary schemas](screenshots/120-boundary-schemas.png)](screenshots/120-boundary-schemas.png)
 
+### 135. The motion layer — changes glide, honestly (+ presentation mode)
+- **Measured:** nothing — and the feature says so. FLIP tweens ride
+  the diff the views already draw: before each play-speed render the
+  visible cells/bars/grid cells/dict rows/graph nodes are snapshotted
+  by a HEURISTIC identity (value + occurrence for primitives, key for
+  dict rows, label for graph nodes); after the render, whatever moved
+  glides from its old position to its new one.
+- **Displayed:** press ▶ Play and a swap's two cells slide past each
+  other instead of teleporting; a queue advances; graph nodes drift
+  to their new layer. Single-step stays inert by design — at step
+  speed the highlight IS the change; motion exists for the eye at
+  play speed, when element identity is exactly what gets lost.
+  **Presentation mode** (🎬 or `P`): chrome hidden, large type, the
+  code and the data side by side — a classroom projector mode. Esc
+  exits.
+- **Why:** state teleports between events, and at play speed the eye
+  loses which element went where — precisely when watching-the-
+  algorithm is the point. Motion renders a recorded change *as* a
+  change, generically, for whatever the shape views already draw —
+  no per-algorithm authoring, ever.
+- **Use case:** bubble sort at play speed: every comparison that
+  swaps sends the two cells gliding past each other — the sort
+  becomes the dance the textbooks mime with cups.
+- **Command:** any trace → ▶ Play (motion is automatic; stepping
+  never tweens). `P` toggles presentation. Honesty, stated on the
+  play button and in the presentation note: *motion between events
+  is interpolation — only the endpoints are recorded truth; identity
+  for primitives is heuristic.*
+- **Screenshot** — presentation mode, frozen mid-glide: the 5 cell
+  crossing onto the 2's slot during bubble sort's first swap, the
+  interpolation note bottom-right.
+
+  [![Feature 135 — motion](screenshots/135-motion.png)](screenshots/135-motion.png)
+
 ## E. Replayer — control flow & truth
 
 ### 30. Event panel — the line's own cast, before it acts

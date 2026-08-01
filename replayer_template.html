@@ -293,6 +293,24 @@
     color: var(--err); }
   .tlane { color: var(--changed-text); font-size: 10px;
     margin-top: 3px; }
+  body.presenting header, body.presenting #tabs,
+  body.presenting footer, body.presenting #banner {
+    display: none !important; }
+  body.presenting #side { flex: 0 0 52%; }
+  html { scrollbar-color: #39415a #171a22; }
+  body.presenting #vars { font-size: 15px; line-height: 1.7; }
+  body.presenting .vval { overflow-y: hidden; }
+  body.presenting .cell { padding: 6px 14px; font-size: 18px; }
+  body.presenting .cell .idx { font-size: 11px; }
+  body.presenting table.grid td.gcell { padding: 6px 12px;
+    font-size: 16px; }
+  body.presenting .drow { font-size: 15px; }
+  body.presenting #code { font-size: 15px; line-height: 1.75; }
+  #presnote { display: none; position: fixed; right: 12px;
+    bottom: 10px; color: var(--dim); font-size: 11px; z-index: 9;
+    background: rgba(23,26,34,.92); padding: 3px 10px;
+    border-radius: 5px; border: 1px solid var(--border); }
+  body.presenting #presnote { display: block; }
   #qmarks { position: relative; height: 7px; margin: 0 7px 2px; }
   .qmark {
     position: absolute; top: 0; width: 4px; height: 7px;
@@ -493,7 +511,7 @@
     <button id="btn-next" class="primary" title="One event forward (&#8594;)">Step &#9654;</button>
     <button id="btn-over" title="Step over — skip nested calls, stay in this frame (O)">Over &#10549;</button>
     <button id="btn-out" title="Step out — jump to the caller's next event (U)">Out &#10548;</button>
-    <button id="btn-play"  title="Auto-advance on/off (Space)">&#9654; Play</button>
+    <button id="btn-play"  title="Auto-advance on/off (Space). At play speed, changes glide between events (#135) — motion is interpolation; only the endpoints are recorded truth">&#9654; Play</button>
     <select id="speed" title="Play speed (events per second)">
       <option value="2000">crawl (0.5 ev/s)</option>
       <option value="1000" selected>slow (1 ev/s)</option>
@@ -502,6 +520,7 @@
       <option value="15">turbo (66 ev/s)</option>
     </select>
     <button id="btn-last" title="Jump to end (End)">End &#9197;</button>
+    <button id="btn-present" title="Presentation mode (P): chrome hidden, large type, play + motion — Esc exits">&#127916;</button>
     <details id="machmenu" title="Which interpreter-machinery hints to show — the data is always recorded; these only change the display">
       <summary>badges</summary>
       <div class="machbox">
@@ -571,6 +590,9 @@
     </details>
   </div>
 </main>
+<div id="presnote">presenting · Space play/pause · &#8592;/&#8594; step ·
+  P/Esc exits · motion between events is interpolation —
+  only the endpoints are recorded truth</div>
 <footer>
   <div id="slicebar"></div>
   <div id="qbar">
@@ -2256,6 +2278,70 @@ let collapsed = false;   // variables panel: show only changing vars
 let historyVar = null;   // label whose life strip is unfolded
 let lastFnq = "?/";      // view-pref qualifier of the last rendered frame
 
+/* #135: the motion layer — FLIP tweens between consecutive events in
+   the generic views, active only while PLAYING (single-step stays
+   inert: at step speed the highlight is the change). Identity is
+   HEURISTIC and says so: value+occurrence for cells/bars/grid,
+   dict key for rows, node label for graph nodes. The legend's rule:
+   motion between events is interpolation; only the endpoints are
+   recorded truth. */
+let motionOn = false;
+function motionKeys() {
+  $("vars").querySelectorAll(".vrow").forEach(vr => {
+    const nameEl = vr.querySelector(".vname");
+    if (!nameEl || !nameEl.childNodes.length) return;
+    const label = nameEl.childNodes[0].textContent;
+    const occ = {};
+    vr.querySelectorAll(".cell, .bar, td.gcell, .drow, g.gnodeg")
+      .forEach(el => {
+        let v;
+        if (el.classList.contains("gnodeg")) {
+          const t = el.querySelector("text");
+          v = "n:" + (t ? t.textContent : "");
+        } else if (el.classList.contains("drow")) {
+          const k = el.querySelector(".dkey");
+          if (!k) return;
+          v = "k:" + k.textContent;
+        } else if (el.classList.contains("bar")) {
+          v = "b:" + ((el.title.split("= ")[1]) || el.style.height);
+        } else {
+          v = "c:" + (el.childNodes.length
+            ? el.childNodes[0].textContent : "");
+        }
+        const n = occ[v] = (occ[v] || 0) + 1;
+        el.dataset.mkey = label + "|" + v + "#" + n;
+      });
+  });
+}
+function motionSnap() {
+  const m = {};
+  $("vars").querySelectorAll("[data-mkey]").forEach(el => {
+    if (m[el.dataset.mkey] === undefined)
+      m[el.dataset.mkey] = el.getBoundingClientRect();
+  });
+  return m;
+}
+function motionPlay(snap) {
+  const dur = Math.min(300, Math.max(120,
+    parseInt($("speed").value, 10) * 0.55));
+  $("vars").querySelectorAll("[data-mkey]").forEach(el => {
+    const old = snap[el.dataset.mkey];
+    if (!old) return;                      // born: no origin to glide from
+    const now = el.getBoundingClientRect();
+    const dx = old.left - now.left, dy = old.top - now.top;
+    if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return;
+    if (Math.abs(dx) > 600 || Math.abs(dy) > 600) return;  // pane switch
+    el.animate(
+      [{ transform: "translate(" + dx + "px," + dy + "px)" },
+       { transform: "translate(0,0)" }],
+      { duration: dur, easing: "cubic-bezier(.2,.8,.2,1)" });
+  });
+}
+function togglePresent() {
+  document.body.classList.toggle("presenting");
+}
+$("btn-present").onclick = togglePresent;
+
 /* #133: the call tree — not lanes, not a flame chart: the run's
    recursion as the tree it is, every node a frame carrying its
    arguments and return value, the cursor descending live. A pure
@@ -2679,6 +2765,7 @@ $("anatomy").addEventListener("click", e => {
 function render() {
   const ev = events[idx];
   if (!ev) return;
+  const msnap = motionOn ? motionSnap() : null;   // #135
   const { stack } = computeStacks(idx);
   const top = stack[stack.length - 1];
 
@@ -3211,6 +3298,8 @@ function render() {
   renderConsole();
   updateAnatomy();
   updateTree();
+  motionKeys();                          // #135: identity for the NEXT diff
+  if (msnap) motionPlay(msnap);
   $("counter").textContent = (idx + 1) + " / " + events.length;
   $("scrub").value = idx;
   updateHash();
@@ -3224,6 +3313,7 @@ function goto(i) {
 let timer = null;
 function stop() {
   if (timer) { clearInterval(timer); timer = null; }
+  motionOn = false;                      // #135: tweens only at play
   $("btn-play").textContent = "▶ Play";
 }
 function play() {
@@ -3231,6 +3321,7 @@ function play() {
   if (!events.length) return;
   if (idx >= events.length - 1) idx = 0;
   $("btn-play").textContent = "⏸ Pause";
+  motionOn = true;
   timer = setInterval(() => {
     if (idx >= events.length - 1) { stop(); return; }
     goto(idx + 1);
@@ -3541,7 +3632,11 @@ document.addEventListener("keydown", e => {
   }
   if (e.key === "ArrowRight") { stop(); sliceStep(1); }
   else if (e.key === "ArrowLeft") { stop(); sliceStep(-1); }
-  else if (e.key === "Escape") { if (SLICE) exitSlice(); }
+  else if (e.key === "Escape") {
+    if (SLICE) exitSlice();
+    else if (document.body.classList.contains("presenting"))
+      togglePresent();
+  }
   else if (e.key === "Home") { stop(); goto(0); }
   else if (e.key === "End") { stop(); goto(events.length - 1); }
   else if (e.key === " ") { e.preventDefault(); play(); }
@@ -3551,6 +3646,7 @@ document.addEventListener("keydown", e => {
   else if (e.key === "b" || e.key === "B") toggleBookmark();
   else if (e.key === "[") jumpBookmark(-1);
   else if (e.key === "]") jumpBookmark(1);
+  else if (e.key === "p" || e.key === "P") togglePresent();
   else if (e.key === "/") { e.preventDefault(); $("query").focus(); }
 });
 

@@ -10,6 +10,8 @@ venv/
 # Generated output — traces and maps regenerate; don't commit them.
 # (The two TEMPLATES are the source and are kept.)
 trace_*.html
+runs_*.html
+!runs_template.html
 map_*.html
 !map_template.html
 

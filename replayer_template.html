@@ -1960,8 +1960,9 @@ const laneOf = ev => (ev.t || "main") + (ev.tk ? " · " + ev.tk : "");
 })();
 
 function changesFor(label, fid) {
-  // promoted attr rows (self.adj_list) navigate on their parent object
-  const base = label.split(".")[0];
+  // promoted attr rows (self.adj_list) navigate on their parent object;
+  // #72 watch keys carry arbitrary expression text — never split them
+  const base = label.startsWith("watch:") ? label : label.split(".")[0];
   return changeIndex.get(fid + "|" + base) || [];
 }
 

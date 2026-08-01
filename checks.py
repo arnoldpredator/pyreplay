@@ -2491,6 +2491,45 @@ def _():
            f"a fully name-tracked chain has no frontier: {frontier}")
 
 
+@check("watch: observables ride the diff machinery; typo warns (#72)")
+def _():
+    fx = fixture("fx_watch.py", (
+        "nums = [5, 1, 4, 2]\n"
+        "total = 0\n"
+        "for i in range(len(nums)):\n"
+        "    total += nums[i]\n"
+        "nums.sort()\n"
+        "print(total)\n"))
+    out = os.path.join(TMP, "fx_watch.html")
+    r = subprocess.run([PY, os.path.join(HERE, "tracer.py"), "--out", out,
+                        "--watch", "sum(nums)", "--watch", "nums[0]",
+                        "--watch", "len(nozzle)", fx],
+                       capture_output=True, text=True, cwd=TMP,
+                       stdin=subprocess.DEVNULL, timeout=120)
+    p = payload(out)
+
+    def wch(key):
+        return [(i, e["ch"][key]) for i, e in enumerate(p["events"])
+                if key in (e.get("ch") or {})]
+    s = wch("watch:sum(nums)")
+    expect(len(s) == 1 and s[0][1]["v"] == "12",
+           f"sum(nums) is conserved: exactly one birth change of 12, "
+           f"got {s}")
+    n0 = wch("watch:nums[0]")
+    expect(len(n0) == 2 and [c[1]["v"] for c in n0] == ["5", "1"],
+           f"nums[0] changes at birth and at the sort: {n0}")
+    expect(not wch("watch:len(nozzle)"),
+           "a never-evaluable watch must record NOTHING")
+    expect("never evaluable" in (r.stdout + r.stderr),
+           "the typo watch must warn at the end")
+    r2 = subprocess.run([PY, os.path.join(HERE, "tracer.py"),
+                         "--watch", "x", "--granularity", "fn",
+                         "--out", os.path.join(TMP, "wfn.html"), fx],
+                        capture_output=True, text=True, cwd=TMP,
+                        stdin=subprocess.DEVNULL, timeout=60)
+    expect(r2.returncode == 2, "watch under fn granularity must refuse")
+
+
 # ---------------------------------------------------------------- runner
 
 def main():

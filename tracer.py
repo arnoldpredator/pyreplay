@@ -89,6 +89,17 @@ the moment either says yes; 0 clean; 3 if the expression was never
 evaluable anywhere (a typo must never look like a clean run). This
 mode overrides the usual exit-0-on-target-crash behavior.
 
+--watch EXPR (repeatable) records OBSERVABLES: the expression is
+evaluated at every line event of every traced frame and recorded as a
+synthetic variable ("watch:EXPR") with the same change detection, life
+navigation and chart view real variables get — derived quantities
+(lengths, sums, ratios) are often the real signal. Not evaluable in a
+frame = nothing recorded there; a watch that was alive and stops being
+evaluable records "(not evaluable here)" — the honest hole; a watch
+never evaluable ANYWHERE warns at the end (a typo must never look like
+data). Expressions run INSIDE your process — keep them pure. Line
+granularity only; scope the per-line cost with --include.
+
 --black-box turns the tracer into a flight recorder: a ring buffer of
 the LAST --max-events events (fn granularity by default), rotation
 counted and announced in the banner; `kill -USR1 <pid>` dumps the
@@ -692,6 +703,18 @@ class _Ring(collections.deque):
         return self.appended - len(self)
 
 
+class unevaluable:
+    """#72: the honest hole in a watch's life — the expression HAD a
+    value in this frame and then stopped being evaluable (a name left
+    scope, an object died). Shown verbatim; never invented data."""
+
+    def __repr__(self):
+        return "(not evaluable here)"
+
+
+_UNEVALUABLE = unevaluable()
+
+
 class _Chaos:
     """#68: seeded schedule fuzzing. A pulse fires at a traced event
     boundary — a legal switch point anyway — so chaos only biases WHICH
@@ -995,6 +1018,8 @@ class Tracer:
         self.log_capped = False
         self.check = None        # #70: compiled --check expression
         self.chaos = None        # #68: _Chaos instance when fuzzing
+        self.watches = []        # #72: [(src, code)] observables
+        self.watch_hits = {}     # #72: src -> successful evals
         self.check_hit = False
         self.check_hits = 0
         self.check_evals = 0     # successful evaluations (typo honesty)
@@ -1523,7 +1548,26 @@ class Tracer:
         changed = {}
         muts = []
         by_oid = {}
-        for name, value in frame.f_locals.items():
+        items = frame.f_locals.items()
+        if self.watches:
+            # #72: watch expressions ride the SAME diff machinery as
+            # real locals — change detection, life navigation, charts
+            # and windows come free. Eval failure in a frame where the
+            # watch was alive records the honest hole; never evaluable
+            # here records nothing (the end-of-run warning catches a
+            # watch that never evaluated ANYWHERE).
+            items = list(items)
+            for wsrc, wcode in self.watches:
+                wkey = "watch:" + wsrc
+                try:
+                    items.append((wkey, eval(wcode, frame.f_globals,
+                                             frame.f_locals)))
+                    self.watch_hits[wsrc] = \
+                        self.watch_hits.get(wsrc, 0) + 1
+                except Exception:
+                    if wkey in old:
+                        items.append((wkey, _UNEVALUABLE))
+        for name, value in items:
             if name.startswith("__"):
                 continue
             enc = encode(value)
@@ -3371,6 +3415,7 @@ def main(argv):
     runs_n = None
     black_box = False    # #103: ring-buffer flight recorder
     chaos_seed = None    # #68: schedule-fuzzing seed
+    watch_list = []      # #72: [(src, code)] watch expressions
     check = None         # #70: compiled --check expression
     check_src = None
     chunked_opt = None   # #101: None = auto by size
@@ -3422,6 +3467,14 @@ def main(argv):
                 print("error: --trip expects 'nan' (NaN/Inf tripwire)")
                 return 2
             trip, argv = argv[1], argv[2:]
+        elif argv[0] == "--watch" and len(argv) >= 2:
+            try:
+                watch_list.append((argv[1],
+                                   compile(argv[1], "<watch>", "eval")))
+            except SyntaxError as exc:
+                print(f"error: --watch is not a valid expression: {exc}")
+                return 2
+            argv = argv[2:]
         elif argv[0] == "--check" and len(argv) >= 2:
             try:
                 check = compile(argv[1], "<check>", "eval")
@@ -3509,6 +3562,10 @@ def main(argv):
         print("error: --trip nan reads variable values, which only line "
               "events record — drop --granularity fn (or scope the cost "
               "with --include instead)")
+        return 2
+    if watch_list and granularity == "fn":
+        print("error: --watch evaluates per LINE event — drop "
+              "--granularity fn (and scope the cost with --include)")
         return 2
     if runs_n and perfetto:
         print("error: --runs keeps one trace per OUTCOME, not per run — "
@@ -3631,6 +3688,12 @@ def main(argv):
                     include, exclude, granularity, trip=trip,
                     ring=max_events if black_box else None)
     tracer.check = check
+    if watch_list:
+        tracer.watches = watch_list
+        print(f"pyreplay: {len(watch_list)} watch expression(s) "
+              "evaluated at every line event of every traced frame — "
+              "they run INSIDE your process (keep them pure); scope "
+              "the cost with --include", flush=True)
     old_switch = None
     if chaos_seed is not None:
         tracer.chaos = _Chaos(chaos_seed)
@@ -3844,6 +3907,11 @@ def main(argv):
             bytes(stdin_sink.data)).decode("ascii")
         capsule["stdinTrunc"] = stdin_sink.total > len(stdin_sink.data)
     tracer.resolve_hb()   # #88: idents -> lane labels
+    for wsrc, _unused in watch_list:
+        if not tracer.watch_hits.get(wsrc):
+            print(f"pyreplay: watch [{wsrc}] was never evaluable "
+                  f"anywhere — probably a typo (it recorded nothing; "
+                  f"a wrong name must never look like data)", flush=True)
     bounds = _boundaries(tracer.events)
     extra = {"capsule": capsule,
              "ring": ring_info,

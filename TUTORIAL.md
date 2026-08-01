@@ -560,6 +560,16 @@ jumpable to where execution actually arrived. Click an executed line's
 number and you jump to its first execution. Line granularity (under fn
 the panel says why it can't answer).
 
+**Watch expressions (`--watch`).** `--watch "sum(nums)"` evaluates the
+expression at every line event, at *record* time where Python is
+alive, and stores it as a synthetic variable — change highlighting,
+life navigation and the chart view come free. A conserved quantity
+changes once at birth and never again; that silence is the signal.
+Frames where it isn't evaluable record nothing; a watch that dies
+mid-frame records "(not evaluable here)"; one that never evaluates
+anywhere warns at the end. They run inside your process — keep them
+pure, and scope the per-line cost with `--include`.
+
 **The backward slice (✂).** The provenance row's "← from a, b" is one
 hop; the **✂ slice** button beside it iterates to closure — every
 recorded event that contributed to the clicked value, drawn as green

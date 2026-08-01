@@ -7,7 +7,7 @@ can pick an item and implement it. Features are numbered **#63 onward**, continu
 in FEATURES.md. Fifteen roadmap items have shipped since the list was
 written (63, 64, 65, 70, 77, 79, 80, 98, 101 v1, 103, 104 Tier 1,
 106, 109, 118, 120 v1) — their rows below are struck through;
-**44 remain unbuilt** (plus the stated remainders of 75/88/101/104/119/120).
+**43 remain unbuilt** (plus the stated remainders of 75/88/101/104/119/120).
 
 ## Start here — how to contribute
 
@@ -78,7 +78,7 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
 | 69 | Inject exceptions/latency on purpose | L | ★★ |
 | 70 | ~~git bisect driven by a trace predicate~~ **shipped** | — | ★★★ |
 | 71 | Compare implementations on the same inputs | M | ★★ |
-| 72 | Record extra expressions each line (--watch) | S | ★★ |
+| 72 | ~~Record extra expressions each line (--watch)~~ **shipped** | — | ★★ |
 | 73 | Contracts checked during the run (--invariant) | S | ★★ |
 | 74 | Mine the invariants the runs never broke | L | ★★★ |
 | 75 | ~~Full backward slice of a value~~ **shipped (v1; caller-arg crossing remains)** | — | ★★★ |
@@ -248,6 +248,7 @@ software.
 ## Section 2 — Deeper causality (from "what changed" to "why")
 
 ### 72. Watch expressions at record time (reframes a rejected idea)
+**Shipped 2026-08-01** — now catalog entry #72 in [FEATURES.md](FEATURES.md), with the full measured/displayed/why/use-case record.
 - **What:** `--watch "len(queue)" --watch "cart.total()"` — arbitrary
   expressions evaluated **during the run** at each line event of
   chosen frames, recorded as synthetic variables with full life

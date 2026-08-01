@@ -745,6 +745,37 @@ dead or invented panel; every cap and truncation is announced.
 
 ---
 
+### 72. Watch expressions — observables at record time
+- **Measured:** `--watch "sum(nums)" --watch "cart.total()"`
+  (repeatable) — each expression is evaluated at every line event of
+  every traced frame, **where Python is alive**, and recorded as a
+  synthetic variable (`watch:EXPR`) through the same diff machinery
+  as real locals. Not evaluable in a frame → nothing recorded there;
+  a watch that was alive and stops being evaluable records
+  "(not evaluable here)" — the honest hole; never evaluable anywhere
+  → an end-of-run warning (a typo must never look like data).
+  Expressions run inside your process — keep them pure.
+- **Displayed:** an ordinary variable row — change highlighting, life
+  navigation (‹n/m›), cells and the #80 chart view all come free. A
+  conserved quantity shows one birth change and never again; that
+  silence is the signal.
+- **Why:** derived quantities — lengths, sums, ratios, invariant
+  candidates — are often the real observable, and the old rejection
+  stands (replay-side eval belongs to Python, not the viewer): so
+  evaluate at *record* time over the whole run, not one paused
+  moment.
+- **Use case:** `--watch "sum(nums)"` on a sort: one change,
+  value 12, then silence through every swap — conservation made
+  visible. `--watch "nums[0]"` meanwhile changes exactly at the
+  reorder.
+- **Command:** `python3 tracer.py --watch "sum(nums)" --watch
+  "nums[0]" bubble_sort.py` — line granularity only; the per-line
+  cost is announced and scopable with `--include`.
+- **Screenshot** — two watch rows riding beside the real variables:
+  `nums[0] * 10` freshly changed by a swap, `sum(nums)` conserved.
+
+  [![Feature 72 — watch expressions](screenshots/72-watch.png)](screenshots/72-watch.png)
+
 ### 75. The backward slice — transitive provenance (v1)
 - **Measured:** the provenance panel's one hop, iterated to closure.
   From a clicked value, the walk resolves its assignment line's
@@ -1626,7 +1657,7 @@ dead or invented panel; every cap and truncation is announced.
 ## J. Infrastructure (no screenshots needed)
 
 ### 61. `checks.py` — the regression suite
-64 data-level checks (no browser): the tracer re-runs the permanent
+65 data-level checks (no browser): the tracer re-runs the permanent
 example suite and the mapper its fixtures, the embedded JSON is
 extracted from each generated HTML (chunked or not), and the honesty
 invariants are asserted in plain Python — windowed-change correctness,

@@ -17,6 +17,7 @@ overwritten. Use --out NAME.html to pick a name (that one DOES overwrite).
     python tracer.py --runs 50 <script.py>             # N-run statistics
     python tracer.py --fuzz gen.py --runs 50 <script.py>  # input search
     python tracer.py --oracle brute.py fast.py < in.txt   # differential
+    python tracer.py --inject "shop.pay:raises=TimeoutError:on_call=3" main.py
     python tracer.py --diverge good.html bad.html      # first divergence
     python tracer.py -m pytest tests/                  # trace a test suite
     python tracer.py --root brian2 -m pytest           # pytest scoped to --root
@@ -85,6 +86,25 @@ gets a line-level microscope trace and a ready-to-paste --shrink
 command. Composes with --check (a property, not just a crash, as the
 failure), --mine and --chaos-schedule (inputs × schedules explored
 together, both seeds recorded).
+
+--inject "module.func:ACTION[:on_call=N]" is chaos engineering for
+one process: force a chosen callable to raises=ExcName (instantiated
+with an "injected by pyreplay" message), returns=LITERAL (a sentinel;
+ast.literal_eval — nothing evaluates), or stall=MILLISECONDS, on the
+Nth call (1-based) or every call without on_call. Wrappers arm the
+moment the target's module lands (already-imported targets, e.g.
+json.loads, arm immediately); __main__ defs are refused with the
+reason. Every PERFORMED injection is a first-class recorded event
+(e="inj") at the call site that received the fault, the banner says
+PERTURBED (rule 4), the map's auto-heat skips injected traces, and a
+spec that never resolved is reported loudly — a wrong name must
+never look like a survived fault. Composes with --runs (same faults
+each run: the catch rate) and --chaos-schedule; --export-perfetto
+and --sweep are refused (perturbed time is not performance truth).
+Repeat --inject for multiple faults. Error-handling paths are the
+least-tested code anywhere; injection is the only way to SEE them
+run — watch the raise propagate and find out what actually catches
+it.
 
 --oracle REF.py is differential testing: the reference implementation
 IS the specification (the AtCoder workflow, automated). Target and
@@ -891,6 +911,225 @@ class _Chaos:
                 "asyncioHooked": self.asyncio_hooked}
 
 
+def _parse_inject(spec):
+    """Roadmap #2 grammar: TARGET:ACTION=VALUE[:on_call=N]. TARGET is
+    module.func or module.Class.method; ACTION is raises=ExcName |
+    returns=LITERAL | stall=MILLISECONDS. Returns the spec dict or
+    raises SystemExit with the reason."""
+    parts = spec.split(":")
+    if len(parts) < 2:
+        raise SystemExit(
+            'error: --inject expects "module.func:ACTION=VALUE'
+            '[:on_call=N]" — actions: raises=ExcName | '
+            'returns=LITERAL | stall=MILLISECONDS')
+    tgt = parts[0].strip()
+    if "." not in tgt or not all(
+            p.isidentifier() for p in tgt.split(".")):
+        raise SystemExit(f"error: --inject target must be "
+                         f"module.func or module.Class.method — "
+                         f"got: {tgt!r}")
+    if tgt.split(".")[0] == "__main__":
+        raise SystemExit("error: the main script's defs are born "
+                         "DURING the run — inject an imported "
+                         "module's callable (or move the target "
+                         "into a module)")
+    action = value = on_call = None
+    for tok in parts[1:]:
+        k, sep, v = tok.partition("=")
+        k = k.strip()
+        if k == "on_call":
+            if not v.isdigit() or int(v) < 1:
+                raise SystemExit("error: on_call= expects the Nth "
+                                 "call, 1-based (a positive integer)")
+            on_call = int(v)
+            continue
+        if k not in ("raises", "returns", "stall"):
+            raise SystemExit(f"error: --inject action must be "
+                             f"raises|returns|stall, got: {k!r}")
+        if action is not None:
+            raise SystemExit("error: --inject takes ONE action per "
+                             "spec — repeat --inject for more faults")
+        action = k
+        if k == "raises":
+            if not sep or not v or not all(
+                    p.isidentifier() for p in v.split(".")):
+                raise SystemExit("error: raises= expects an exception "
+                                 "NAME (TimeoutError) or dotted path "
+                                 "(socket.timeout)")
+            value = v
+        elif k == "returns":
+            try:
+                value = ast.literal_eval(v)
+            except Exception:
+                raise SystemExit(f"error: returns= expects a Python "
+                                 f"LITERAL (None, 0, 'x', []) — "
+                                 f"nothing evaluates, ever; got "
+                                 f"{v!r}")
+        else:
+            if not v.isdigit() or int(v) < 1:
+                raise SystemExit("error: stall= expects milliseconds "
+                                 "(a positive integer)")
+            value = int(v)
+    if action is None:
+        raise SystemExit("error: --inject needs an action — "
+                         "raises=ExcName | returns=LITERAL | "
+                         "stall=MILLISECONDS")
+    return {"spec": spec, "tgt": tgt, "action": action,
+            "value": value, "on_call": on_call, "_armed": None}
+
+
+class _InjectLoader:
+    """Wraps a real module loader so the injector can arm its specs
+    the moment the module finishes executing — one loader instance
+    per module spec, the shared machinery never mutated."""
+
+    def __init__(self, loader, injector, fullname):
+        self._l, self._i, self._n = loader, injector, fullname
+
+    def create_module(self, spec):
+        return self._l.create_module(spec)
+
+    def exec_module(self, module):
+        self._l.exec_module(module)
+        self._i.try_wrap_module(self._n)
+
+    def __getattr__(self, name):
+        return getattr(self._l, name)
+
+
+class _InjectFinder:
+    """Meta-path hook: intercepts only module names that PREFIX an
+    unarmed target, delegates the real find to PathFinder."""
+
+    def __init__(self, injector):
+        self.injector = injector
+
+    def find_spec(self, fullname, path=None, target=None):
+        pending = [s for s in self.injector.specs
+                   if s["_armed"] is None
+                   and s["tgt"].startswith(fullname + ".")]
+        if not pending:
+            return None
+        import importlib.machinery
+        spec = importlib.machinery.PathFinder.find_spec(
+            fullname, path, target)
+        if spec is None or spec.loader is None:
+            return None
+        spec.loader = _InjectLoader(spec.loader, self.injector,
+                                    fullname)
+        return spec
+
+
+class _Injector:
+    """Roadmap #2: chaos engineering for one process — force a named
+    call site to raise / return a sentinel / stall, and watch what
+    catches it. Wrappers install POST-IMPORT (meta-path hook; targets
+    already imported at install time are wrapped on the spot), every
+    PERFORMED injection is recorded as a first-class e="inj" event,
+    and the run is labeled PERTURBED (constitution rule 4). The
+    trace never lies about what really ran."""
+
+    def __init__(self, specs, tracer):
+        self.specs = specs
+        self.tracer = tracer
+        self.count = 0
+        self.calls = {}                 # id(spec) -> calls seen
+        self.installed = []             # (owner, name, original)
+        self.finder = None
+
+    def install(self):
+        self.finder = _InjectFinder(self)
+        sys.meta_path.insert(0, self.finder)
+        for name in list(sys.modules):  # stdlib/preloaded targets
+            self.try_wrap_module(name)
+
+    def uninstall(self):
+        for owner, name, orig in reversed(self.installed):
+            try:
+                setattr(owner, name, orig)
+            except Exception:
+                pass
+        if self.finder is not None:
+            try:
+                sys.meta_path.remove(self.finder)
+            except ValueError:
+                pass
+
+    def try_wrap_module(self, modname):
+        for spec in self.specs:
+            if spec["_armed"] is not None:
+                continue
+            tgt = spec["tgt"]
+            if not tgt.startswith(modname + "."):
+                continue
+            mod = sys.modules.get(modname)
+            if mod is None:
+                continue
+            rest = tgt[len(modname) + 1:].split(".")
+            owner, deeper = mod, False
+            for part in rest[:-1]:
+                owner = getattr(owner, part, None)
+                if owner is None:
+                    break
+                if isinstance(owner, types.ModuleType):
+                    deeper = True   # a.b is a module: its own import
+                    break           # event will arm attr c
+            if owner is None or deeper:
+                continue
+            if not callable(getattr(owner, rest[-1], None)):
+                continue
+            self._arm(spec, owner, rest[-1])
+
+    def _resolve_exc(self, name):
+        import builtins
+        if "." not in name:
+            exc = getattr(builtins, name, None)
+        else:
+            modpath, _, attr = name.rpartition(".")
+            exc = getattr(sys.modules.get(modpath), attr, None)
+        if isinstance(exc, type) and issubclass(exc, BaseException):
+            return exc
+        # an unresolvable name must still fault LOUDLY, never skip
+        return RuntimeError
+
+    def _arm(self, spec, owner, name):
+        import functools
+        orig = getattr(owner, name)
+        inj = self
+
+        @functools.wraps(orig)
+        def wrapper(*a, **kw):
+            sid = id(spec)
+            n = inj.calls.get(sid, 0) + 1
+            inj.calls[sid] = n
+            oc = spec["on_call"]
+            if oc is None or n == oc:
+                inj.count += 1
+                inj.tracer.record_inject(spec, n)
+                act = spec["action"]
+                if act == "raises":
+                    exc = inj._resolve_exc(spec["value"])
+                    raise exc(f"injected by pyreplay ({spec['spec']})")
+                if act == "returns":
+                    return spec["value"]
+                time.sleep(spec["value"] / 1000.0)
+            return orig(*a, **kw)
+        setattr(owner, name, wrapper)
+        self.installed.append((owner, name, orig))
+        spec["_armed"] = spec["tgt"]
+
+    def report(self):
+        return {"specs": [{"spec": s["spec"], "tgt": s["tgt"],
+                           "act": s["action"],
+                           "onCall": s["on_call"],
+                           "armed": s["_armed"] is not None,
+                           "calls": self.calls.get(id(s), 0)}
+                          for s in self.specs],
+                "count": self.count,
+                "unarmed": [s["tgt"] for s in self.specs
+                            if s["_armed"] is None]}
+
+
 # the REAL streams — the tracer's own runtime prints (heartbeat,
 # trigger-hit) go here so they are never recorded as target output
 _RAW = {"out": sys.stdout, "err": sys.stderr}
@@ -1317,6 +1556,43 @@ class Tracer:
             self._hb_objs[id(dst_obj)] = dst_obj
             ev["_di"] = id(dst_obj)
         f = sys._getframe(2)          # skip record_hb + the hook wrapper
+        depth = 0
+        while f is not None and depth < 40:
+            rel = self._rel(f.f_code.co_filename)
+            if rel is not None:
+                ev["f"] = rel
+                ev["l"] = f.f_lineno
+                ev["fn"] = f.f_code.co_name
+                break
+            f = f.f_back
+            depth += 1
+        if self.granularity == "fn":
+            now = time.perf_counter_ns() // 1000
+            ev["ts"] = max(0, now - self._last_ts)
+            self._last_ts = now
+        tname = self._thread_label()
+        if tname != "MainThread":
+            ev["t"] = tname
+        tk = self._task_name()
+        if tk is not None:
+            ev["tk"] = tk
+        self.events.append(ev)
+
+    def record_inject(self, spec, callno):
+        """Roadmap #2: one PERFORMED injection as a first-class event
+        (e="inj") at the moment the wrapped callable was entered,
+        attributed to the nearest in-scope frame — the call site that
+        received the fault. The injector's total count is recorded in
+        the payload independently, so a fault outside the recorded
+        window still shows in the banner arithmetic."""
+        if not self.armed or self.truncated \
+                or len(self.events) >= self.max_events:
+            return
+        ev = {"e": "inj", "tgt": spec["tgt"], "act": spec["action"],
+              "val": (spec["value"] if spec["action"] == "raises"
+                      else repr(spec["value"])),
+              "n": callno, "ch": {}, "fn": "<inject>"}
+        f = sys._getframe(2)         # skip record_inject + wrapper
         depth = 0
         while f is not None and depth < 40:
             rel = self._rel(f.f_code.co_filename)
@@ -4072,7 +4348,10 @@ def _run_harness(orig_argv, n_runs, out, entry_label, granularity,
               "--start-count", "--start-when", "--backend", "--trip",
               "--runs", "--check", "--chaos-schedule", "--fsm",
               "--fsm-declare", "--memo", "--starve-ms",
-              "--probe-reduction", "--fuzz", "--fuzz-seed"}
+              "--probe-reduction", "--fuzz", "--fuzz-seed",
+              "--inject"}
+    # --inject passes THROUGH to children (same faults every run —
+    # the catch rate across N runs is the point).
     # --chaos-schedule is stripped and re-issued per child with a
     # DERIVED seed (base+i-1): N runs under one seed would explore one
     # biased stream N times; N seeds explore N different ones, and any
@@ -6865,6 +7144,7 @@ def main(argv):
     fuzz_file = None     # roadmap #1: gen(rng) input search
     fuzz_seed = 1234
     oracle_file = None   # roadmap #3: the reference implementation
+    inject_specs = []    # roadmap #2: forced faults at call sites
     mine_flag = False    # #74: --runs N --mine (multi-run mining)
     fsm_expr = None      # #132: the ONE declared state name
     fsm_declared = None  # #132: declared transitions, or None
@@ -7017,6 +7297,13 @@ def main(argv):
                 print(f"error: --oracle file not found: {argv[1]}")
                 return 2
             oracle_file, argv = argv[1], argv[2:]
+        elif argv[0] == "--inject" and len(argv) >= 2:
+            try:
+                inject_specs.append(_parse_inject(argv[1]))
+            except SystemExit as exc:
+                print(exc)
+                return 2
+            argv = argv[2:]
         elif argv[0] == "--mine":
             mine_flag = True
             argv = argv[1:]
@@ -7179,6 +7466,27 @@ def main(argv):
         if not console:
             print("error: --oracle reads both outputs from the "
                   "recorded console lane — drop --no-console")
+            return 2
+    if inject_specs:
+        if sweep_spec:
+            print("error: --sweep under --inject would measure the "
+                  "injected faults, not the algorithm — run the "
+                  "bench unperturbed")
+            return 2
+        if relations or oracle_file:
+            print("error: --relation/--oracle compare OUTPUTS — "
+                  "under --inject they would compare the faults you "
+                  "planted. Run them separately.")
+            return 2
+        if shrink_flag:
+            print("error: --shrink minimizes an input; --inject "
+                  "perturbs the code path — they answer different "
+                  "questions. Run them separately.")
+            return 2
+        if perfetto:
+            print("error: --inject perturbs the run on purpose — a "
+                  "Perfetto timeline of it would read as timing "
+                  "truth. Export from an unperturbed run instead.")
             return 2
     if granularity is None:
         # -m runs (a test suite, a module) default to fn: line-level over
@@ -7540,6 +7848,14 @@ def main(argv):
     # #88: hooks go in AFTER the tracer's own heartbeat thread started —
     # the tracer's machinery must never appear as a wake edge
     hb_undo = _install_hb_hooks(tracer)
+    injector = None
+    if inject_specs:
+        injector = _Injector(inject_specs, tracer)
+        injector.install()
+        print(f"pyreplay: INJECT — {len(inject_specs)} fault "
+              f"spec(s), armed the moment their module lands; every "
+              f"performed injection is a recorded event; this run is "
+              f"PERTURBED on purpose", flush=True)
     error = None
     mon = None
     if backend == "monitoring":
@@ -7631,6 +7947,8 @@ def main(argv):
             signal.signal(signal.SIGUSR1, old_usr1)
         if tracer.chaos is not None:
             tracer.chaos.unhook()
+        if injector is not None:
+            injector.uninstall()
         if old_switch is not None:
             sys.setswitchinterval(old_switch)
         for u in hb_undo:
@@ -7677,10 +7995,26 @@ def main(argv):
         else:
             print(f"invariant [{isrc}]: held everywhere it was "
                   f"evaluable", flush=True)
+    if injector is not None:
+        for s in injector.report()["specs"]:
+            if not s["armed"]:
+                print(f"inject [{s['tgt']}]: NEVER RESOLVED — the "
+                      f"module was never imported (or the attribute "
+                      f"doesn't exist); nothing was injected "
+                      f"(a wrong name must never look like a "
+                      f"survived fault)", flush=True)
+            else:
+                hits = (1 if s["onCall"] is not None
+                        and s["calls"] >= s["onCall"]
+                        else s["calls"] if s["onCall"] is None
+                        else 0)
+                print(f"inject [{s['spec']}]: {s['calls']} call(s) "
+                      f"seen, {hits} injected", flush=True)
     bounds = _boundaries(tracer.events)
     extra = {"capsule": capsule,
              "ring": ring_info,
              "chaos": tracer.chaos.report() if tracer.chaos else None,
+             "inject": injector.report() if injector else None,
              "critical": _critical_path(tracer.events)
              if granularity == "fn" else None,
              "invariants": [{"src": s,

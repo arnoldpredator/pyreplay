@@ -159,6 +159,12 @@
   }
   .tmark.tfirst { width: 6px; transform: translateX(-3px);
     box-shadow: 0 0 4px #e5c07b; }
+  .imark {
+    position: absolute; top: 0; width: 4px; height: 7px;
+    background: #e06c75; border-radius: 2px; cursor: pointer;
+    transform: translateX(-2px);
+  }
+  .imark:hover { background: #f2989e; }
   .femark { position: absolute; top: 0; width: 4px; height: 7px;
     background: #e78fbb; border-radius: 2px; cursor: pointer;
     transform: translateX(-2px); }
@@ -1210,6 +1216,25 @@ if (DATA.chaos) {
     " — interleavings explored on purpose; timings are not " +
     "performance truth.";
   b.appendChild(cn);
+}
+/* roadmap #2 inject: forced faults must announce themselves (rule 4) */
+if (DATA.inject) {
+  const b = $("banner");
+  if (!b.style.display || b.style.display === "none") {
+    b.className = "info";
+    b.style.display = "block";
+  }
+  const s = document.createElement("span");
+  const armed = DATA.inject.specs.filter(x => x.armed);
+  s.textContent = " 💉 PERTURBED — fault injection: " +
+    DATA.inject.count + " fault(s) performed across " + armed.length +
+    " armed spec(s)" +
+    (DATA.inject.unarmed.length
+      ? " · NEVER RESOLVED: " + DATA.inject.unarmed.join(", ") +
+        " (nothing injected there — check the name)"
+      : "") +
+    " — failure paths explored on purpose.";
+  b.appendChild(s);
 }
 /* a chunked file missing a chunk: after the error/trigger banner text
    is set (textContent assignments above would erase an earlier note) */
@@ -2857,7 +2882,7 @@ function computeStacks(idx) {
   for (let i = start; i <= idx; i++) {
     const ev = events[i];
     if (ev.e === "chap" || ev.e === "hb" || ev.e === "viol"
-        || ev.e === "br") {
+        || ev.e === "br" || ev.e === "inj") {
       maybeKeyframe(i, idx, stacks, curT);   // boundaries, wakes and
       continue;                              // verdicts are not frames
     }
@@ -4722,6 +4747,18 @@ function render() {
     wk.innerHTML = "⚖ " + esc2(ev.inv) + " is FALSE here" +
       (vals.length ? " · " + esc2(vals.join(" · ")) : "");
     wk.style.display = "block";
+  } else if (ev.e === "inj") {
+    // roadmap #2: the fault was FORCED here — the real callable
+    // never ran (raises/returns) or ran late (stall)
+    const what = ev.act === "raises"
+      ? "raised " + esc2(ev.val) + " — the real callable never ran"
+      : ev.act === "returns"
+        ? "returned the sentinel " + esc2(ev.val) +
+          " — the real callable never ran"
+        : "stalled " + esc2(ev.val) + " ms, then ran for real";
+    wk.innerHTML = "💉 " + esc2(ev.tgt) + " call " + ev.n +
+      ": " + what + " (injected on purpose)";
+    wk.style.display = "block";
   } else if (ev.e === "hb") {
     const srcLane = (ev.t || "main") + (ev.tk ? " · " + ev.tk : "");
     const laneHit = e =>
@@ -4754,6 +4791,10 @@ function render() {
   if (ev.e === "viol") {
     badge.className = "badge excsoft";
     badge.textContent = "⚖ INVARIANT VIOLATED";
+  } else if (ev.e === "inj") {
+    badge.className = "badge exc";
+    badge.textContent = "💉 INJECTED " + ev.act + "=" + ev.val +
+      (ev.n ? " (call " + ev.n + ")" : "");
   } else if (ev.e === "br") {
     badge.className = "badge brv";
     badge.textContent = "BRANCH — " + brValText(ev).toUpperCase();
@@ -6067,9 +6108,10 @@ $("scrub").max = Math.max(0, events.length - 1);
 /* trip markers: every NaN/Inf birth, amber; the first one glows.
    #73 invariant violations share the strip (and open it). */
 (function () {
-  // #132's derived viol events (undeclared transitions) share it too
+  // #132's derived viol events (undeclared transitions) share it too,
+  // and roadmap #2's injected faults (deliberate breaks, same strip)
   if (!DATA.trip && !DATA.invariants && !(DATA.fsm && DATA.fsm.viol)
-      && !(DATA.floatEq && DATA.floatEq.dyn.length))
+      && !(DATA.floatEq && DATA.floatEq.dyn.length) && !DATA.inject)
     return;
   const box = document.createElement("div");
   box.id = "tripmarks";
@@ -6094,6 +6136,17 @@ $("scrub").max = Math.max(0, events.length - 1);
       m.style.left = (i / total * 100) + "%";
       m.title = "⚖ invariant [" + e.inv + "] violated — " + e.f + ":" +
         e.l + " (event " + (i + 1) + ")";
+      m.onclick = () => { stop(); goto(i); };
+      box.appendChild(m);
+      return;
+    }
+    if (e.e === "inj") {
+      const m = document.createElement("span");
+      m.className = "imark";
+      m.style.left = (i / total * 100) + "%";
+      m.title = "💉 injected " + e.act + "=" + e.val + " at " +
+        e.tgt + " call " + e.n + " — " + (e.f || "?") + ":" +
+        (e.l || "?") + " (event " + (i + 1) + ")";
       m.onclick = () => { stop(); goto(i); };
       box.appendChild(m);
       return;
@@ -6249,7 +6302,7 @@ function parseQuery(q) {
                   call: "call", return: "return", ret: "return",
                   chap: "chap", test: "chap", log: "log",
                   console: "log", hb: "hb", wake: "hb", viol: "viol",
-                  br: "br", branch: "br",
+                  br: "br", branch: "br", inj: "inj", inject: "inj",
                   invariant: "viol", yield: "yield",
                   resume: "resume" }[m[1].toLowerCase()];
       if (!k) { bad.push(tok); return; }

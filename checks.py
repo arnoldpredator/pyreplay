@@ -4706,6 +4706,139 @@ def _():
            "--no-console starves the output channel — refused")
 
 
+@check("inject: forced faults recorded first-class, perturbed "
+       "honestly (roadmap #2)")
+def _():
+    fixture("inj2_svc.py", (
+        "def flaky(n):\n"
+        "    return n * 2\n"
+        "\n"
+        "class Store:\n"
+        "    def pay(self, amount):\n"
+        "        return amount\n"))
+    main = fixture("inj2_main.py", (
+        "import inj2_svc\n"
+        "for i in range(1, 5):\n"
+        "    try:\n"
+        "        print('call', i, '->', inj2_svc.flaky(i))\n"
+        "    except TimeoutError as exc:\n"
+        "        print('caught:', exc)\n"
+        "s = inj2_svc.Store()\n"
+        "print('paid', s.pay(9))\n"))
+
+    def inj(*args, name):
+        out = os.path.join(TMP, name + ".html")
+        r = subprocess.run([PY, os.path.join(HERE, "tracer.py"),
+                            "--out", out, *args, main],
+                           capture_output=True, text=True, cwd=TMP,
+                           stdin=subprocess.DEVNULL, timeout=120)
+        return r, payload(out)
+    # raises on call 3 of 4 — the handler catches, the run continues
+    r, p = inj("--inject", "inj2_svc.flaky:raises=TimeoutError:"
+               "on_call=3", name="inj2_a")
+    ev = [e for e in p["events"] if e.get("e") == "inj"]
+    expect(len(ev) == 1 and ev[0]["n"] == 3
+           and ev[0]["act"] == "raises"
+           and ev[0]["val"] == "TimeoutError"
+           and ev[0]["tgt"] == "inj2_svc.flaky",
+           f"exactly the 3rd call injected, first-class: {ev}")
+    expect(ev[0]["f"] == "inj2_main.py" and ev[0]["fn"] == "<module>",
+           f"the inj event lands on the CALL SITE, not the wrapper: "
+           f"{ev[0]}")
+    expect(p["inject"]["count"] == 1
+           and p["inject"]["specs"][0]["calls"] == 4,
+           f"payload arithmetic: 4 calls seen, 1 injected: "
+           f"{p['inject']}")
+    expect(p["error"] is None, "the caught injection must not kill "
+           "the run")
+    logs = [e["txt"] for e in p["events"] if e.get("e") == "log"]
+    expect(any("caught: injected by pyreplay" in t for t in logs)
+           and any("call 4 -> 8" in t for t in logs),
+           f"the handler path RAN and the run continued: {logs}")
+    soft = [e for e in p["events"] if e.get("e") == "exc"
+            and (e.get("x") or {}).get("t") == "TimeoutError"]
+    expect(soft, "the forced raise must ride the existing exception "
+           "machinery (propagation visible)")
+    # returns: a sentinel every call, no exception anywhere
+    r, p = inj("--inject", "inj2_svc.flaky:returns=0", name="inj2_b")
+    expect(p["inject"]["count"] == 4 and p["error"] is None,
+           f"returns= injects every call: {p['inject']}")
+    logs = [e["txt"] for e in p["events"] if e.get("e") == "log"]
+    expect(any("call 2 -> 0" in t for t in logs),
+           "the sentinel is what the caller actually received")
+    # method target + stall, fn granularity (time must be true)
+    r, p = inj("--inject", "inj2_svc.Store.pay:stall=60",
+               "--granularity", "fn", name="inj2_c")
+    expect(p["inject"]["count"] == 1, "class-method target arms")
+    # the inj event marks the stall START; the delta to the real
+    # call that follows carries its duration
+    calls = [e for e in p["events"] if e.get("e") == "call"
+             and e.get("fn") == "pay"]
+    expect(calls and calls[0].get("ts", 0) >= 40000,
+           f"the stall shows as the gap between the inj event and "
+           f"the real call: {calls and calls[0].get('ts')}")
+    # a target already imported at install time (the stdlib case)
+    jm = fixture("inj2_jm.py",
+                 "import json\nprint(json.loads('[1]'))\n")
+    out = os.path.join(TMP, "inj2_d.html")
+    r = subprocess.run([PY, os.path.join(HERE, "tracer.py"), "--out",
+                        out, "--inject", "json.loads:raises="
+                        "ValueError", jm], capture_output=True,
+                       text=True, cwd=TMP, stdin=subprocess.DEVNULL,
+                       timeout=120)
+    expect((payload(out)["error"] or "").startswith("ValueError"),
+           "a pre-imported stdlib target arms at install time")
+    # a wrong name must never look like a survived fault
+    out2 = os.path.join(TMP, "inj2_e.html")
+    r = subprocess.run([PY, os.path.join(HERE, "tracer.py"), "--out",
+                        out2, "--inject", "nosuchmod.fn:raises="
+                        "ValueError", jm], capture_output=True,
+                       text=True, cwd=TMP, stdin=subprocess.DEVNULL,
+                       timeout=120)
+    expect("NEVER RESOLVED" in r.stdout
+           and payload(out2)["inject"]["unarmed"] == ["nosuchmod.fn"],
+           "an unresolved spec is loud in terminal AND payload")
+    # the map refuses to adopt perturbed heat silently
+    import shutil
+    shutil.copy(os.path.join(TMP, "inj2_a.html"),
+                os.path.join(TMP, "trace_inj2_main.html"))
+    m = subprocess.run([PY, os.path.join(HERE, "mapper.py"), "--out",
+                        os.path.join(TMP, "map_inj2.html"), TMP],
+                       capture_output=True, text=True, cwd=TMP,
+                       stdin=subprocess.DEVNULL, timeout=120)
+    expect("fault-injection run" in m.stdout,
+           f"auto-heat must skip the injected trace, saying why: "
+           f"{m.stdout[-200:]}")
+    os.remove(os.path.join(TMP, "trace_inj2_main.html"))
+    # grammar + experiment gates (each with its reason)
+    def gate(*args):
+        return subprocess.run([PY, os.path.join(HERE, "tracer.py"),
+                               *args, main], capture_output=True,
+                              text=True, cwd=TMP,
+                              stdin=subprocess.DEVNULL, timeout=60)
+    b = gate("--inject", "__main__.f:raises=ValueError")
+    expect(b.returncode == 2 and "born DURING the run" in b.stdout,
+           "__main__ targets refused with the reason")
+    b = gate("--inject", "m.f:returns=os.system('x')")
+    expect(b.returncode == 2 and "LITERAL" in b.stdout,
+           "returns= evaluates nothing, ever")
+    b = gate("--inject", "m.f:raises=A:returns=1")
+    expect(b.returncode == 2 and "ONE action" in b.stdout,
+           "one action per spec")
+    b = gate("--inject", "inj2_svc.flaky:stall=5",
+             "--export-perfetto", "x.json", "--granularity", "fn")
+    expect(b.returncode == 2 and "timing truth" in b.stdout,
+           "perfetto under injection refused (rule 4)")
+    # the replayer carries the contract
+    with open(os.path.join(HERE, "replayer_template.html"),
+              encoding="utf-8") as fh:
+        tpl = fh.read()
+    for needle in ('PERTURBED — fault injection', 'inj: "inj"',
+                   '=== "inj"'):
+        expect(needle in tpl,
+               f"template must carry the inj contract: {needle}")
+
+
 @check("nonterm: proven cycle vs downgraded recurrence (#78)")
 def _():
     src = fixture("nt78.py", (

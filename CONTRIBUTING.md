@@ -3,7 +3,7 @@
 Everything already built lives in **FEATURES.md** (the catalog, 122
 entries, ordered the way you use the tool) and **TUTORIAL.md** (the
 guide, same order). This file is the other half: **the features not
-built yet** — numbered 1–17 below, 15 still open (a shipped one keeps
+built yet** — numbered 1–17 below, 14 still open (a shipped one keeps
 its number, struck through, so references stay stable) — and how to
 contribute one. It's written so a stranger can pick an item and
 implement it.
@@ -12,7 +12,7 @@ implement it.
 
 New here and want to help? Three steps:
 
-1. **Pick something.** The **Index** below lists the 15 open
+1. **Pick something.** The **Index** below lists the 14 open
    features. Bug reports, edge cases, and more `example_*.py`
    programs are just as welcome. Adding **another language** is the
    biggest prize — see "Support another language" and the event-log
@@ -73,7 +73,7 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
 | # | Feature | Effort | Payoff |
 |---|---------|--------|--------|
 | ~~1~~ | ~~Random-input entry with seed capture~~ — **shipped**: catalog #117 (`--fuzz`) | M | ★★ |
-| 2 | Inject exceptions/latency on purpose | L | ★★ |
+| ~~2~~ | ~~Inject exceptions/latency on purpose~~ — **shipped**: catalog #119 (`--inject`) | L | ★★ |
 | ~~3~~ | ~~Compare implementations on the same inputs~~ — **shipped**: catalog #118 (`--oracle`) | M | ★★ |
 | 4 | Object-reference graph at an event | L | ★★ |
 | 5 | I/O lane via audit hooks; resource-leak pairing | M | ★★ |
@@ -100,22 +100,14 @@ failure gets a line-level microscope trace and the composed
 `--shrink` command. The Hypothesis `@given` bridge from the original
 sketch remains unbuilt (the `gen(rng)` protocol carries it).
 
-### 2. Fault injection (chaos engineering for one process)
-- **What:** `--inject "shop.pay:raises=TimeoutError:on_call=3"` —
-  force a chosen call site to raise / return a sentinel / stall, then
-  watch (with the existing exception machinery) how the failure
-  propagates and what catches it.
-- **Why:** error-handling paths are the least-executed, least-tested
-  code in any codebase; injection is the only way to *see* them run.
-  The propagation-chain view (catalog #114 in FEATURES) was built for exactly
-  this moment.
-- **How:** an import-time wrapper installed by the tracer around the
-  named callable (we own the process bootstrap); every injection is
-  recorded as a first-class INJECTED event so the trace never lies
-  about what really happened.
-- **Effort:** L.
-- **Prior art:** Netflix chaos engineering, aerospace HALT testing —
-  break it on the bench, not in the air.
+### 2. Fault injection — SHIPPED
+Now **catalog #119** (`--inject "module.func:raises=TimeoutError:
+on_call=3"`, also `returns=LITERAL` / `stall=MS`, repeatable):
+post-import wrapper via a meta-path hook, every performed injection
+a first-class recorded event at the call site, 💉 PERTURBED banner
+(rule 4), auto-heat skip, unresolved targets loud. Composes with
+--runs (the catch rate) and chaos; refuses the comparison and
+timing experiments with reasons.
 
 ### 3. Differential testing — SHIPPED
 Now **catalog #118** (`--oracle REF.py`): both implementations on

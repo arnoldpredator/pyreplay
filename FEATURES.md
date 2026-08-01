@@ -3107,7 +3107,53 @@ Statistics over many runs: rates instead of anecdotes, divergences instead of gu
 
   [![Feature 118 — the differential oracle](screenshots/r3-oracle.png)](screenshots/r3-oracle.png)
 
-### 119. Metamorphic relations — the symmetry is the oracle (`--relation`)
+### 119. Fault injection — break it on the bench, not in the air (`--inject`)
+- **Measured:** chaos engineering for one process:
+  `--inject "shop.pay:raises=TimeoutError:on_call=3"` (repeatable)
+  forces a named callable to raise (an "injected by pyreplay"
+  instance), return a sentinel (`returns=LITERAL`,
+  `ast.literal_eval` — nothing evaluates, ever) or stall
+  (`stall=MILLISECONDS`), on the Nth call or every call. Wrappers
+  arm the moment the target's module lands (meta-path hook;
+  already-imported targets like `json.loads` arm immediately);
+  `__main__` defs are refused with the reason. Every PERFORMED
+  injection is recorded as a first-class event at the call site
+  that received the fault — the trace never lies about what really
+  ran.
+- **Displayed:** the banner wears **💉 PERTURBED** with performed/
+  armed counts (constitution rule 4); the injection moment gets a
+  red badge, a panel line stating what was forced ("the real
+  callable never ran"), red pins on the tripwire strip, and
+  `type:inj` in the query bar. The forced raise rides the existing
+  exception machinery, so the propagation chain and whatever
+  CAUGHT it are ordinary recorded truth. The map's auto-heat skips
+  injected traces; a spec that never resolved is loud in the
+  terminal and the payload — a wrong name must never look like a
+  survived fault.
+- **Why:** error-handling paths are the least-executed, least-tested
+  code in any codebase, and injection is the only way to *see* them
+  run. The stall variant asks the other question — what happens to
+  everything downstream when this dependency gets slow?
+- **Use case:** tinyshop with
+  `discounts.bulk_discount:raises=TimeoutError:on_call=2` — calls 1
+  and 2 are counted, the second raises at `cart.py:15`, the
+  propagation walks `total()` → `main()` with no handler anywhere,
+  and the banner arithmetic reads "2 call(s) seen, 1 injected".
+  Swap to `returns=0` and the run "succeeds" with a wrong total —
+  the quieter, nastier failure mode, now visible.
+- **Command:** `python3 tracer.py --inject
+  "discounts.bulk_discount:raises=TimeoutError:on_call=2"
+  tinyshop/main.py`. Composes with `--runs` (same faults every run —
+  the catch rate) and `--chaos-schedule`; refuses `--sweep`,
+  `--relation`/`--oracle`, `--shrink` and `--export-perfetto` with
+  reasons (perturbed time is not performance truth).
+- **Screenshot** — the injection moment: 💉 PERTURBED banner,
+  INJECTED badge at the exact call site in `total()`, the panel
+  naming what was forced, red pins on the strip.
+
+  [![Feature 119 — fault injection](screenshots/r2-inject.png)](screenshots/r2-inject.png)
+
+### 120. Metamorphic relations — the symmetry is the oracle (`--relation`)
 - **Measured:** the oracle problem's cheapest instrument: the right
   answer may be unknown, but its symmetries are not.
   `--relation "TRANSFORM => RELATION"` declares an input transform
@@ -3149,9 +3195,9 @@ Statistics over many runs: rates instead of anecdotes, divergences instead of gu
   per trial, kept pairs, composed diverge commands, and the diverge
   output below pointing at the exact print that broke the symmetry.
 
-  [![Feature 119 — metamorphic relations](screenshots/126-relations.png)](screenshots/126-relations.png)
+  [![Feature 120 — metamorphic relations](screenshots/126-relations.png)](screenshots/126-relations.png)
 
-### 120. Mutation-survivor forensics — why did this mutant live?
+### 121. Mutation-survivor forensics — why did this mutant live?
 - **Measured:** the bridge uses **mutmut as-is** (never rebuilt): the
   survivor list from `mutmut results`, the nearest covering test
   from mutmut's own coverage mapping (`mutants/mutmut-stats.json`),
@@ -3187,9 +3233,9 @@ Statistics over many runs: rates instead of anecdotes, divergences instead of gu
   missing assertion named), one traced-identical
   (possibly-equivalent, said plainly).
 
-  [![Feature 120 — forensics](screenshots/125-forensics.png)](screenshots/125-forensics.png)
+  [![Feature 121 — forensics](screenshots/125-forensics.png)](screenshots/125-forensics.png)
 
-### 121. The scaling bench — `--sweep`, the doubling experiment as a command
+### 122. The scaling bench — `--sweep`, the doubling experiment as a command
 - **Measured:** the target is run once per rung of a value ladder
   (`--sweep "n=1000,2000,4000,8000"`, or `alpha=3.0..5.0:5` for a
   knob), each child a fresh tracer run whose stdin comes from the
@@ -3231,13 +3277,13 @@ Statistics over many runs: rates instead of anecdotes, divergences instead of gu
   time chart honestly wobbling (startup noise at tiny n), ratios
   marching to 4.
 
-  [![Feature 121 — scaling bench](screenshots/127-scaling-bench.png)](screenshots/127-scaling-bench.png)
+  [![Feature 122 — scaling bench](screenshots/127-scaling-bench.png)](screenshots/127-scaling-bench.png)
 
 ## Part 15 — Infrastructure
 
 What keeps all of the above honest.
 
-### 122. `checks.py` — the regression suite
+### 123. `checks.py` — the regression suite
 68 data-level checks (no browser): the tracer re-runs the permanent
 example suite and the mapper its fixtures, the embedded JSON is
 extracted from each generated HTML (chunked or not), and the honesty
@@ -3259,7 +3305,7 @@ after every change, always.
 - **Command:** `python3 checks.py` — prints the green table, exits
   non-zero on any red.
 
-### 123. The teaching fleet
+### 124. The teaching fleet
 `example_{sort,prefix,histogram,dp,graph,exceptions,control,machinery,
 mro,tasks,threads,watch,dunder,bigarray,heavy,nan,flaky,race}.py` — one small script per feature family, each with its
 pre-built `trace_*.html`; `tinyshop/` — a multi-file teaching project

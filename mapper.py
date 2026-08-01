@@ -519,6 +519,13 @@ def find_matching_traces(root_dir, modules, cap=6):
                       + " (PERTURBED — schedule-chaos run; --trace it "
                       "explicitly if you really want fuzzed heat)")
                 continue
+            if pl.get("inject"):
+                # roadmap #2: same rule — injected faults bend the
+                # control flow on purpose; that heat is not the code's
+                print("auto-heat: skipped " + os.path.basename(p)
+                      + " (PERTURBED — fault-injection run; --trace "
+                      "it explicitly if you really want that heat)")
+                continue
             srcs = set(pl.get("sources", {}))
             if not srcs:
                 continue
@@ -570,6 +577,10 @@ def load_heat(trace_path, modules):
         print("note: " + os.path.basename(trace_path) + " is a PERTURBED "
               "schedule-chaos run — its heat reflects the fuzzed "
               "schedule, not natural timing")
+    if data.get("inject"):
+        print("note: " + os.path.basename(trace_path) + " is a "
+              "PERTURBED fault-injection run — its heat includes "
+              "paths the faults forced, not natural behavior")
     kind = "time" if data.get("granularity") == "fn" else "counts"
     script = data.get("script")
 

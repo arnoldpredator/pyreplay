@@ -1069,6 +1069,24 @@ ONE of them. The four `strategy_*.py` RSQ solutions in this repo are
 the born demo: the brute force certifies the Fenwick tree in one
 command, and a planted off-by-one is caught 3/3.
 
+**Fault injection (`--inject`).** Error-handling paths are the
+least-executed code you own; injection is the only way to watch
+them run. `python3 tracer.py --inject
+"discounts.bulk_discount:raises=TimeoutError:on_call=2"
+tinyshop/main.py` forces the second call of that function to raise
+(or `returns=0` for a sentinel, `stall=250` for a slow dependency)
+— the wrapper arms the moment the module is imported, the injection
+is recorded as a first-class event at the call site, and the forced
+raise rides the normal exception machinery, so what catches it (or
+doesn't) is ordinary recorded truth. The banner says 💉 PERTURBED
+with the performed/armed arithmetic, the moment wears a red badge
+and pins, `type:inj` finds it, and a target name that never
+resolved is reported loudly — a typo must never look like a
+survived fault. Try `returns=0`: the run "succeeds" with a wrong
+grand total, which is the quieter failure mode and the better
+lesson. Repeat the flag for multiple faults; add `--runs 10` for
+the catch rate.
+
 **Input shrinking (`--shrink`).** A huge input that crashes is a
 chore; the tiny core that still crashes is a diagnosis. Pipe the
 input and `--shrink` runs Zeller's ddmin over it — lines by default,

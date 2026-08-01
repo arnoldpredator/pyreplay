@@ -14,6 +14,7 @@ overwritten. Use --out NAME.html to pick a name (that one DOES overwrite).
     python tracer.py --start-at myfile.py:42 --start-count 57 <script.py>
     python tracer.py --start-when "i == 56" <script.py> [args...]
     python tracer.py --trip nan <script.py>            # NaN/Inf tripwire
+    python tracer.py --runs 50 <script.py>             # N-run statistics
     python tracer.py -m pytest tests/                  # trace a test suite
     python tracer.py --root brian2 -m pytest           # pytest scoped to --root
     python tracer.py --root . -m pytest tests/ -q      # explicit test path
@@ -55,6 +56,16 @@ it finally crashed. Line granularity only; marks only what the encoded
 values visibly show (beyond a cap or window = unknown = unmarked; the
 inside of C objects, e.g. arrays, stays invisible).
 
+--runs N: one run is an anecdote, N runs are an experiment. The target
+executes N times (fn granularity by default; identical stdin each run),
+every outcome is classified by exception type + crash site, and ONE
+representative trace per outcome class is kept — first seen, not N
+files. runs_<name>.html reports the counts, the wall-time distribution
+per class (min/median/p95/max, tracer-inclusive — comparable to each
+other, not to bare runtime) and links each class to its replayable
+trace. Exit code 0 only if every run was clean, so `git bisect run`
+can consume it directly. Ctrl-C reports the runs completed so far.
+
 Traces every file inside the SCOPE ROOT — by default the entry script's
 directory tree (your project). Pass --root DIR to set it explicitly; that is
 what makes `-m pytest` useful — the entry (pytest) lives in site-packages, but
@@ -68,8 +79,10 @@ import dis
 import fnmatch
 import json
 import os
+import re
 import reprlib
 import runpy
+import subprocess
 import sys
 import threading
 import time
@@ -1970,7 +1983,155 @@ class watch:
         return wrapper
 
 
+def _extract_payload(html_path):
+    """Read the embedded JSON back out of a generated trace (the same
+    contract checks.py relies on)."""
+    with open(html_path, encoding="utf-8") as fh:
+        m = re.search(r'<script id="trace-data" '
+                      r'type="application/json">(.*?)</script>',
+                      fh.read(), re.S)
+    if m is None:
+        raise ValueError("no embedded trace data")
+    return json.loads(m.group(1).replace("<\\/", "</"))
+
+
+def _run_harness(orig_argv, n_runs, out, entry_label, granularity,
+                 module, script):
+    """#63: one run is an anecdote; N runs are an experiment. Execute the
+    target N times (each a fresh child tracer with identical stdin),
+    classify every outcome (exception type + crash site), keep ONE
+    representative trace per class — first seen, not N files — and write
+    a self-contained report. Exit 0 only if every run was clean."""
+    stem = (module.replace(".", "_") if module is not None
+            else os.path.splitext(os.path.basename(script))[0])
+    if out is None:
+        out = f"runs_{stem}.html"
+        k = 2
+        while os.path.exists(out):
+            out = f"runs_{stem}_{k}.html"
+            k += 1
+    out = os.path.abspath(out)
+    rep_base = os.path.splitext(out)[0]
+
+    # children: same flags, minus the harness's own, plus an explicit
+    # granularity (the parent resolved the default; a child would
+    # re-default a script entry to line) and their own --out. The walk
+    # mirrors the real parser — every value-taking flag is known, and
+    # stripping stops at -m or the script, so a --out (or --runs) in the
+    # TARGET's own argv is the target's business. --runs especially must
+    # never reach a child: that child would fork a harness of its own.
+    valued = {"--out", "--root", "--export-perfetto", "--include",
+              "--exclude", "--granularity", "--max-events", "--start-at",
+              "--start-count", "--start-when", "--backend", "--trip",
+              "--runs"}
+    strip = {"--runs", "--out", "--granularity"}
+    child_flags, i = [], 0
+    while i < len(orig_argv):
+        tok = orig_argv[i]
+        if tok == "-m" or not tok.startswith("--"):
+            child_flags.extend(orig_argv[i:])   # theirs from here on
+            break
+        step = 2 if tok in valued and i + 1 < len(orig_argv) else 1
+        if tok not in strip:
+            child_flags.extend(orig_argv[i:i + step])
+        i += step
+    child_flags = ["--granularity", granularity] + child_flags
+
+    # the measurement protocol: every run gets the SAME stdin bytes
+    stdin_bytes = b""
+    if not sys.stdin.isatty():
+        try:
+            stdin_bytes = sys.stdin.buffer.read()
+        except Exception:
+            stdin_bytes = b""
+
+    shown = " ".join([os.path.basename(sys.executable),
+                      os.path.basename(SELF)] + child_flags)
+    print(f"pyreplay: {n_runs} runs of {entry_label} ({granularity} "
+          f"granularity), identical stdin each run", flush=True)
+    per_run, seen_cls, interrupted = [], set(), False
+    try:
+        for i in range(1, n_runs + 1):
+            tr_path = f"{rep_base}_run{i}.html"
+            cmd = [sys.executable, SELF, "--out", tr_path] + child_flags
+            t0 = time.perf_counter()
+            r = subprocess.run(cmd, input=stdin_bytes,
+                               capture_output=True)
+            ms = (time.perf_counter() - t0) * 1000.0
+            cls, ev_count, note = f"no trace (exit {r.returncode})", 0, None
+            if os.path.exists(tr_path):
+                try:
+                    data = _extract_payload(tr_path)
+                    ev_count = len(data.get("events", []))
+                    err = data.get("error")
+                    if err is None and r.returncode == 0:
+                        cls = "clean"
+                    elif err is None:
+                        cls = f"exit {r.returncode}"
+                    else:
+                        site = ""
+                        for e in reversed(data.get("events", [])):
+                            if e.get("e") == "exc" and e.get("x") \
+                                    and not e["x"].get("soft"):
+                                site = f" at {e['f']}:{e['l']}"
+                                break
+                        cls = err.split(":")[0].strip() + site
+                except Exception as exc:
+                    cls = f"unreadable trace ({type(exc).__name__})"
+            first = cls not in seen_cls
+            seen_cls.add(cls)
+            if first and cls != "clean":
+                # a crashing target's diagnostics usually land on stdout
+                # (the runner folds the traceback into the trace itself);
+                # prefer stderr when it has anything, else stdout
+                tail = r.stderr.decode(errors="replace").strip() \
+                    or r.stdout.decode(errors="replace").strip()
+                note = "\n".join(tail.splitlines()[-4:]) or None
+            kept = None
+            if first and os.path.exists(tr_path):
+                kept = os.path.basename(tr_path)
+            elif os.path.exists(tr_path):
+                os.remove(tr_path)
+            per_run.append({"i": i, "cls": cls,
+                            "ms": round(ms, 1), "ev": ev_count,
+                            "kept": kept, "note": note})
+            print(f"  run {i}/{n_runs}: {cls} ({ms:.0f} ms, "
+                  f"{ev_count} events)", flush=True)
+    except KeyboardInterrupt:
+        interrupted = True
+        print(f"pyreplay: interrupted — reporting the {len(per_run)} "
+              f"completed runs", flush=True)
+    if not per_run:
+        print("error: no runs completed — nothing to report")
+        return 2
+
+    payload = {"script": entry_label, "requested": n_runs,
+               "granularity": granularity,
+               "python": sys.version.split()[0],
+               "cmd": shown,   # child_flags already ends with the target
+               "interrupted": interrupted,
+               "perRun": per_run}
+    template_path = os.path.join(os.path.dirname(SELF),
+                                 "runs_template.html")
+    with open(template_path, encoding="utf-8") as f:
+        template = f.read()
+    data = json.dumps(payload).replace("</", "<\\/")
+    with open(out, "w", encoding="utf-8") as f:
+        f.write(template.replace("__RUNS_DATA__", data))
+
+    counts = {}
+    for r_ in per_run:
+        counts[r_["cls"]] = counts.get(r_["cls"], 0) + 1
+    for cls, cnt in sorted(counts.items(), key=lambda kv: -kv[1]):
+        rep = next((r_["kept"] for r_ in per_run
+                    if r_["cls"] == cls and r_["kept"]), None)
+        print(f"  {cnt:4d}x {cls}" + (f"  -> {rep}" if rep else ""))
+    print(f"report -> {out}")
+    return 0 if set(counts) == {"clean"} else 1
+
+
 def main(argv):
+    orig_argv = list(argv)   # the N-run harness re-issues these to children
     out = None
     max_events = MAX_EVENTS
     start_at = None
@@ -1986,6 +2147,7 @@ def main(argv):
     module_argv = []
     doctor = False
     trip = None
+    runs_n = None
     while argv and (argv[0].startswith("--") or argv[0] == "-m"):
         if argv[0] == "-m" and len(argv) >= 2:
             # -m MODULE runs a module as __main__ (e.g. -m pytest tests/).
@@ -2032,6 +2194,12 @@ def main(argv):
                 print("error: --trip expects 'nan' (NaN/Inf tripwire)")
                 return 2
             trip, argv = argv[1], argv[2:]
+        elif argv[0] == "--runs" and len(argv) >= 2:
+            if not argv[1].isdigit() or int(argv[1]) < 2:
+                print("error: --runs expects an integer >= 2 "
+                      "(one run is an anecdote)")
+                return 2
+            runs_n, argv = int(argv[1]), argv[2:]
         elif argv[0] == "--start-at" and len(argv) >= 2:
             fname, _, lineno = argv[1].rpartition(":")
             if not fname or not lineno.isdigit():
@@ -2065,12 +2233,14 @@ def main(argv):
         # everything the suite touches, recorded or not. An explicit
         # --granularity always wins; --start-at/--start-when need line
         # events, so triggers keep the line default even under -m.
-        if module is not None and not (start_at or start_when):
+        # --runs also defaults to fn: the harness pays every cost N times.
+        if (module is not None or runs_n) and not (start_at or start_when):
             granularity = "fn"
             if not doctor:
-                print("pyreplay: -m runs default to --granularity fn (call-"
-                      "level overview) — pass --granularity line plus "
-                      "--include/--start-at scoping for the line "
+                what = "-m runs" if module is not None else "--runs"
+                print(f"pyreplay: {what} default to --granularity fn "
+                      "(call-level overview) — pass --granularity line "
+                      "plus --include/--start-at scoping for the line "
                       "microscope", flush=True)
         else:
             granularity = "line"
@@ -2082,6 +2252,11 @@ def main(argv):
         print("error: --trip nan reads variable values, which only line "
               "events record — drop --granularity fn (or scope the cost "
               "with --include instead)")
+        return 2
+    if runs_n and perfetto:
+        print("error: --runs keeps one trace per OUTCOME, not per run — "
+              "a single --export-perfetto file would be ambiguous. Run "
+              "the export on a kept representative afterwards.")
         return 2
     if backend == "monitoring":
         if MON is None:
@@ -2141,6 +2316,10 @@ def main(argv):
         # report and stop — nothing runs, nothing is written
         return _doctor(module, script, root, entry_label,
                        found if module is not None else True)
+
+    if runs_n:
+        return _run_harness(orig_argv, runs_n, out, entry_label,
+                            granularity, module, script)
 
     if out is None:  # default: unique name per entry, never overwrite
         stem = (module.replace(".", "_") if module is not None

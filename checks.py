@@ -1130,6 +1130,69 @@ deco(1); deco(2)
            f"decorator must record the FIRST call only: {wd}")
 
 
+@check("runs: N-run harness classifies outcomes, keeps one trace each (#63)")
+def _():
+    # a counter file makes the "flake" fully deterministic: 6 runs share
+    # the cwd, runs 3 and 6 (n=2, n=5) raise — 4 clean + 2 ValueError.
+    fx = fixture("fx_nrun.py", (
+        "import os\n"
+        "n = 0\n"
+        "if os.path.exists('ctr.txt'):\n"
+        "    with open('ctr.txt') as fh:\n"
+        "        n = int(fh.read())\n"
+        "with open('ctr.txt', 'w') as fh:\n"
+        "    fh.write(str(n + 1))\n"
+        "if n % 3 == 2:\n"
+        "    raise ValueError('flake')\n"
+        "print('ok', n)\n"))
+    ctr = os.path.join(TMP, "ctr.txt")
+    if os.path.exists(ctr):
+        os.remove(ctr)
+    out = os.path.join(TMP, "runs_fx_nrun.html")
+    r = subprocess.run([PY, os.path.join(HERE, "tracer.py"),
+                        "--runs", "6", "--out", out, fx],
+                       capture_output=True, text=True, cwd=TMP,
+                       timeout=180)
+    expect(r.returncode == 1,
+           f"a run set with failures must exit 1, got {r.returncode} "
+           f"({r.stdout} {r.stderr})")
+    expect(os.path.exists(out), "runs report missing")
+    with open(out, encoding="utf-8") as fh:
+        m = re.search(r'<script id="runs-data" '
+                      r'type="application/json">(.*?)</script>',
+                      fh.read(), re.S)
+    expect(m is not None, "no embedded runs data")
+    data = json.loads(m.group(1).replace("<\\/", "</"))
+    per = data["perRun"]
+    expect(len(per) == 6 and data["granularity"] == "fn",
+           f"6 fn runs expected, got {len(per)} {data['granularity']}")
+    clean = [p for p in per if p["cls"] == "clean"]
+    fails = [p for p in per if p["cls"].startswith("ValueError at")]
+    expect(len(clean) == 4 and len(fails) == 2,
+           f"outcome split wrong: {[p['cls'] for p in per]}")
+    expect([p["i"] for p in fails] == [3, 6],
+           f"the deterministic flake fires on runs 3 and 6: {fails}")
+    kept = [p["kept"] for p in per if p["kept"]]
+    expect(len(kept) == 2, f"exactly one trace per class kept: {kept}")
+    for k in kept:
+        expect(os.path.exists(os.path.join(TMP, k)),
+               f"kept representative missing on disk: {k}")
+    on_disk = [f for f in os.listdir(TMP)
+               if f.startswith("runs_fx_nrun_run")]
+    expect(sorted(on_disk) == sorted(kept),
+           f"non-representative traces must be deleted: {on_disk}")
+    expect(fails[0]["note"], "first failing run must carry a stderr tail")
+    # the all-clean path exits 0
+    fx2 = fixture("fx_nrun_ok.py", "x = 1\nprint(x)\n")
+    out2 = os.path.join(TMP, "runs_fx_ok.html")
+    r2 = subprocess.run([PY, os.path.join(HERE, "tracer.py"),
+                         "--runs", "2", "--out", out2, fx2],
+                        capture_output=True, text=True, cwd=TMP,
+                        timeout=120)
+    expect(r2.returncode == 0,
+           f"an all-clean run set must exit 0, got {r2.returncode}")
+
+
 @check("trip: NaN/Inf births marked at kind changes, recovery re-arms (#79)")
 def _():
     fx = fixture("fx_trip.py", (

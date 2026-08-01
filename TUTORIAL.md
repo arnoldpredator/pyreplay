@@ -867,6 +867,12 @@ their original node — no phantom calls), and the 4000-node render cap
 announces itself. Works at both granularities — on an fn-level trace
 of a real codebase it is the whole run's shape in one panel.
 
+**Type flow.** Every name's observed types are tallied across its
+changes: a row that ever held more than one type wears **⚠τ**, the
+tooltip shows the histogram, and a click lands on the first moment of
+the rarest type — the sneaky None found where it was born, not where
+it exploded. The terminal ranks the unstable names after every run.
+
 **Shapes and dtypes.** Arrays are C-opaque to the tracer — but their
 `.shape` and `.dtype` are read at every Python boundary and ride the
 encodings: teal ⤢ chips on every numpy/torch/pandas value, and when a

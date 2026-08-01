@@ -7,7 +7,7 @@ can pick an item and implement it. Features are numbered **#63 onward**, continu
 in FEATURES.md. Fifteen roadmap items have shipped since the list was
 written (63, 64, 65, 70, 77, 79, 80, 98, 101 v1, 103, 104 Tier 1,
 106, 109, 118, 120 v1) — their rows below are struck through;
-**19 remain unbuilt** (plus the stated remainders of 66/74/75/85/88/89/101/104/119/120/126/127/128/132/134).
+**18 remain unbuilt** (plus the stated remainders of 66/74/75/85/88/89/101/104/119/120/126/127/128/132/134).
 
 ## Start here — how to contribute
 
@@ -88,7 +88,7 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
 | 79 | ~~Catch the first NaN/Inf at birth~~ **shipped** | — | ★★★ |
 | 80 | ~~Strip-charts + phase portraits of variables~~ **shipped** | — | ★★★ |
 | 81 | Object-reference graph at an event | L | ★★ |
-| 82 | Per-variable type histograms; None alarms | M | ★★ |
+| 82 | ~~Per-variable type histograms; None alarms~~ **shipped** | M | ★★ |
 | 83 | ~~Array shape/dtype timeline~~ **shipped** | M | ★★★ |
 | 84 | I/O lane via audit hooks; resource-leak pairing | M | ★★ |
 | 85 | ~~Code anatomy: AST + bytecode panel~~ **static tiers shipped; Tier 2 (instruction events) remains** | S–XL | ★★ |
@@ -397,6 +397,7 @@ software.
   real codebases.
 
 ### 82. Type-flow histograms & instability alarms
+**Shipped 2026-08-02** — now catalog entry #82 in [FEATURES.md](FEATURES.md): per-(file, fn, name) type histograms with first moments, ⚠τ rows with click-to-rarest, terminal ranking, 2000-entry cap marked. Remainders: map fn rows, --runs aggregation, annotation compare.
 - **What:** aggregate the types every variable/argument/return
   actually had across a run (and across #63 runs): function rows gain
   "x: int 98% · None 2%" — with the 2% linked to their events; a ⚠

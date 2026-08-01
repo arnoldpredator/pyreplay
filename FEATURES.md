@@ -941,6 +941,30 @@ dead or invented panel; every cap and truncation is announced.
 
   [![Feature 26 — object transparency](screenshots/26-object-transparency.png)](screenshots/26-object-transparency.png)
 
+### 82. Type-flow histograms — what the code did, not what it promised
+- **Measured:** per (file, function, name), the histogram of types
+  across its recorded changes, with the FIRST moment of each type —
+  offline aggregation over existing encodings, zero recording cost,
+  2000-entry cap by observations (marker when cut).
+- **Displayed:** any row whose name held two or more types wears
+  **⚠τ**; its tooltip is the histogram — `float 2× · NoneType 2× ·
+  str 2× — observed across 6 changes` — and clicking jumps to the
+  first occurrence of the RAREST type: the 2% case is one click
+  away. The terminal ranks the unstable names after every run.
+- **Why:** the sneaky None, the str that is sometimes bytes, the int
+  that becomes float — type instability is where dynamic code rots.
+  Observed types complement annotations: this is what the code DID.
+  Beside #120 (interfaces at boundaries) the pair reads: the
+  function's contract wobbles *and* here is the variable doing it.
+- **Use case:** `price = catalog.get(key)` — ⚠τ on `price` says
+  float/NoneType/str; one click lands on the miss that produced the
+  None, three frames before anything crashed.
+- **Command:** any trace — the aggregation always runs.
+- **Screenshot** — the demo: ⚠τ on price at the None moment, #120's
+  unstable-return signature above it agreeing:
+
+  [![Feature 82 — type flow](screenshots/82-type-flow.png)](screenshots/82-type-flow.png)
+
 ### 83. The shape/dtype timeline — arrays at the Python boundary
 - **Measured:** for objects exposing array metadata (numpy, torch,
   pandas), the encoder reads `.shape` and `.dtype` under guarded

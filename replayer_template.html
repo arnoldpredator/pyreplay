@@ -9,6 +9,7 @@
     --text: #d6d9e0; --dim: #7d8493; --accent: #5eb1ff;
     --hl: #2c3d5c; --changed-bg: #3d3320; --changed-text: #ffd479;
     --call: #7ee08a; --line: #5eb1ff; --ret: #ff9d76; --err: #ff6b6b;
+    --warn: #e5c07b;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { height: 100%; }
@@ -166,6 +167,7 @@
   .gly.trip { color: #e5c07b; }
   .gly.shadow { color: #e5c07b; }
   .gly.shape { color: #56b6c2; }
+  .gly.tflow { color: var(--warn); cursor: pointer; }
   .shmeta { color: #56b6c2; font-size: 11px; }
   .shmeta.vchanged { color: var(--changed-text); font-weight: 700; }
   .tripnote { cursor: pointer; text-decoration: underline;
@@ -5156,6 +5158,21 @@ function render() {
         gly += '<span class="gly def" title="⚠ this argument IS the ' +
           'function’s shared mutable default — it persists ' +
           'across calls">⚠def</span>';
+      // #82: type instability — the types this name ACTUALLY held
+      // across its recorded changes; click jumps to the rarest
+      const tfKey = ev.f + "|" + (top ? top.fn : ev.fn) + "|" +
+        r.label;
+      const tfe = (DATA.typeflow || {})[tfKey];
+      if (tfe && Object.keys(tfe.ty).length >= 2) {
+        const tys = Object.entries(tfe.ty)
+          .sort((a, b) => b[1][0] - a[1][0]);
+        const rare = tys[tys.length - 1];
+        gly += '<span class="gly tflow" data-goto="' + rare[1][1] +
+          '" title="⚠ unstable type — observed across ' + tfe.n +
+          " change(s): " + esc2(tys.map(([t, c]) =>
+            t + " " + c[0] + "×").join(" · ")) +
+          ". Click: first " + esc2(rare[0]) + '">⚠τ</span>';
+      }
       // #83: the classic silent transpose — shape/dtype transitions
       // are first-class changes and wear their own badge
       if (r.enc && r.old && (r.enc.sh || r.old.sh)
@@ -5934,6 +5951,11 @@ $("vars").addEventListener("click", e => {
       catch (err) {}
       render();
     }
+    return;
+  }
+  if (t.classList.contains("tflow")) {   // #82: jump to the rarest
+    stop();
+    goto(parseInt(t.dataset.goto, 10));
     return;
   }
   if (t.classList.contains("vprev") || t.classList.contains("vnext")) {

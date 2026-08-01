@@ -3478,6 +3478,8 @@ def _write_trace(tr, out, granularity, entry_label, error,
         "memo": (_build_memo(tr.events, tr.sources, memo)
                  if memo is not None and granularity == "line"
                  else None),
+        # #82: observed type histogram per name — instability visible
+        "typeflow": _typeflow(tr.events),
         # #123a: float == / != where it executed + static literal sites
         "floatEq": (_float_probe(tr.events, tr.sources)
                     if granularity == "line" else None),
@@ -3498,6 +3500,23 @@ def _write_trace(tr, out, granularity, entry_label, error,
         print("--probe-reduction: refused at fn granularity — the "
               "probe reads recorded VALUES; re-run at line "
               "granularity")
+    tf = payload.get("typeflow") or {}
+    unstable = [(k, v) for k, v in tf.items()
+                if k != "__capped__" and len(v["ty"]) >= 2]
+    if unstable:
+        unstable.sort(key=lambda kv: (-len(kv[1]["ty"]),
+                                      -kv[1]["n"]))
+        print(f"⚠τ type instability: {len(unstable)} name(s) held "
+              f"more than one type — this is what the code DID:")
+        for k, v in unstable[:5]:
+            f2, fn2, nm2 = k.split("|", 2)
+            parts = " · ".join(
+                f"{t} {c[0]}×" for t, c in
+                sorted(v["ty"].items(), key=lambda x: -x[1][0]))
+            print(f"    {fn2}(): {nm2} — {parts}  ({f2})")
+        if len(unstable) > 5:
+            print(f"    … {len(unstable) - 5} more (⚠τ on their "
+                  f"rows in the replayer)")
     fe = payload.get("floatEq")
     if fe and fe["dyn"]:
         i0, names0 = fe["dyn"][0]
@@ -4502,6 +4521,38 @@ def _forensics_harness(ids):
           f"possibly-equivalent · {n_skip} skipped. Traced on a "
           f"patched shadow copy — real files, real line numbers.")
     return 0 if (n_div or n_eq) else 1
+
+
+# ---- #82: type-flow — the types every name actually held. The sneaky
+# None, the str that is sometimes bytes: type instability is where
+# dynamic code rots. Observations are the RECORDED CHANGES of each
+# name (per file+function); this is what the code DID, not what it
+# promised. Offline aggregation over existing encodings — zero
+# recording cost.
+
+TYPEFLOW_CAP = 2000
+
+
+def _typeflow(events):
+    agg = {}
+    for i, ev in enumerate(events):
+        f, fn = ev.get("f"), ev.get("fn")
+        if f is None or fn is None:
+            continue
+        for nm, enc in (ev.get("ch") or {}).items():
+            if not isinstance(enc, dict):
+                continue
+            ty = enc.get("c") or enc.get("t") or "?"
+            key = f + "|" + fn + "|" + nm
+            rec = agg.setdefault(key, {"n": 0, "ty": {}})
+            rec["n"] += 1
+            slot = rec["ty"].setdefault(ty, [0, i])
+            slot[0] += 1
+    if len(agg) > TYPEFLOW_CAP:
+        keep = sorted(agg.items(), key=lambda kv: -kv[1]["n"])
+        agg = dict(keep[:TYPEFLOW_CAP])
+        agg["__capped__"] = {"n": len(keep) - TYPEFLOW_CAP, "ty": {}}
+    return agg
 
 
 # ---- #123: float hygiene — the equality trap and the ordering wobble.

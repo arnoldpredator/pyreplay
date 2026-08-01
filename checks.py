@@ -2900,6 +2900,45 @@ def _():
         expect(probe in tpl, f"seq contract missing: {probe}")
 
 
+@check("type-flow: observed histograms, first moments, stability (#82)")
+def _():
+    src = fixture("tf82.py", (
+        "def lookup(catalog, key):\n"
+        "    price = catalog.get(key)\n"
+        "    if price is None:\n"
+        "        price = 'n/a'\n"
+        "    return price\n"
+        "catalog = {'kb': 72.0}\n"
+        "for key in ('kb', 'usb'):\n"
+        "    p = lookup(catalog, key)\n"))
+    p = run_trace(src)
+    tf = p["typeflow"]
+    pr = tf.get("tf82.py|lookup|price")
+    expect(pr is not None and pr["n"] == 3,
+           f"price changed 3 times (float, None, str): {pr}")
+    expect(set(pr["ty"]) == {"float", "NoneType", "str"},
+           f"the sneaky None and its str patch both observed: "
+           f"{pr['ty']}")
+    for ty, (cnt, first) in pr["ty"].items():
+        e = p["events"][first]
+        expect("price" in e.get("ch", {})
+               and e["ch"]["price"].get("c") == ty,
+               f"first moment of {ty} must BE a recorded {ty} "
+               f"change: event {first}")
+    cat = tf.get("tf82.py|<module>|catalog")
+    expect(cat is not None and set(cat["ty"]) == {"dict"},
+           f"a stable name holds ONE type: {cat}")
+    expect("__capped__" not in tf,
+           "no cap on a small trace — the marker only appears cut")
+
+    with open(os.path.join(HERE, "replayer_template.html"),
+              encoding="utf-8") as fh:
+        tpl = fh.read()
+    for probe in ("gly tflow", "unstable type",
+                  "Click: first ", 'contains("tflow")'):
+        expect(probe in tpl, f"type-flow surface missing: {probe}")
+
+
 @check("shape timeline: probes, np-module trap, the transpose (#83)")
 def _():
     sys.path.insert(0, HERE)

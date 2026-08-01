@@ -2958,6 +2958,79 @@ def _():
         expect(probe in tpl, f"gate contract missing: {probe}")
 
 
+@check("mining: survivors, kills, window honesty, support math (#74)")
+def _():
+    src = fixture("mine74.py", (
+        "def scale(xs, k, cap):\n"
+        "    out = []\n"
+        "    total = 0\n"
+        "    for x in xs:\n"
+        "        total += x * k\n"
+        "        out.append(x * k)\n"
+        "    return sorted(out)\n"
+        "\n"
+        "def big():\n"
+        "    return list(range(200))\n"
+        "\n"
+        "for trial in range(4):\n"
+        "    scale([3, 1, 2], trial + 1, 100)\n"
+        "scale([5, 4, 9, 2, 8], -1, 100)\n"
+        "big()\n"))
+    p = run_trace(src)
+    mined = p.get("mined") or {}
+    m = mined.get("mine74.py:scale")
+    expect(m and m["frames"] == 5, f"five scale observations: {m}")
+    facts = {f["s"]: f["sup"] for f in m["facts"]}
+    expect(facts.get("cap == 100 at entry") == 5,
+           f"constant arg must survive with full support: {facts}")
+    expect(facts.get("cap >= k at entry") == 5,
+           "the pair template must survive (100 >= every k)")
+    expect("k > 0 at entry" not in facts,
+           "the k=-1 call must KILL the sign fact — first "
+           "counterexample is fatal")
+    expect(facts.get("k: type int constant at entry") == 5,
+           "the type fact survives the sign kill")
+    expect(facts.get("return value sorted (ascending)") == 5,
+           "sorted(out) at return must be mined")
+    expect("total monotonically nondecreasing (per call)" not in facts,
+           "k=-1 makes total decrease — monotone must die")
+    expect(not any("scale ==" in s for key in mined
+                   for s in [f["s"] for f in mined[key]["facts"]]),
+           "function objects are machinery — never mined as data")
+    mb = mined.get("mine74.py:big")
+    expect(mb is None or not any("sorted" in f["s"] for f in mb["facts"]),
+           "a WINDOWED container (200 > recorded window) must never "
+           "claim sortedness — judged only when fully recorded")
+    # --mine mode: same trace twice -> support doubles; sidecar written
+    tr = os.path.join(TMP, "mine74.py.html")
+    r = subprocess.run([PY, os.path.join(HERE, "tracer.py"),
+                        "--mine", tr, tr],
+                       capture_output=True, text=True, cwd=TMP,
+                       stdin=subprocess.DEVNULL, timeout=120)
+    expect("cap == 100 at entry   [held 10x]" in r.stdout,
+           f"support must SUM across mined traces: {r.stdout[-400:]}")
+    side = os.path.join(TMP, "mined_mine74.py.json")
+    expect(os.path.exists(side), "the JSON sidecar must be written")
+    with open(side, encoding="utf-8") as fh:
+        sj = json.load(fh)
+    expect(sj["mine74.py:scale"]["runs"] == 2,
+           "the sidecar counts contributing traces as runs")
+    # --runs N --mine: fingerprints survive trace deletion into report
+    rout = os.path.join(TMP, "runs_mine74.html")
+    r2 = subprocess.run([PY, os.path.join(HERE, "tracer.py"),
+                         "--runs", "2", "--mine",
+                         "--granularity", "line", "--out", rout, src],
+                        capture_output=True, text=True, cwd=TMP,
+                        stdin=subprocess.DEVNULL, timeout=300)
+    with open(rout, encoding="utf-8") as fh:
+        mm = re.search(r'<script id="runs-data" type="application/'
+                       r'json">(.*?)</script>', fh.read(), re.S)
+    rd = json.loads(mm.group(1).replace("<\\/", "</"))
+    rm = (rd.get("mined") or {}).get("mine74.py:scale")
+    expect(rm and rm["runs"] == 2 and rm["frames"] == 10,
+           f"--runs 2 --mine must aggregate 10 calls / 2 runs: {rm}")
+
+
 # ---------------------------------------------------------------- runner
 
 def main():

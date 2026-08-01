@@ -3168,6 +3168,9 @@ def _write_trace(tr, out, granularity, entry_label, error,
         "error": error,
         "startAt": trigger_desc,
         "trip": getattr(tr, "trip", None),
+        # #74: this run's own mined invariants — support = this run's
+        # observations only; --runs --mine multiplies the evidence
+        "mined": mine_invariants([{"events": tr.events}]),
     }
     if extra:
         payload.update(extra)
@@ -3557,7 +3560,7 @@ def _boundaries(events):
 
 
 def _run_harness(orig_argv, n_runs, out, entry_label, granularity,
-                 module, script, chaos_seed=None):
+                 module, script, chaos_seed=None, mine=False):
     """#63: one run is an anecdote; N runs are an experiment. Execute the
     target N times (each a fresh child tracer with identical stdin),
     classify every outcome (exception type + crash site), keep ONE
@@ -3589,7 +3592,8 @@ def _run_harness(orig_argv, n_runs, out, entry_label, granularity,
     # DERIVED seed (base+i-1): N runs under one seed would explore one
     # biased stream N times; N seeds explore N different ones, and any
     # failing child remains reproducible from its own recorded seed.
-    strip = {"--runs", "--out", "--granularity", "--chaos-schedule"}
+    strip = {"--runs", "--out", "--granularity", "--chaos-schedule",
+             "--mine"}
     child_flags, i = [], 0
     while i < len(orig_argv):
         tok = orig_argv[i]
@@ -3640,6 +3644,7 @@ def _run_harness(orig_argv, n_runs, out, entry_label, granularity,
     # of (file, line) pairs each run touched, split by outcome
     cov_fail, cov_pass = {}, {}
     n_fail_cov = n_pass_cov = 0
+    mine_acc = {}        # #74: fingerprints survive the trace deletion
     try:
         for i in range(1, n_runs + 1):
             tr_path = f"{rep_base}_run{i}.html"
@@ -3658,6 +3663,8 @@ def _run_harness(orig_argv, n_runs, out, entry_label, granularity,
                     ev_count = len(data.get("events", []))
                     cov = {(e["f"], e["l"]) for e in data.get("events", [])
                            if e.get("f") and e.get("l")}
+                    if mine:      # #74: fingerprints before deletion
+                        _mine_collect(data, mine_acc, i)
                     err = data.get("error")
                     if err is None and r.returncode == 0:
                         cls = "clean"
@@ -3757,6 +3764,7 @@ def _run_harness(orig_argv, n_runs, out, entry_label, granularity,
                      "pass": n_pass_cov, "fail": n_fail_cov,
                      "top": rows}
 
+    mined = (_mine_derive(mine_acc, min_support=2) if mine else None)
     payload = {"script": entry_label, "requested": n_runs,
                "granularity": granularity,
                "python": sys.version.split()[0],
@@ -3764,6 +3772,7 @@ def _run_harness(orig_argv, n_runs, out, entry_label, granularity,
                "chaos": chaos_seed,   # #68: seed base, or null
                "interrupted": interrupted,
                "suspicion": suspicion,
+               "mined": mined,        # #74, or null without --mine
                "perRun": per_run}
     template_path = os.path.join(os.path.dirname(SELF),
                                  "runs_template.html")
@@ -3789,8 +3798,293 @@ def _run_harness(orig_argv, n_runs, out, entry_label, granularity,
         for row in suspicion["top"][:5]:
             print(f"    {row['score']:.2f}  {row['f']}:{row['l']}"
                   + (f"  {row['src']}" if row["src"] else ""))
+    if mined is not None:
+        _mine_print(mined, len(per_run))
     print(f"report -> {out}")
     return 0 if set(counts) == {"clean"} else 1
+
+
+# ---- #74: invariant mining (Daikon-lite) --------------------------------
+# A small template library checked OFFLINE against recorded traces:
+# candidates instantiated per variable/pair at function entry/exit and
+# over each frame's value sequence, killed on the first counterexample,
+# survivors ranked by support (evaluable observations). "Held in N
+# observations" is an observation, never a proof — the label says so
+# everywhere the facts appear. Noise control: constants imply and
+# suppress weaker facts, pairs live among numeric ARGS only, containers
+# are judged only when fully recorded (window honesty), NaN kills order
+# facts for that observation.
+
+def _mine_num(enc):
+    if not isinstance(enc, dict) or enc.get("t") != "p":
+        return None
+    if enc.get("c") not in ("int", "float"):
+        return None
+    try:
+        x = float(enc.get("v"))
+    except (TypeError, ValueError):
+        return None
+    return None if x != x else x          # NaN: no order facts
+
+
+def _mine_items(enc):
+    """Fully-recorded ordered container -> list of numeric items (or
+    None when truncated / non-numeric / unordered kind)."""
+    if not isinstance(enc, dict) or enc.get("t") not in ("list", "tuple"):
+        return None
+    v = enc.get("v")
+    if not isinstance(v, list) or enc.get("n") != len(v):
+        return None                        # window: judged only if FULL
+    out = []
+    for it in v:
+        x = _mine_num(it)
+        if x is None:
+            return None
+        out.append(x)
+    return out
+
+
+class _VarFacts:
+    """Per (function, site, variable): everything the templates need,
+    updated per observation, killed monotonically (a dead fact never
+    revives)."""
+
+    __slots__ = ("count", "types", "values", "vmin", "over_c",
+                 "lens", "sorted_ok", "sortable")
+
+    def __init__(self):
+        self.count = 0
+        self.types = set()
+        self.values = set()
+        self.over_c = False       # too many distinct values for == C
+        self.vmin = None
+        self.lens = set()
+        self.sorted_ok = True
+        self.sortable = 0         # observations where sortedness judged
+
+    def see(self, enc):
+        self.count += 1
+        if isinstance(enc, dict):
+            self.types.add(enc.get("c") or enc.get("t") or "?")
+        if not self.over_c:
+            key = json.dumps(enc, sort_keys=True, default=str)
+            self.values.add(key)
+            if len(self.values) > 6:
+                self.over_c = True
+                self.values.clear()
+        x = _mine_num(enc)
+        if x is not None:
+            self.vmin = x if self.vmin is None else min(self.vmin, x)
+        if isinstance(enc, dict) and enc.get("n") is not None:
+            self.lens.add(enc["n"])
+        items = _mine_items(enc)
+        if items is not None and len(items) >= 2:
+            self.sortable += 1
+            if any(a > b for a, b in zip(items, items[1:])):
+                self.sorted_ok = False
+
+    _MACHINERY = {"function", "type", "module",
+                  "builtin_function_or_method", "method"}
+
+    def facts(self, label, site):
+        out = []
+        # def-bindings, classes, imports: machinery, not data — a fact
+        # about them is spam, not insight
+        if self.count == 0 or self.types <= self._MACHINERY:
+            return out
+        if not self.over_c and len(self.values) == 1:
+            try:
+                enc = json.loads(next(iter(self.values)))
+            except Exception:
+                enc = None
+            shown = (enc.get("v") if isinstance(enc, dict)
+                     and enc.get("t") == "p"
+                     else "one recorded value")
+            if isinstance(shown, str) and len(shown) > 24:
+                shown = shown[:22] + "…"
+            out.append((f"{label} == {shown}{site}", self.count))
+            return out                     # == C implies the rest
+        if len(self.types) == 1:
+            out.append((f"{label}: type {next(iter(self.types))} "
+                        f"constant{site}", self.count))
+        if self.vmin is not None:
+            if self.vmin > 0:
+                out.append((f"{label} > 0{site}", self.count))
+            elif self.vmin >= 0:
+                out.append((f"{label} >= 0{site}", self.count))
+        if len(self.lens) == 1 and self.lens != {0}:
+            out.append((f"len({label}) == {next(iter(self.lens))}"
+                        f"{site}", self.count))
+        return out
+
+
+class _PairFacts:
+    __slots__ = ("count", "always_eq", "always_le", "always_ge")
+
+    def __init__(self):
+        self.count = 0
+        self.always_eq = self.always_le = self.always_ge = True
+
+    def see(self, a, b):
+        self.count += 1
+        if a != b:
+            self.always_eq = False
+        if a > b:
+            self.always_le = False
+        if a < b:
+            self.always_ge = False
+
+    def fact(self, na, nb, site):
+        if self.count < 2:
+            return None
+        if self.always_eq:
+            return (f"{na} == {nb}{site}", self.count)
+        if self.always_le:
+            return (f"{na} <= {nb}{site}", self.count)
+        if self.always_ge:
+            return (f"{na} >= {nb}{site}", self.count)
+        return None
+
+
+def _mine_collect(payload, acc, run_id):
+    """Walk one payload's events (the annotate_conditionals frame-stack
+    pattern) and feed every entry/exit/lifetime observation into acc,
+    keyed by file:function."""
+    stacks, gen_saved = {}, {}
+    for ev in payload.get("events", []):
+        e = ev.get("e")
+        stack = stacks.setdefault(ev.get("t", "main"), [])
+        if e == "call":
+            gm = ev.get("g")
+            if gm is not None and gm.get("s") == "r" \
+                    and gm.get("i") in gen_saved:
+                stack.append(gen_saved.pop(gm["i"]))
+                continue
+            key = f"{ev.get('f')}:{ev.get('fn')}"
+            fr = {"key": key, "vars": {}, "seq": {}}
+            a = acc.setdefault(key, {
+                "frames": 0, "runs": set(),
+                "entry": {}, "exit": {}, "ret": _VarFacts(),
+                "pairs": {}, "life": {}})
+            a["frames"] += 1
+            a["runs"].add(run_id)
+            args = ev.get("ch") or {}
+            nums = {}
+            for name, enc in args.items():
+                a["entry"].setdefault(name, _VarFacts()).see(enc)
+                fr["vars"][name] = enc
+                x = _mine_num(enc)
+                if x is not None:
+                    nums[name] = x
+                    fr["seq"][name] = [x]
+            names = sorted(nums)
+            for i in range(len(names)):
+                for j in range(i + 1, len(names)):
+                    a["pairs"].setdefault(
+                        (names[i], names[j]), _PairFacts()).see(
+                        nums[names[i]], nums[names[j]])
+            stack.append(fr)
+            continue
+        if not stack:
+            continue
+        fr = stack[-1]
+        for name, enc in (ev.get("ch") or {}).items():
+            fr["vars"][name] = enc
+            x = _mine_num(enc)
+            if x is not None:
+                fr["seq"].setdefault(name, []).append(x)
+        if e == "return":
+            gm = ev.get("g")
+            if gm is not None and gm.get("s") == "y":
+                gen_saved[gm["i"]] = fr     # suspended, not an exit
+                stack.pop()
+                continue
+            a = acc.get(fr["key"])
+            if a is not None:
+                for name, enc in fr["vars"].items():
+                    a["exit"].setdefault(name, _VarFacts()).see(enc)
+                if "ret" in ev:
+                    a["ret"].see(ev.get("ret"))
+                for name, seq in fr["seq"].items():
+                    if len(seq) < 3:
+                        continue
+                    lf = a["life"].setdefault(
+                        name, {"nondec": True, "noninc": True,
+                               "count": 0})
+                    lf["count"] += 1
+                    if any(x > y for x, y in zip(seq, seq[1:])):
+                        lf["nondec"] = False
+                    if any(x < y for x, y in zip(seq, seq[1:])):
+                        lf["noninc"] = False
+            stack.pop()
+
+
+def _mine_derive(acc, min_support=1):
+    """Surviving facts per function, ranked by support. min_support
+    guards the multi-run report against single-anecdote spam."""
+    out = {}
+    for key, a in sorted(acc.items()):
+        facts = []
+        for name, vf in sorted(a["entry"].items()):
+            facts += vf.facts(name, " at entry")
+        exit_only = {n: vf for n, vf in a["exit"].items()}
+        for name, vf in sorted(exit_only.items()):
+            for s, sup in vf.facts(name, " at exit"):
+                # a var constant at entry AND exit reads once, at entry
+                if not any(s.replace(" at exit", " at entry") == s0
+                           for s0, _ in facts):
+                    facts.append((s, sup))
+            if vf.sortable and vf.sorted_ok:
+                facts.append((f"{name} sorted (ascending) at return",
+                              vf.sortable))
+        for s, sup in a["ret"].facts("return", ""):
+            facts.append((s, sup))
+        if a["ret"].sortable and a["ret"].sorted_ok:
+            facts.append(("return value sorted (ascending)",
+                          a["ret"].sortable))
+        for (na, nb), pf in sorted(a["pairs"].items()):
+            f = pf.fact(na, nb, " at entry")
+            if f:
+                facts.append(f)
+        for name, lf in sorted(a["life"].items()):
+            if lf["nondec"] and lf["noninc"]:
+                continue                    # constant: entry facts own it
+            if lf["nondec"]:
+                facts.append((f"{name} monotonically nondecreasing "
+                              f"(per call)", lf["count"]))
+            elif lf["noninc"]:
+                facts.append((f"{name} monotonically nonincreasing "
+                              f"(per call)", lf["count"]))
+        facts = [(s, sup) for s, sup in facts if sup >= min_support]
+        if facts:
+            facts.sort(key=lambda f: (-f[1], f[0]))
+            out[key] = {"frames": a["frames"],
+                        "runs": len(a["runs"]),
+                        "facts": [{"s": s, "sup": sup}
+                                  for s, sup in facts]}
+    return out
+
+
+def mine_invariants(payloads, min_support=1):
+    """#74 entry point: mine one or many payloads. Returns
+    {file:fn -> {frames, runs, facts:[{s, sup}]}}."""
+    acc = {}
+    for i, p in enumerate(payloads):
+        _mine_collect(p, acc, i)
+    return _mine_derive(acc, min_support)
+
+
+def _mine_print(mined, n_runs):
+    print(f"\nmined invariants — held in EVERY evaluable observation "
+          f"across {n_runs} run(s); an observation, NEVER a proof:")
+    if not mined:
+        print("  (nothing survived — too few observations, or nothing "
+              "held everywhere)")
+        return
+    for key, m in mined.items():
+        print(f"  {key} — {m['frames']} call(s) / {m['runs']} run(s):")
+        for f in m["facts"]:
+            print(f"    {f['s']}   [held {f['sup']}x]")
 
 
 def _parse_sweep(spec):
@@ -4277,6 +4571,29 @@ def main(argv):
             print("usage: tracer.py --diverge A.html B.html")
             return 2
         return _diverge(argv[1], argv[2])
+    if argv[:1] == ["--mine"]:
+        # #74, a mode: mine invariants across EXISTING traces — offline,
+        # nothing runs. Support multiplies across the files you give it.
+        if len(argv) < 2:
+            print("usage: tracer.py --mine trace_a.html [trace_b.html …]")
+            return 2
+        payloads = []
+        for path in argv[1:]:
+            try:
+                payloads.append(_extract_payload(path))
+            except Exception as exc:
+                print(f"error: unreadable trace {path}: "
+                      f"{type(exc).__name__}: {exc}")
+                return 2
+        mined = mine_invariants(payloads,
+                                min_support=2 if len(payloads) > 1 else 1)
+        _mine_print(mined, len(payloads))
+        side = os.path.splitext(os.path.basename(argv[1]))[0]
+        side = f"mined_{side}.json"
+        with open(side, "w", encoding="utf-8") as fh:
+            json.dump(mined, fh, indent=1)
+        print(f"sidecar -> {side}")
+        return 0
     orig_argv = list(argv)   # the N-run harness re-issues these to children
     out = None
     max_events = MAX_EVENTS
@@ -4300,6 +4617,7 @@ def main(argv):
     gen_file = None      # #127: minimal #67 protocol — gen(v, seed)
     predict_src = None   # #127: claimed growth, e.g. "n^2"
     sweep_seed = 1234
+    mine_flag = False    # #74: --runs N --mine (multi-run mining)
     watch_list = []      # #72: [(src, code)] watch expressions
     inv_list = []        # #73: [(src, code, names)] invariants
     check = None         # #70: compiled --check expression
@@ -4422,6 +4740,9 @@ def main(argv):
                 print("error: --sweep-seed expects an integer")
                 return 2
             argv = argv[2:]
+        elif argv[0] == "--mine":
+            mine_flag = True
+            argv = argv[1:]
         elif argv[0] == "--start-at" and len(argv) >= 2:
             fname, _, lineno = argv[1].rpartition(":")
             if not fname or not lineno.isdigit():
@@ -4494,6 +4815,11 @@ def main(argv):
     if (gen_file or predict_src) and not sweep_spec:
         print("error: --gen/--predict belong to --sweep — add "
               '--sweep "n=..." (the ladder to run them on)')
+        return 2
+    if mine_flag and not runs_n:
+        print("error: --mine rides --runs (mine N runs together), or "
+              "stands alone as a mode: tracer.py --mine a.html b.html "
+              "— single traces mine themselves automatically.")
         return 2
     if sweep_spec and runs_n:
         print("error: --sweep and --runs are different experiments — "
@@ -4575,7 +4901,8 @@ def main(argv):
 
     if runs_n:
         return _run_harness(orig_argv, runs_n, out, entry_label,
-                            granularity, module, script, chaos_seed)
+                            granularity, module, script, chaos_seed,
+                            mine=mine_flag)
 
     if sweep_spec:
         return _sweep_harness(orig_argv, sweep_spec, gen_file,

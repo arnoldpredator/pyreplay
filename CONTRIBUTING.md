@@ -7,7 +7,7 @@ can pick an item and implement it. Features are numbered **#63 onward**, continu
 in FEATURES.md. Fifteen roadmap items have shipped since the list was
 written (63, 64, 65, 70, 77, 79, 80, 98, 101 v1, 103, 104 Tier 1,
 106, 109, 118, 120 v1) — their rows below are struck through;
-**43 remain unbuilt** (plus the stated remainders of 75/85/88/89/101/104/119/120/127/128).
+**42 remain unbuilt** (plus the stated remainders of 74/75/85/88/89/101/104/119/120/127/128).
 
 ## Start here — how to contribute
 
@@ -80,7 +80,7 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
 | 71 | Compare implementations on the same inputs | M | ★★ |
 | 72 | ~~Record extra expressions each line (--watch)~~ **shipped** | — | ★★ |
 | 73 | ~~Contracts checked during the run (--invariant)~~ **shipped** | — | ★★ |
-| 74 | Mine the invariants the runs never broke | L | ★★★ |
+| 74 | ~~Mine the invariants the runs never broke~~ **shipped (map rows remain)** | L | ★★★ |
 | 75 | ~~Full backward slice of a value~~ **shipped (v1; caller-arg crossing remains)** | — | ★★★ |
 | 76 | Forward taint from an input | L | ★★ |
 | 77 | ~~"Why didn't this line run?"~~ **shipped** | — | ★★★ |
@@ -292,6 +292,7 @@ software.
   Stroustrup lens distilled.
 
 ### 74. Invariant mining (Daikon-lite)
+**Shipped 2026-08-01** — now catalog entry #74 in [FEATURES.md](FEATURES.md): template library (constants, types, signs, len, sorted-at-return, per-call monotonicity, numeric-arg order pairs) killed on first counterexample, survivors ranked by support; three surfaces — ⚗ on every line trace's boundary events (self-mined at write time), `--runs N --mine` aggregation into the runs report, standalone `--mine a.html b.html` with JSON sidecar. Machinery objects never mined; windowed containers never judged; "an observation, never a proof" verbatim everywhere. What remains: mined facts on MAP function rows.
 - **What:** observe many runs (#63) and **propose** the invariants
   that never broke: `x > 0`, `i < len(a)`, `a is sorted at return`,
   `type(x) constant`, `total is monotonically nondecreasing` — per

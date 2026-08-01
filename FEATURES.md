@@ -1069,6 +1069,47 @@ dead or invented panel; every cap and truncation is announced.
 
   [![Feature 73 — invariants](screenshots/73-invariant.png)](screenshots/73-invariant.png)
 
+### 74. Invariant mining — what the code actually guaranteed (Daikon-lite)
+- **Measured:** offline, zero run-time cost: a template library is
+  checked against recorded observations — per function, at entry
+  (arguments), at exit (final frame state + return value) and over
+  each frame's value sequence. Templates: `== C` constants, type
+  constant, sign (`> 0` / `>= 0`), `len(v) == K`, sorted (ascending)
+  at return, monotonically non-decreasing/-increasing per call, and
+  order pairs among numeric arguments (`cap >= k`). A candidate dies
+  on its FIRST counterexample and never revives; survivors carry
+  their support (evaluable observations). Noise control is the
+  craft: a constant suppresses the facts it implies, function/class/
+  module objects are machinery and never mined, containers are
+  judged only when FULLY recorded (window honesty), NaN kills order
+  facts for that observation.
+- **Displayed:** three surfaces. Every line trace mines itself at
+  write time — the ⚗ row appears on a function's call/return events
+  ("cap == 100 at entry 5× · return value sorted (ascending) 5× —
+  held in every observation of this run; mined, never a proof").
+  `--runs N --mine` multiplies the evidence across the run set: the
+  mined section lands in the runs report and the terminal, support
+  counted per call across all runs. `tracer.py --mine a.html b.html`
+  mines existing traces offline and writes a JSON sidecar.
+- **Why:** mined invariants are executable documentation — what this
+  code *actually* guarantees, extracted from what it actually did —
+  and bug detectors: a run that breaks an invariant that held
+  everywhere else is your suspect; feed the pair to `--diverge`.
+- **Use case:** five calls of a scaler: `cap == 100 at entry`,
+  `cap >= k`, `return value sorted (ascending)`, `total
+  monotonically nondecreasing` — then one call passes `k=-1` and the
+  sign and monotone facts die, exactly as they should: the mined set
+  IS the behavioral diff.
+- **Command:** automatic in every line trace (⚗ on boundary events) ·
+  `--runs 20 --mine app.py` for the multi-run set · `--mine t1.html
+  t2.html` offline. Honesty, verbatim on every surface: held in N
+  observations — an observation, NEVER a proof.
+- **Screenshot** — a return event: the observed signature above, the
+  ⚗ mined row below — constants, the pair fact, sortedness at
+  return, each with its support count.
+
+  [![Feature 74 — invariant mining](screenshots/74-mined.png)](screenshots/74-mined.png)
+
 ### 77. The whyline — "why didn't this line run?"
 - **Measured:** a static AST pass stamps every line with its innermost
   controlling construct (then/else/loop/loop-else/except/case/def —

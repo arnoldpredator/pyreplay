@@ -565,6 +565,23 @@ mergesort at both granularities: fn measures n^1.0 (calls ARE linear),
 line measures `n*log(n)` CONSISTENT — the bench tells you which cost
 you counted.
 
+**Invariant mining (⚗).** Every line trace now mines itself: a
+template library (constants, types, signs, lengths, sorted-at-return,
+per-call monotonicity, order pairs among numeric arguments) is checked
+against everything the trace recorded — a candidate dies on its first
+counterexample, survivors appear with their support on the function's
+call/return events: `cap == 100 at entry 5× · cap >= k 5× · return
+value sorted (ascending) 5×`. That is executable documentation — what
+the code *actually* guaranteed in these observations — and a bug
+detector: mine your clean runs (`--runs 20 --mine`, mined section in
+the runs report), and the run that breaks a mined fact is your
+suspect; `--diverge` the pair. `tracer.py --mine a.html b.html` mines
+existing traces offline (support sums; JSON sidecar). The honesty
+label rides every surface: held in N observations — an observation,
+never a proof. Noise is controlled by design: constants suppress what
+they imply, machinery objects are never mined, windowed containers
+are never judged.
+
 ## 4e. The replayer grows: chapters, console, query, whyline, schemas (2026-08)
 
 **Per-test chapters.** `python3 tracer.py -m pytest tests/` now

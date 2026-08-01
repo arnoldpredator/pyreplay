@@ -139,6 +139,18 @@ honesty note about unresolvable calls becomes a picture — with its own
 honesty rule attached: the absence of a dark edge is never evidence of
 absence, only the adopted runs' testimony.
 
+**The crime scene (#95) — history as the third axis.** On any mapped
+git repo the header grows a **lens** select: *churn × cx* tints every
+module by √(change-frequency × decision-points) over a window the
+banner names (default 12 months; `--churn-since` takes git's own
+vocabulary), and *risk* multiplies runtime heat in — changes often,
+is complex AND carries the run, the strongest bug predictor known.
+Scores are normalized to the repo's own maxima, so the brightest box
+is *this* codebase's top offender; the terminal prints the top three
+with the raw numbers. No git history readable → the lens stays
+absent. pyreplay mapped on itself puts `tracer` at 0.93 — no
+surprises, which is exactly the point.
+
 # pyreplay tracer — user guide
 
 Record a Python program's execution — every line, call, return, and

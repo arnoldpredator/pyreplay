@@ -7,7 +7,7 @@ can pick an item and implement it. Features are numbered **#63 onward**, continu
 in FEATURES.md. Fifteen roadmap items have shipped since the list was
 written (63, 64, 65, 70, 77, 79, 80, 98, 101 v1, 103, 104 Tier 1,
 106, 109, 118, 120 v1) — their rows below are struck through;
-**46 remain unbuilt** (plus the stated remainders of 88/101/104/119/120).
+**45 remain unbuilt** (plus the stated remainders of 88/101/104/119/120).
 
 ## Start here — how to contribute
 
@@ -101,7 +101,7 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
 | 92 | Live streaming replayer (--serve) | L | ★★ |
 | 93 | Attach to a running process (PEP 768) | M | ★★★ |
 | 94 | Project-wide static call graph | L | ★★ |
-| 95 | Git churn × complexity overlay | M | ★★★ |
+| 95 | ~~Git churn × complexity overlay~~ **shipped** | — | ★★★ |
 | 96 | Declared layering rules; violations in red | S | ★★ |
 | 97 | Dead code with runtime evidence | M | ★★ |
 | 98 | ~~Per-test chapters in suite traces~~ **shipped** | — | ★★★ |
@@ -622,6 +622,7 @@ software.
   its niche is empty), IDE indexers (closed and per-symbol).
 
 ### 95. Crime-scene overlay (git churn × complexity)
+**Shipped 2026-08-01** — now catalog entry #95 in [FEATURES.md](FEATURES.md), with the full measured/displayed/why/use-case record (heat/churn/risk lens select; window named in the banner; degrades to absent without git).
 - **What:** a second map palette from history: per-module change
   frequency (`git log --numstat`) × a stdlib-computed complexity
   score; the risk quadrant = **churns often AND complex AND hot at

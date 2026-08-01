@@ -28,6 +28,7 @@ import importlib.util
 import json
 import os
 import re
+import subprocess
 import sys
 
 
@@ -46,6 +47,71 @@ def scope_ok(rel, include, exclude):
 SKIP_DIRS = {"__pycache__", ".git", ".hg", ".svn", ".venv", "venv", "env",
              "node_modules", "site-packages", ".tox", ".mypy_cache",
              ".pytest_cache", "build", "dist", ".idea", ".vscode", ".eggs"}
+
+# #95: decision-point node types — a cyclomatic-ISH count, honestly
+# labeled "decision points", never "McCabe"
+_CX_NODES = (ast.If, ast.While, ast.For, ast.AsyncFor, ast.IfExp,
+             ast.ExceptHandler, ast.Assert, ast.comprehension)
+
+
+def _complexity(tree):
+    """#95: decision points per module — ifs, loops, handlers, ternaries,
+    asserts, per-comprehension clauses, boolean-op branches and match
+    cases. A cheap, stdlib, explainable complexity score."""
+    n = 0
+    for node in ast.walk(tree):
+        if isinstance(node, _CX_NODES):
+            n += 1
+            if isinstance(node, ast.comprehension):
+                n += len(node.ifs)
+        elif isinstance(node, ast.BoolOp):
+            n += len(node.values) - 1
+        elif isinstance(node, ast.Match):
+            n += len(node.cases)
+    return n
+
+
+def _gather_churn(root_dir, since):
+    """#95: per-file change counts from `git log --numstat` over the
+    window, scoped to the mapped subtree. Returns None when there is no
+    git history to read (not a repo, no git, git errors) — the crime
+    lens degrades to absent, it never guesses."""
+    def _git(*args):
+        return subprocess.run(["git", "-C", root_dir] + list(args),
+                              capture_output=True, text=True, timeout=60,
+                              stdin=subprocess.DEVNULL)
+    try:
+        top = _git("rev-parse", "--show-toplevel")
+        if top.returncode != 0:
+            return None
+        toplevel = top.stdout.strip()
+        log = _git("log", "--numstat", "--no-renames", "--format=%H",
+                   "--since=" + since, "--", ".")
+        if log.returncode != 0:
+            return None
+    except Exception:
+        return None
+    files, commits = {}, 0
+    hash_re = re.compile(r"^[0-9a-f]{40}$")
+    stat_re = re.compile(r"^(\d+|-)\t(\d+|-)\t(.+)$")
+    for line in log.stdout.splitlines():
+        if hash_re.match(line):
+            commits += 1
+            continue
+        m = stat_re.match(line)
+        if m is None:
+            continue
+        rel = os.path.relpath(os.path.join(toplevel, m.group(3)),
+                              root_dir)
+        if rel.startswith(".."):
+            continue   # touched outside the mapped subtree
+        rec = files.setdefault(rel, {"c": 0, "ch": 0})
+        rec["c"] += 1
+        if m.group(1) != "-":
+            rec["ch"] += int(m.group(1)) + int(m.group(2))
+    if commits == 0:
+        return None   # a repo with no history in the window: say absent
+    return {"since": since, "commits": commits, "files": files}
 
 
 def find_py_files(root):
@@ -619,12 +685,19 @@ def main(argv):
     out = None
     traces = []
     no_trace = False
+    no_churn = False
+    churn_since = "12 months ago"   # #95: git's --since vocabulary
     heat_out = None
     include, exclude = [], []
     while argv[:1] and argv[0] in ("--out", "--trace", "--no-trace",
-                                   "--include", "--exclude", "--heat-out"):
+                                   "--include", "--exclude", "--heat-out",
+                                   "--churn-since", "--no-churn"):
         if argv[0] == "--no-trace":   # boolean: refuses auto-heat
             no_trace = True
+            argv = argv[1:]
+            continue
+        if argv[0] == "--no-churn":   # boolean: skip git history
+            no_churn = True
             argv = argv[1:]
             continue
         if len(argv) < 3:
@@ -636,6 +709,8 @@ def main(argv):
             traces.append(argv[1])
         elif argv[0] == "--heat-out":
             heat_out = argv[1]
+        elif argv[0] == "--churn-since":
+            churn_since = argv[1]
         elif argv[0] == "--include":
             include.append(argv[1])
         else:
@@ -712,6 +787,7 @@ def main(argv):
                 imports.append({"s": emit_id, "d": d})
         entry = {"id": emit_id,
                  "dynimp": scan.dynimp,
+                 "cx": _complexity(tree),   # #95: decision points
                  "path": os.path.relpath(path, root_dir),
                  "pkg": parent_pkg(mod, path),
                  "loc": len(src.splitlines()),
@@ -839,6 +915,33 @@ def main(argv):
         except Exception:
             pass   # unresolvable finder result: unknown, never claimed
 
+    churn = None if no_churn else _gather_churn(root_dir, churn_since)
+    if churn:
+        # #95: the crime scene — churn × complexity, the strongest bug
+        # predictor known. Terminal gets the top offenders; the map
+        # gets the lens.
+        by_path2 = {m["path"]: m for m in modules}
+        max_c = max((f["c"] for f in churn["files"].values()),
+                    default=0) or 1
+        max_x = max((m.get("cx", 0) for m in modules), default=0) or 1
+        scored = []
+        for p, f in churn["files"].items():
+            m = by_path2.get(p)
+            if m is None:
+                continue   # touched in history, not on this map now
+            s = ((f["c"] / max_c) * (m.get("cx", 0) / max_x)) ** 0.5
+            scored.append((s, f["c"], m.get("cx", 0), m["id"]))
+        scored.sort(reverse=True)
+        print(f"crime scene: {churn['commits']} commit(s) since "
+              f"\"{churn_since}\" touched this subtree; churn × "
+              f"complexity, top offenders:")
+        for s, c, x, mid in scored[:3]:
+            print(f"    {s:.2f}  {mid}  ({c} commit(s) · {x} decision "
+                  f"points)")
+    elif not no_churn:
+        print("crime scene: no git history readable here — the churn "
+              "lens stays absent (map from inside the repo to get it)")
+
     if heat and heat.get("xmod"):
         # #119 dark edges: runtime caller→callee pairs with NO static
         # route (neither an import nor a resolvable call) — the map's
@@ -874,6 +977,7 @@ def main(argv):
         "unresolvedCalls": unresolved,
         "errors": errors,
         "heat": heat,
+        "churn": churn,   # #95: git history lens, or null (no repo)
     }
     template = os.path.join(os.path.dirname(os.path.realpath(__file__)),
                             "map_template.html")

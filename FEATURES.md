@@ -1552,12 +1552,45 @@ dead or invented panel; every cap and truncation is announced.
 
   [![Feature 119 — dark edges](screenshots/119-dark-edges.png)](screenshots/119-dark-edges.png)
 
+### 95. The crime scene — churn × complexity (history as a lens)
+- **Measured:** per-module change counts from `git log --numstat`
+  over a window (default "12 months ago"; `--churn-since` takes git's
+  own vocabulary), scoped to the mapped subtree, rename-naive; plus a
+  stdlib complexity score from the AST already walked — decision
+  points (ifs, loops, handlers, ternaries, boolean branches, match
+  cases), honestly labeled *decision points*, never "McCabe". No
+  readable git history → the lens is absent, never guessed.
+- **Displayed:** a **lens** select beside the toggles: *heat*
+  (default) · *churn × cx* — tint by √(churn·complexity), normalized
+  to THIS repo's own maxima — · *risk*, ∛(churn·cx·heat), enabled
+  when a trace is adopted: changes often, is complex AND carries the
+  runtime. The banner names the window and commit count; tooltips
+  carry the raw numbers per module; a folded package wears its WORST
+  member's score (a fold must never hide the top offender); the
+  terminal prints the top offenders.
+- **Why:** structure is one axis, a run's behavior the second —
+  history is the third, and churn × complexity is the strongest bug
+  predictor known (Tornhill's crime-scene method; Nagappan & Ball's
+  defect studies). "Changed 18 times this year, 1081 decision points"
+  is where review effort goes first.
+- **Use case:** pyreplay mapped on itself: `tracer` scores 0.93 (18
+  commits · 1081 decision points) and burns red, `checks` 0.67,
+  everything else cold. Any pyreplay developer would have named the
+  same offender — now the map does.
+- **Command:** automatic on any mapped git repo — flip the lens in
+  the header. `--churn-since "24 months ago"` widens the window;
+  `--no-churn` skips git entirely.
+- **Screenshot** — pyreplay's own crime scene: tracer red-hot, checks
+  glowing, the quiet fleet cold, the banner naming the window.
+
+  [![Feature 95 — crime scene](screenshots/95-crime-scene.png)](screenshots/95-crime-scene.png)
+
 ---
 
 ## J. Infrastructure (no screenshots needed)
 
 ### 61. `checks.py` — the regression suite
-60 data-level checks (no browser): the tracer re-runs the permanent
+62 data-level checks (no browser): the tracer re-runs the permanent
 example suite and the mapper its fixtures, the embedded JSON is
 extracted from each generated HTML (chunked or not), and the honesty
 invariants are asserted in plain Python — windowed-change correctness,
@@ -1570,7 +1603,7 @@ deep links, per-test chapters, `--check` exit codes, the black-box
 ring, capsule contents, console-lane attribution, whyline guards,
 boundary schemas, schedule-chaos determinism and honesty labels,
 happens-before edge causality and Perfetto flow pairing, dark-edge
-diffing with its absence honesty.
+diffing and crime-scene churn, each with its absence honesty.
 Every subprocess the suite spawns pins its stdin, so
 the result cannot depend on how the suite was invoked. Run before and
 after every change, always.

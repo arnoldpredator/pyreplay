@@ -188,6 +188,12 @@
   <label class="toggle"><input type="checkbox" id="showcalls"> call routes</label>
   <label class="toggle" id="darklbl" style="display:none">
     <input type="checkbox" id="showdark" checked> dark edges</label>
+  <label class="toggle" id="lenslbl" style="display:none">lens
+    <select id="lens">
+      <option value="heat">heat</option>
+      <option value="churn">churn × cx</option>
+      <option value="risk">risk (× heat)</option>
+    </select></label>
   <label class="toggle" id="cyclbl" style="display:none"
     title="Paint every import-cycle edge red (clicking a cycle in the
 bottom bar spotlights it even with this off)">
@@ -329,6 +335,19 @@ function buildNote(allCycles) {
         ? ' · <span class="cyclink cycmore">+' +
           (DATA.cycles.length - shown.length) + " more…</span>" : ""));
   }
+  if (DATA.churn) {
+    const l = $("lens").value;
+    bits.unshift('crime scene: <span style="color:#e5c07b">' +
+      DATA.churn.commits + ' commit(s) since "' +
+      esc(DATA.churn.since) + '"</span>' +
+      (l === "churn"
+        ? " — tint = √(churn × complexity), brightest = this repo's " +
+          "top offender"
+        : l === "risk"
+          ? " — tint = ∛(churn × complexity × heat): changes often, " +
+            "is complex AND carries the runtime"
+          : " — switch the lens to churn × cx to see it"));
+  }
   if (DATA.heat) {
     const h = DATA.heat;
     bits.unshift('heat: <span style="color:var(--warn)">' +
@@ -351,6 +370,11 @@ buildNote(false);
 if (DATA.heat) $("heatlbl").style.display = "";
 if (DATA.heat && DATA.heat.dark && DATA.heat.dark.length)
   $("darklbl").style.display = "";
+if (DATA.churn) {   // #95: the lens only exists where history does
+  $("lenslbl").style.display = "";
+  if (!DATA.heat)
+    $("lens").querySelector('option[value="risk"]').disabled = true;
+}
 
 /* ---------- grouping: modules fold into package boxes ----------
    The unit of layout is the GROUP: a real package (its __init__ plus
@@ -575,6 +599,33 @@ function render() {
   const totalEv = DATA.heat ? Math.max(1, DATA.heat.total) : 1;
   const heatKind = DATA.heat ? DATA.heat.kind || "counts" : "counts";
   const modShare = mh => heatKind === "time" ? (mh.tSelf || 0) : mh.n;
+  // #95 crime lens: churn × complexity (× heat under "risk"). Scores
+  // are normalized by the repo's own maxima — the brightest box is
+  // THIS codebase's top offender, not an absolute claim.
+  const lens = DATA.churn ? $("lens").value : "heat";
+  const CH = lens !== "heat" && DATA.churn ? DATA.churn.files : null;
+  let maxC = 1, maxX = 1, maxH = 1;
+  if (CH) {
+    Object.values(CH).forEach(f => { if (f.c > maxC) maxC = f.c; });
+    DATA.modules.forEach(m => { if ((m.cx || 0) > maxX) maxX = m.cx; });
+    if (lens === "risk" && DATA.heat)
+      Object.values(DATA.heat.mods).forEach(mh => {
+        const s = heatKind === "time" ? (mh.tSelf || 0) : mh.n;
+        if (s > maxH) maxH = s;
+      });
+  }
+  const crime = m => {
+    const f = CH && CH[m.path];
+    if (!f) return 0;
+    const cn = f.c / maxC, xn = (m.cx || 0) / maxX;
+    if (lens === "risk") {
+      const mh = DATA.heat ? own(DATA.heat.mods, m.id) : null;
+      const hn = mh
+        ? (heatKind === "time" ? (mh.tSelf || 0) : mh.n) / maxH : 0;
+      return Math.cbrt(cn * xn * hn);
+    }
+    return Math.sqrt(cn * xn);
+  };
   const fmtUs = us => us < 1000 ? Math.round(us) + " µs"
     : us < 1e6 ? (us / 1000).toFixed(1) + " ms"
     : (us / 1e6).toFixed(2) + " s";
@@ -885,15 +936,23 @@ function render() {
     const loc = g.members.reduce((a, m) => a + m.loc, 0);
     const nErr = g.members.filter(m => m.err).length;
     const cin = cycInside[g.id] ? cycInside[g.id].size : 0;
+    // #95: a folded package under the crime lens wears its WORST
+    // member's score — a fold must never hide the top offender
+    const pkgCrime = CH ? Math.max(0, ...g.members.map(crime)) : 0;
     const cls = "pkg" + (isF ? " folded" : "") +
-      (H && !rn ? " cold" : "") +
+      (CH ? (pkgCrime === 0 ? " cold" : "")
+          : (H && !rn ? " cold" : "")) +
       (filtering ? (anyHit ? " hit" : " dimmed") : "") +
       (isF && relKeys.has("p:" + g.id) && !(filtering && anyHit)
         ? " rel" : "");
     svgPkg += '<g class="' + cls + '" data-pkg="' + esc(g.id) + '">' +
       '<rect x="' + gg.x + '" y="' + gg.y + '" width="' + gg.w +
       '" height="' + gg.h + '" rx="9"' +
-      (isF && H && rn ? ' style="fill:' + heatFill(rshare) + '"' : "") +
+      (CH
+        ? (isF && pkgCrime > 0
+          ? ' style="fill:' + heatFill(pkgCrime * totalEv) + '"' : "")
+        : isF && H && rn
+          ? ' style="fill:' + heatFill(rshare) + '"' : "") +
       "></rect>" +
       '<text class="pname" x="' + (gg.x + 10) + '" y="' + (gg.y + 17) +
       '">' + (isF ? "▸ " : "▾ ") +
@@ -935,14 +994,19 @@ function render() {
     const g = geom[m.id];
     if (!g) return;
     const mh = H ? own(H, m.id) : null;
-    const cls = "mod" + (m.err ? " err" : "") + (H && !mh ? " cold" : "") +
+    const cls = "mod" + (m.err ? " err" : "") +
+      (CH ? (crime(m) === 0 ? " cold" : "")
+          : (H && !mh ? " cold" : "")) +
       (filtering ? (hits.has(m.id) ? " hit" : " dimmed") : "") +
       (relKeys.has("m:" + m.id) && !(filtering && hits.has(m.id))
         ? " rel" : "");
     svg += '<g class="' + cls + '" data-mod="' + esc(m.id) + '">' +
       '<rect x="' + g.x + '" y="' + g.y + '" width="' + g.w +
       '" height="' + g.h + '" rx="6"' +
-      (mh ? ' style="fill:' + heatFill(modShare(mh)) + '"' : "") +
+      (CH
+        ? (crime(m) > 0
+          ? ' style="fill:' + heatFill(crime(m) * totalEv) + '"' : "")
+        : mh ? ' style="fill:' + heatFill(modShare(mh)) + '"' : "") +
       "></rect>" +
       '<text class="mname" x="' + (g.x + 10) + '" y="' + (g.y + 17) + '">' +
       esc(m.id) + "</text>" +
@@ -957,6 +1021,12 @@ function render() {
       (m.dynimp
         ? ' <tspan fill="#c678dd" font-weight="700">⚡</tspan>' : "") +
       "</text><title>" + esc(m.path +
+        (DATA.churn && DATA.churn.files[m.path]
+          ? "\n🔥 " + DATA.churn.files[m.path].c + " commit(s) since " +
+            DATA.churn.since + " · " + (m.cx || 0) + " decision points" +
+            (CH ? " · " + (lens === "risk" ? "risk" : "churn×cx") +
+              " score " + crime(m).toFixed(2) : "")
+          : "") +
         (m.dynimp
           ? "\n⚡ " + m.dynimp + " dynamic-import call site(s) — "
             + "targets unknown until a run is traced (#119)"
@@ -1474,6 +1544,7 @@ $("showcalls").onchange = render;
 $("showcyc").onchange = render;
 $("showheat").onchange = render;
 $("showdark").onchange = render;
+$("lens").onchange = () => { buildNote(false); render(); };
 /* one spotlight at a time: search, a cycle, or a walls row — every
    entry point clears the others, and the note-bar link state follows */
 function setCycleSel(i) {

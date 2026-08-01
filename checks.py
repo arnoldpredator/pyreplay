@@ -2369,6 +2369,60 @@ def _():
            "— only their darkness is denied")
 
 
+@check("map crime scene: churn x complexity from git history (#95)")
+def _():
+    root = os.path.join(TMP, "crimedemo")
+    os.makedirs(root, exist_ok=True)
+
+    def g(*a):
+        return subprocess.run(["git", "-C", root, "-c", "user.name=t",
+                               "-c", "user.email=t@t"] + list(a),
+                              capture_output=True, text=True,
+                              stdin=subprocess.DEVNULL, timeout=60)
+    g("init", "-q")
+    with open(os.path.join(root, "busy.py"), "w") as fh:
+        fh.write("def f(x):\n    if x > 0:\n        return 1\n"
+                 "    for i in range(3):\n        x += i\n    return x\n")
+    with open(os.path.join(root, "calm.py"), "w") as fh:
+        fh.write("VALUE = 7\n")
+    g("add", "-A")
+    g("commit", "-qm", "one")
+    with open(os.path.join(root, "busy.py"), "a") as fh:
+        fh.write("Y = 1\n")
+    g("add", "-A")
+    g("commit", "-qm", "two")
+    with open(os.path.join(root, "busy.py"), "a") as fh:
+        fh.write("Z = 2\n")
+    g("add", "-A")
+    g("commit", "-qm", "three")
+    mp = run_map(root, "--churn-since", "10 years ago", name="map_crime")
+    ch = mp.get("churn")
+    expect(ch is not None, "a git repo with commits must yield churn")
+    expect(ch["commits"] == 3, f"3 commits expected, got {ch['commits']}")
+    expect(ch["files"]["busy.py"]["c"] == 3
+           and ch["files"]["calm.py"]["c"] == 1,
+           f"per-file churn wrong: {ch['files']}")
+    expect(ch["since"] == "10 years ago",
+           "the window must be recorded — the legend names it")
+    cx = {m["id"]: m["cx"] for m in mp["modules"]}
+    expect(cx["busy"] >= 2 and cx["calm"] == 0,
+           f"decision points wrong: {cx}")
+
+
+@check("map crime scene: honestly absent without git history (#95)")
+def _():
+    root = os.path.join(TMP, "norepo")
+    os.makedirs(root, exist_ok=True)
+    with open(os.path.join(root, "solo.py"), "w") as fh:
+        fh.write("x = 1\nif x:\n    print(x)\n")
+    mp = run_map(root, name="map_norepo")
+    expect(mp.get("churn") is None,
+           "no readable history -> churn must be null, never guessed")
+    expect(mp["modules"][0]["cx"] == 1,
+           f"cx is AST-side and must survive without git: "
+           f"{mp['modules'][0]}")
+
+
 # ---------------------------------------------------------------- runner
 
 def main():

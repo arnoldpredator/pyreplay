@@ -2835,6 +2835,74 @@ def _():
         expect(probe in tpl, f"FLIP machinery missing: {probe}")
 
 
+@check("sweep: exponent fit, claim verdicts, gen protocol, honesty (#127)")
+def _():
+    quad = fixture("quad127.py", (
+        "import sys\n"
+        "def cmp(a, b):\n"
+        "    return a < b\n"
+        "def work(n):\n"
+        "    t = 0\n"
+        "    for i in range(n):\n"
+        "        for j in range(n):\n"
+        "            t += cmp(i, j)\n"
+        "    return t\n"
+        "n = int(sys.stdin.readline())\n"
+        "if n > 20:\n"
+        "    raise ValueError('too big')\n"
+        "print(work(n))\n"))
+
+    def sweep(*flags, name):
+        out = os.path.join(TMP, name + ".html")
+        r = subprocess.run([PY, os.path.join(HERE, "tracer.py"),
+                            "--out", out, *flags, quad],
+                           capture_output=True, text=True, cwd=TMP,
+                           stdin=subprocess.DEVNULL, timeout=300)
+        data = None
+        if os.path.exists(out):
+            with open(out, encoding="utf-8") as fh:
+                m = re.search(r'<script id="sweep-data" type="application/'
+                              r'json">(.*?)</script>', fh.read(), re.S)
+            data = (json.loads(m.group(1).replace("<\\/", "</"))
+                    if m else None)
+        return r, data
+    r, d = sweep("--sweep", "n=4,8,16", "--predict", "n^2", name="sw2")
+    expect(d is not None, f"sweep report missing ({r.stdout} {r.stderr})")
+    expect(all(g["status"] == "ok" for g in d["rungs"]),
+           f"all rungs must be clean: {[g['status'] for g in d['rungs']]}")
+    expect(abs(d["fitE"]["slope"] - 2.0) < 0.2 and d["fitE"]["r2"] > 0.99,
+           f"a quadratic must fit n^2 in EVENTS: {d['fitE']}")
+    expect(d["claim"]["verdict"] is True,
+           f"claim n^2 must be CONSISTENT: {d['claim']}")
+    expect(r.returncode == 0, "clean fit exits 0")
+    r3, d3 = sweep("--sweep", "n=4,8,16", "--predict", "n^3", name="sw3")
+    expect(d3["claim"]["verdict"] is False,
+           f"claim n^3 must be rejected on quadratic data: {d3['claim']}")
+    # gen protocol: gen(v, seed) DOUBLES the size — if the protocol were
+    # ignored, counts would match the default-stdin run
+    gen = fixture("gen127.py", (
+        "def gen(n, seed):\n"
+        "    assert isinstance(seed, int)\n"
+        "    return str(n * 2) + chr(10)\n"))
+    rg, dg = sweep("--sweep", "n=4,8", "--gen", gen, name="swg")
+    base = {g["v"]: g["events"] for g in d["rungs"]}
+    expect(dg["rungs"][0]["events"] > base[4] * 3,
+           "gen(v,seed) must drive the input (doubled size ≈ 4× events)")
+    # honesty: a crashing rung is excluded, named, and the fit survives
+    rc, dc = sweep("--sweep", "n=4,8,32", name="swc")
+    st = [g["status"] for g in dc["rungs"]]
+    expect(st[2].startswith("crashed: ValueError"),
+           f"the n=32 rung must be excluded as crashed: {st}")
+    expect(dc["fitE"] is not None,
+           "two clean rungs still fit (partial ladder, stated)")
+    # a claim that is not just n and log() is refused, never evaluated
+    rbad, _ = sweep("--sweep", "n=4,8",
+                    "--predict", "__import__('os').getcwd()", name="swb")
+    expect(rbad.returncode == 2 and "--predict" in rbad.stdout,
+           f"malicious claim must be refused: {rbad.returncode} "
+           f"{rbad.stdout[:120]}")
+
+
 # ---------------------------------------------------------------- runner
 
 def main():

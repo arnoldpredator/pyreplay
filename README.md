@@ -51,6 +51,9 @@ python3 tracer.py --check "total < 0" app.py    # any question about a run as an
                                                 #    exit code -> git bisect's oracle
 python3 tracer.py --black-box server.py         # flight recorder: ring of the LAST
                                                 #    N events; kill -USR1 = live snapshot
+python3 tracer.py --sweep "n=8,16,32,64" \
+                  --predict "n^2" algo.py       # the doubling experiment: observed
+                                                #    growth exponent + claim verdict
 ```
 
 Open the HTML in any browser. No server, no build step, no dependencies.
@@ -104,7 +107,7 @@ green suite is the contract that keeps contributions honest.
 
 Bug reports, edge cases, more example programs, and **other languages** are
 all very welcome. **[CONTRIBUTING.md](CONTRIBUTING.md) is the place to start** — one file
-with the roadmap of what to build (45 unbuilt features plus a "good first"
+with the roadmap of what to build (44 unbuilt features plus a "good first"
 list), the ground rules, and the event-log schema a new-language backend emits.
 
 ## License

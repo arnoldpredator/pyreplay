@@ -2068,6 +2068,50 @@ program behavior as a distribution to be measured.
 
   [![Feature 68 — schedule chaos](screenshots/68-chaos-runs.png)](screenshots/68-chaos-runs.png)
 
+### 127. The scaling bench — `--sweep`, the doubling experiment as a command
+- **Measured:** the target is run once per rung of a value ladder
+  (`--sweep "n=1000,2000,4000,8000"`, or `alpha=3.0..5.0:5` for a
+  knob), each child a fresh tracer run whose stdin comes from the
+  minimal generator protocol: `--gen GEN.py` defines
+  `gen(value, seed) → str|bytes`; with no `--gen` the value itself,
+  one per line, is the stdin. Per rung: the EVENT COUNT (exact,
+  deterministic, immune to timing noise — the honest cost model) and
+  the traced wall time where time is true (fn granularity). Then
+  least squares on log–log: the observed growth exponent with R²,
+  plus consecutive-rung ratios — Sedgewick's doubling experiment read
+  directly. A `--predict "n^2"` claim (names `n` and `log()` only —
+  nothing else evaluates) is scored scale-free: R² of the claim's
+  *shape* against the data.
+- **Displayed:** the terminal table (value · events · ratio · time ·
+  ratio) with the fit lines and the claim verdict, plus a
+  self-contained `sweep_*.html` report: log-log charts where a power
+  law is a straight line — measured points, fitted line, claim curve
+  dashed — and the rung table. Crashed or cap-truncated rungs are
+  excluded from the fit and named; rung traces are deleted after
+  measurement (the report says so).
+- **Why:** nothing else in the lab varies input SIZE — `--runs`
+  repeats one input, fuzzing hunts failures. "What is the observed
+  exponent" is the question the whole algorithms shelf trains, and
+  the doubling experiment separates n log n from n^1.2 where
+  eyeballing cannot.
+- **Use case:** a nested-loop classifier sweeps 8→64: ratios 3.89,
+  3.97, 3.99 — the n² signature — exponent n^1.98 at R² 1.0000,
+  claim `n^2` CONSISTENT. Mergesort at fn granularity measures
+  n^1.00 — *calls* are linear; sweep again at `--granularity line`
+  and `n*log(n)` is CONSISTENT at R² 0.998: the cost model is what
+  you count, and the tool says which one you counted.
+- **Command:** `python3 tracer.py --sweep "n=8,16,32,64" --predict
+  "n^2" algo.py` (+ `--gen gen.py`, `--sweep-seed`). Honesty, in the
+  banner and the terminal: counts are Python-level events, not
+  machine operations — constants live in the C layer; a poor fit is
+  reported as a poor fit, never forced to a line.
+- **Screenshot** — the quadratic's report: green CONSISTENT verdict,
+  events dead on the fitted line with the claim dashed over it, the
+  time chart honestly wobbling (startup noise at tiny n), ratios
+  marching to 4.
+
+  [![Feature 127 — scaling bench](screenshots/127-scaling-bench.png)](screenshots/127-scaling-bench.png)
+
 ## Appendix A — the manual test plan
 
 Agreed flow: work through the catalog top to bottom, ticking each

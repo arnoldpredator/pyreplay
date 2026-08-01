@@ -547,6 +547,24 @@ issue and the reader lands on that event with that view open. Works on
 a fresh load and on an already-open trace (edit the hash). Every
 moment any tool above names is therefore shareable.
 
+**The scaling bench (`--sweep`).** The doubling experiment as one
+command: `--sweep "n=8,16,32,64" --predict "n^2" algo.py` runs the
+target once per rung, measures EVENT COUNTS (exact, deterministic —
+the honest cost model; timing noise can't touch them) plus traced
+wall time at fn granularity, fits the log–log slope and reports the
+observed exponent with R², consecutive-rung ratios, and a verdict on
+your claim. Input per rung comes from the minimal generator protocol —
+`--gen GEN.py` with `gen(value, seed) → str|bytes` becomes the
+target's stdin; without `--gen` the value itself is the stdin (the
+competitive-programming default). The `sweep_*.html` report draws the
+log-log charts: a power law is a straight line, and your claim is the
+dashed curve over the measured points. Honesty throughout: counts are
+Python-level events, not machine operations; crashed or cap-truncated
+rungs are excluded BY NAME; a poor fit is never forced to a line. Try
+mergesort at both granularities: fn measures n^1.0 (calls ARE linear),
+line measures `n*log(n)` CONSISTENT — the bench tells you which cost
+you counted.
+
 ## 4e. The replayer grows: chapters, console, query, whyline, schemas (2026-08)
 
 **Per-test chapters.** `python3 tracer.py -m pytest tests/` now

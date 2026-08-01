@@ -3793,6 +3793,345 @@ def _run_harness(orig_argv, n_runs, out, entry_label, granularity,
     return 0 if set(counts) == {"clean"} else 1
 
 
+def _parse_sweep(spec):
+    """#127: 'n=1000,2000,4000' or 'alpha=3.0..5.0:5' -> (name, values).
+    A comma list is taken verbatim; lo..hi:K is K evenly spaced points.
+    Integral values stay ints (sizes); the rest stay floats (knobs)."""
+    name, _, vals = spec.partition("=")
+    name, vals = name.strip(), vals.strip()
+    if not name or not vals:
+        raise SystemExit("error: --sweep expects NAME=v1,v2,... "
+                         "or NAME=lo..hi:K")
+    try:
+        if ".." in vals:
+            rng, _, k = vals.partition(":")
+            lo, _, hi = rng.partition("..")
+            k = int(k or 8)
+            if k < 2:
+                raise ValueError("K must be >= 2")
+            lo, hi = float(lo), float(hi)
+            xs = [lo + (hi - lo) * i / (k - 1) for i in range(k)]
+        else:
+            xs = [float(v) for v in vals.split(",")]
+    except ValueError as exc:
+        raise SystemExit(f"error: --sweep values unreadable: {exc}")
+    if len(xs) < 2:
+        raise SystemExit("error: --sweep needs at least 2 points "
+                         "(one point has no slope)")
+    return name, [int(v) if float(v).is_integer() else v for v in xs]
+
+
+def _safe_curve(expr):
+    """#127 --predict: compile a claim like 'n^2', 'n*log(n)', 'n^1.5'
+    into a callable — names n and log only, ^ means power, nothing
+    else evaluates. Never touches user data; refuses anything fancier."""
+    src = expr.replace("^", "**")
+    try:
+        tree = ast.parse(src, mode="eval")
+    except SyntaxError as exc:
+        raise SystemExit(f"error: --predict is not an expression: {exc}")
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
+            if node.id not in ("n", "log"):
+                raise SystemExit(f"error: --predict knows only n and "
+                                 f"log(), not {node.id!r}")
+        elif isinstance(node, ast.Call):
+            if not (isinstance(node.func, ast.Name)
+                    and node.func.id == "log"):
+                raise SystemExit("error: --predict allows only log(...) "
+                                 "calls")
+        elif not isinstance(node, (ast.Expression, ast.BinOp,
+                                   ast.UnaryOp, ast.Constant,
+                                   ast.operator, ast.unaryop, ast.Load)):
+            raise SystemExit(f"error: --predict does not allow "
+                             f"{type(node).__name__}")
+    code = compile(tree, "<predict>", "eval")
+    import math as _math
+    return lambda v: eval(code, {"__builtins__": {}},
+                          {"n": v, "log": _math.log})
+
+
+def _fit_loglog(xs, ys):
+    """Least squares on (log x, log y): slope = the observed exponent,
+    R² = how much of the variance a pure power law explains. Returns
+    None when the data can't be fit (fewer than 2 positive points)."""
+    import math
+    pts = [(math.log(x), math.log(y))
+           for x, y in zip(xs, ys) if x > 0 and y > 0]
+    n = len(pts)
+    if n < 2:
+        return None
+    sx = sum(p[0] for p in pts)
+    sy = sum(p[1] for p in pts)
+    sxx = sum(p[0] * p[0] for p in pts)
+    sxy = sum(p[0] * p[1] for p in pts)
+    den = n * sxx - sx * sx
+    if den == 0:
+        return None
+    b = (n * sxy - sx * sy) / den
+    a = (sy - b * sx) / n
+    mean = sy / n
+    ss_tot = sum((y - mean) ** 2 for _, y in pts)
+    ss_res = sum((y - (a + b * x)) ** 2 for x, y in pts)
+    return {"slope": b, "intercept": a,
+            "r2": 1.0 - ss_res / ss_tot if ss_tot else 1.0}
+
+
+def _claim_r2(curve, xs, ys):
+    """Score a --predict claim scale-free: fit only the constant factor
+    (intercept in log space), then R² of the claim's shape against the
+    data. 1.0 = the claim's curve IS the data's shape. Returns
+    {"r2", "scale"} or None when unscorable."""
+    import math
+    pts = []
+    for x, y in zip(xs, ys):
+        try:
+            c = curve(x)
+        except Exception:
+            return None
+        if y <= 0 or c <= 0:
+            return None
+        pts.append((math.log(c), math.log(y)))
+    if len(pts) < 2:
+        return None
+    off = sum(y - c for c, y in pts) / len(pts)
+    mean = sum(y for _, y in pts) / len(pts)
+    ss_tot = sum((y - mean) ** 2 for _, y in pts)
+    ss_res = sum((y - (c + off)) ** 2 for c, y in pts)
+    return {"r2": 1.0 - ss_res / ss_tot if ss_tot else 1.0,
+            "scale": math.exp(off)}
+
+
+def _sweep_harness(orig_argv, sweep_spec, gen_file, predict_src,
+                   sweep_seed, out, entry_label, granularity, module,
+                   script):
+    """#127: the scaling bench — run the target across a value ladder,
+    measure EVENT COUNTS (the honest cost model: exact, deterministic,
+    immune to timing noise) plus traced wall time where time is true
+    (fn granularity), fit the log–log slope, and score any --predict
+    claim against the measurement. Inputs come from the minimal #67
+    protocol: GEN.py's gen(value, seed) returns the target's stdin
+    (str or bytes); with no --gen the value itself, one per line, IS
+    the stdin. Rung traces are deleted after measurement — each rung
+    prints its reproduce command instead."""
+    try:
+        knob, values = _parse_sweep(sweep_spec)
+        curve = _safe_curve(predict_src) if predict_src else None
+    except SystemExit as exc:
+        print(exc)
+        return 2
+    genfn = None
+    if gen_file:
+        ns = runpy.run_path(os.path.realpath(gen_file))
+        genfn = ns.get("gen")
+        if not callable(genfn):
+            print("error: --gen file must define gen(value, seed) -> "
+                  "str|bytes (the bytes become the target's stdin)")
+            return 2
+    stem = (module.replace(".", "_") if module is not None
+            else os.path.splitext(os.path.basename(script))[0])
+    if out is None:
+        out = f"sweep_{stem}.html"
+        k = 2
+        while os.path.exists(out):
+            out = f"sweep_{stem}_{k}.html"
+            k += 1
+    out = os.path.abspath(out)
+
+    # child argv: the #63 stripper walk — harness flags never reach a
+    # child (a child sweeping would ladder forever)
+    valued = {"--out", "--root", "--export-perfetto", "--include",
+              "--exclude", "--granularity", "--max-events", "--start-at",
+              "--start-count", "--start-when", "--backend", "--trip",
+              "--runs", "--check", "--chaos-schedule", "--sweep",
+              "--gen", "--predict", "--sweep-seed"}
+    strip = {"--sweep", "--gen", "--predict", "--sweep-seed", "--out",
+             "--granularity"}
+    child_flags, i = [], 0
+    while i < len(orig_argv):
+        tok = orig_argv[i]
+        if tok == "-m" or not tok.startswith("--"):
+            child_flags.extend(orig_argv[i:])
+            break
+        step = 2 if tok in valued and i + 1 < len(orig_argv) else 1
+        if tok not in strip:
+            child_flags.extend(orig_argv[i:i + step])
+        i += step
+    child_flags = ["--granularity", granularity] + child_flags
+
+    print(f"pyreplay sweep: {entry_label} · {knob} = "
+          f"{', '.join(str(v) for v in values)} · {granularity} "
+          f"granularity · seed {sweep_seed}"
+          + ("" if gen_file else
+             f" · no --gen: stdin per rung is the value itself"),
+          flush=True)
+    rungs, interrupted = [], False
+    try:
+        for v in values:
+            if genfn is not None:
+                try:
+                    payload_in = genfn(v, sweep_seed)
+                except Exception as exc:
+                    rungs.append({"v": v, "status":
+                                  f"gen() raised {type(exc).__name__}: "
+                                  f"{exc}", "events": None, "us": None,
+                                  "cmd": ""})
+                    continue
+                if isinstance(payload_in, str):
+                    stdin_bytes = payload_in.encode()
+                elif isinstance(payload_in, bytes):
+                    stdin_bytes = payload_in
+                else:
+                    rungs.append({"v": v, "status":
+                                  "gen() must return str|bytes, got "
+                                  + type(payload_in).__name__,
+                                  "events": None, "us": None, "cmd": ""})
+                    continue
+            else:
+                stdin_bytes = (str(v) + "\n").encode()
+            rung_path = os.path.splitext(out)[0] + f"_rung_{v}.html"
+            cmd = [sys.executable, SELF, "--out", rung_path] + child_flags
+            shown = " ".join([os.path.basename(sys.executable),
+                              os.path.basename(SELF)] + child_flags)
+            r = subprocess.run(cmd, input=stdin_bytes,
+                               capture_output=True)
+            rung = {"v": v, "events": None, "us": None, "status": "ok",
+                    "cmd": f"echo-your-input | {shown}"}
+            if not os.path.exists(rung_path):
+                rung["status"] = f"no trace (exit {r.returncode})"
+            else:
+                try:
+                    data = _extract_payload(rung_path)
+                    rung["events"] = len(data.get("events", []))
+                    ts = sum(e.get("ts", 0)
+                             for e in data.get("events", []))
+                    rung["us"] = ts if ts > 0 else None
+                    if data.get("error"):
+                        rung["status"] = ("crashed: "
+                                          + data["error"].split(":")[0])
+                    elif data.get("truncated"):
+                        rung["status"] = ("truncated at the event cap "
+                                          "— raise --max-events")
+                except Exception as exc:
+                    rung["status"] = (f"unreadable trace "
+                                      f"({type(exc).__name__})")
+                finally:
+                    try:
+                        os.remove(rung_path)
+                    except OSError:
+                        pass
+            rungs.append(rung)
+            e_txt = (f"{rung['events']:,}" if rung["events"] is not None
+                     else "—")
+            t_txt = (f"{rung['us'] / 1000:.1f} ms"
+                     if rung["us"] else "—")
+            print(f"  {knob}={v}: {e_txt} events · {t_txt}"
+                  + ("" if rung["status"] == "ok"
+                     else f" · {rung['status']}"), flush=True)
+    except KeyboardInterrupt:
+        interrupted = True
+        print(f"\npyreplay: interrupted — {len(rungs)} of "
+              f"{len(values)} rungs measured", flush=True)
+
+    good = [r for r in rungs if r["status"] == "ok"
+            and r["events"] and r["events"] > 0]
+    xs = [r["v"] for r in good]
+    fit_e = _fit_loglog(xs, [r["events"] for r in good])
+    have_t = [r for r in good if r["us"]]
+    fit_t = _fit_loglog([r["v"] for r in have_t],
+                        [r["us"] for r in have_t])
+    is_size = knob == "n" and all(
+        isinstance(r["v"], int) for r in rungs)
+    claim = None
+    if curve is not None:
+        sc = _claim_r2(curve, xs, [r["events"] for r in good])
+        claim = {"src": predict_src,
+                 "r2": sc["r2"] if sc else None,
+                 "verdict": bool(sc and sc["r2"] >= 0.985)}
+        if sc and xs:
+            import math
+            lo, hi = min(xs), max(xs)
+            samples = []
+            for i in range(41):
+                x = (math.exp(math.log(lo) + (math.log(hi)
+                     - math.log(lo)) * i / 40) if is_size and lo > 0
+                     else lo + (hi - lo) * i / 40)
+                try:
+                    samples.append([x, sc["scale"] * curve(x)])
+                except Exception:
+                    pass
+            claim["samples"] = samples
+
+    # ---- terminal: the doubling table Sedgewick taught
+    print(f"\n{knob:>10} | {'events':>12} | ratio | {'time':>10} | ratio")
+    prev = None
+    for r in rungs:
+        e_txt = f"{r['events']:,}" if r["events"] is not None else "—"
+        t_txt = f"{r['us'] / 1000:.1f} ms" if r["us"] else "—"
+        re_ = rt_ = "  —"
+        if prev and prev["events"] and r["events"]:
+            re_ = f"{r['events'] / prev['events']:5.2f}"
+        if prev and prev.get("us") and r.get("us"):
+            rt_ = f"{r['us'] / prev['us']:5.2f}"
+        print(f"{r['v']!s:>10} | {e_txt:>12} | {re_} | {t_txt:>10} | "
+              f"{rt_}" + ("" if r["status"] == "ok"
+                          else f"   ({r['status']})"))
+        prev = r if r["status"] == "ok" else None
+    excl = [r for r in rungs if r["status"] != "ok"]
+    if excl:
+        print(f"  ({len(excl)} rung(s) excluded from the fit — reasons "
+              f"above; a partial ladder still fits IF >= 2 rungs stand)")
+    if fit_e:
+        bad = fit_e["r2"] < 0.98
+        print(f"\nobserved exponent (events): {knob}^"
+              f"{fit_e['slope']:.2f}  (R² {fit_e['r2']:.4f})"
+              + ("  — a POOR power-law fit: this range is not a clean "
+                 "power law, and the tool will not force one"
+                 if bad else ""))
+    if fit_t:
+        print(f"observed exponent (time):   {knob}^"
+              f"{fit_t['slope']:.2f}  (R² {fit_t['r2']:.4f})"
+              + ("" if granularity == "fn" else ""))
+    elif granularity == "line":
+        print("time: line traces carry no timestamps (time under line "
+              "tracing would be fiction) — events are the cost model")
+    if not is_size:
+        print(f"note: {knob} is a knob, not a size — the exponent is "
+              f"reported for the curious, but a hardness curve (the "
+              f"chart) is the honest reading")
+    if claim:
+        if claim["r2"] is None:
+            print(f"claim {predict_src}: not scorable on this data")
+        else:
+            print(f"claim {predict_src}: shape R² {claim['r2']:.4f} — "
+                  + ("CONSISTENT with the measurement"
+                     if claim["verdict"] else "the data disagrees"
+                     + (f" (measured {knob}^{fit_e['slope']:.2f})"
+                        if fit_e else "")))
+    print("\nhonesty: counts are Python-level EVENTS, not machine "
+          "operations — constants live in the C layer; the exponent "
+          "is an observation over this range, never a proof.")
+
+    payload = {"target": entry_label, "knob": knob,
+               "granularity": granularity, "seed": sweep_seed,
+               "gen": os.path.basename(gen_file) if gen_file else None,
+               "rungs": rungs, "fitE": fit_e, "fitT": fit_t,
+               "claim": claim, "isSize": is_size,
+               "interrupted": interrupted}
+    template_path = os.path.join(os.path.dirname(SELF),
+                                 "sweep_template.html")
+    with open(template_path, encoding="utf-8") as f:
+        template = f.read()
+    html = template.replace("__SWEEP_DATA__",
+                            json.dumps(payload).replace("</", "<\\/"))
+    with open(out, "w", encoding="utf-8") as f:
+        f.write(html)
+    print(f"report -> {out}")
+    if fit_e is None:
+        return 1
+    return 0
+
+
 _ADDR = re.compile(r"0x[0-9a-fA-F]+")
 
 
@@ -3957,6 +4296,10 @@ def main(argv):
     runs_n = None
     black_box = False    # #103: ring-buffer flight recorder
     chaos_seed = None    # #68: schedule-fuzzing seed
+    sweep_spec = None    # #127: scaling bench "n=1000,2000,4000"
+    gen_file = None      # #127: minimal #67 protocol — gen(v, seed)
+    predict_src = None   # #127: claimed growth, e.g. "n^2"
+    sweep_seed = 1234
     watch_list = []      # #72: [(src, code)] watch expressions
     inv_list = []        # #73: [(src, code, names)] invariants
     check = None         # #70: compiled --check expression
@@ -4063,6 +4406,22 @@ def main(argv):
                       "(one run is an anecdote)")
                 return 2
             runs_n, argv = int(argv[1]), argv[2:]
+        elif argv[0] == "--sweep" and len(argv) >= 2:
+            sweep_spec, argv = argv[1], argv[2:]
+        elif argv[0] == "--gen" and len(argv) >= 2:
+            if not os.path.isfile(argv[1]):
+                print(f"error: --gen file not found: {argv[1]}")
+                return 2
+            gen_file, argv = argv[1], argv[2:]
+        elif argv[0] == "--predict" and len(argv) >= 2:
+            predict_src, argv = argv[1], argv[2:]
+        elif argv[0] == "--sweep-seed" and len(argv) >= 2:
+            try:
+                sweep_seed = int(argv[1])
+            except ValueError:
+                print("error: --sweep-seed expects an integer")
+                return 2
+            argv = argv[2:]
         elif argv[0] == "--start-at" and len(argv) >= 2:
             fname, _, lineno = argv[1].rpartition(":")
             if not fname or not lineno.isdigit():
@@ -4097,12 +4456,13 @@ def main(argv):
         # --granularity always wins; --start-at/--start-when need line
         # events, so triggers keep the line default even under -m.
         # --runs also defaults to fn: the harness pays every cost N times.
-        if (module is not None or runs_n or black_box) \
+        if (module is not None or runs_n or black_box or sweep_spec) \
                 and not (start_at or start_when):
             granularity = "fn"
             if not doctor:
                 what = ("-m runs" if module is not None
-                        else "--runs" if runs_n else "--black-box")
+                        else "--runs" if runs_n
+                        else "--sweep" if sweep_spec else "--black-box")
                 print(f"pyreplay: {what} default to --granularity fn "
                       "(call-level overview) — pass --granularity line "
                       "plus --include/--start-at scoping for the line "
@@ -4130,6 +4490,24 @@ def main(argv):
         print("error: --runs keeps one trace per OUTCOME, not per run — "
               "a single --export-perfetto file would be ambiguous. Run "
               "the export on a kept representative afterwards.")
+        return 2
+    if (gen_file or predict_src) and not sweep_spec:
+        print("error: --gen/--predict belong to --sweep — add "
+              '--sweep "n=..." (the ladder to run them on)')
+        return 2
+    if sweep_spec and runs_n:
+        print("error: --sweep and --runs are different experiments — "
+              "a ladder of sizes vs repetitions of one input. Run them "
+              "separately.")
+        return 2
+    if sweep_spec and (perfetto or black_box):
+        print("error: --sweep measures event counts and traced time — "
+              "it cannot combine with --export-perfetto or --black-box "
+              "(a ring buffer would corrupt the counts)")
+        return 2
+    if sweep_spec and chaos_seed is not None:
+        print("error: --sweep under --chaos-schedule would measure the "
+              "chaos, not the algorithm — run the bench unperturbed")
         return 2
     if backend == "monitoring":
         if MON is None:
@@ -4198,6 +4576,11 @@ def main(argv):
     if runs_n:
         return _run_harness(orig_argv, runs_n, out, entry_label,
                             granularity, module, script, chaos_seed)
+
+    if sweep_spec:
+        return _sweep_harness(orig_argv, sweep_spec, gen_file,
+                              predict_src, sweep_seed, out, entry_label,
+                              granularity, module, script)
 
     if out is None:  # default: unique name per entry, never overwrite
         stem = (module.replace(".", "_") if module is not None

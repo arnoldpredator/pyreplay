@@ -867,6 +867,16 @@ their original node — no phantom calls), and the 4000-node render cap
 announces itself. Works at both granularities — on an fn-level trace
 of a real codebase it is the whole run's shape in one panel.
 
+**Forward taint.** The slice's twin: pick a value — a config field,
+an input, a constant you're about to change — press **⇢ taint** on
+its row, and every recorded event it influenced lights the strip:
+violet where the data flowed (assignments, and `y = f(x)` through the
+call), pink where a *decision* read it, hollow where a tainted
+decision merely chose which line ran. That last distinction is the
+honest one: control influence is displayed, never propagated as data.
+Overwrite the name from clean sources and the taint dies — the kill
+is part of the answer to "what would changing this touch?".
+
 **Float hygiene.** Every line trace flags float `==`/`!=` at the
 moments it executed — the guard's operand held a float right there,
 says the pink pin — plus the statically provable float-literal sites.

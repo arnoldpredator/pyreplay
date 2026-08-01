@@ -979,6 +979,41 @@ dead or invented panel; every cap and truncation is announced.
 
   [![Feature 75 — backward slice](screenshots/75-slice.png)](screenshots/75-slice.png)
 
+### 76. Forward taint — descendants of an input
+- **Measured:** the #75 walk, transposed. Mark a value at one of its
+  changes and everything DOWNSTREAM lights up: data influence flows
+  through the same static dataflow edges — same-frame assignments
+  and through-call lines (`y = f(x)` taints `y`) — and dies honestly:
+  a name overwritten from untainted sources loses its taint, while
+  an untracked write to a tainted name keeps it (in-place mutation
+  cannot be proven clean). A verdict that READ a tainted name is a
+  tainted decision; the events on lines that guard controls are
+  CONTROL-marked — and control marks are display only, never
+  propagated as data: influence is not a copy, and the bar says so
+  verbatim.
+- **Displayed:** ⇢ taint on every changed variable row — including
+  literal inputs, which have no backward chain and are exactly what
+  taint is for. Violet pins = data descendants, pink = tainted
+  verdicts, hollow = control-marked; the taint bar counts the three
+  kinds plus frontier notes (v1 does not bind parameters at call
+  entry — through-call results ARE tracked), ←/→ walks the marked
+  events, Esc exits; one walk mode at a time with the ✂ slice.
+- **Why:** "if I change this config, what is affected?" — impact
+  analysis and data lineage in one gesture; the backward slice
+  answers "where did this come from", this answers "where did it
+  go". The data/control split is the honest heart: a value copied
+  and a value that merely steered a branch are different claims.
+- **Use case:** taint `raw = 6.5`: `result` (through the call) and
+  `total` glow violet, the `raw > 5` verdict glows pink, and
+  `label = "hot"` — chosen by that verdict but holding no copy of
+  raw — wears the hollow control mark. After `raw = 0.0`, nothing
+  downstream is marked: the kill is part of the truth.
+- **Command:** any line trace → any changed row → **⇢ taint**.
+- **Screenshot** — the demo mid-walk: the bar counting 3 data /
+  1 verdict / 1 control, label wearing its ⇢ chip:
+
+  [![Feature 76 — forward taint](screenshots/76-forward-taint.png)](screenshots/76-forward-taint.png)
+
 ### 134. The subproblem DAG (`--memo NAME`) — fill causality, drawn
 - **Measured:** bind one memo structure and its dependency DAG is
   mined from the trace: a static pass finds every subscript READ and

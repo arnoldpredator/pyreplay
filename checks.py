@@ -2904,6 +2904,113 @@ def _():
         expect(probe in tpl, f"seq contract missing: {probe}")
 
 
+@check("forward taint: data flow, verdicts, control split, kill (#76)")
+def _():
+    src = fixture("ft76.py", (
+        "def scale(reading, gain):\n"
+        "    return reading * gain\n"
+        "def main():\n"
+        "    raw = 6.5\n"
+        "    if raw > 5:\n"
+        "        label = 'hot'\n"
+        "    else:\n"
+        "        label = 'cold'\n"
+        "    result = scale(raw, 2.0)\n"
+        "    total = result + 1.0\n"
+        "    raw = 0.0\n"           # clean overwrite KILLS the taint
+        "    after = raw + 1\n"     # NOT tainted: the old raw is gone
+        "    return total, label, after\n"
+        "main()\n"))
+    p = run_trace(src)
+    events, df = p["events"], p["dataflow"]["ft76.py"]
+    guards = p["guards"]["ft76.py"]
+
+    # frame ids, the viewer's way
+    fids, stacks, nxt = [], {}, [0]
+    for ev in events:
+        st = stacks.setdefault(ev.get("t", "main"), [])
+        if ev["e"] == "call":
+            st.append(nxt[0])
+            nxt[0] += 1
+        fids.append(st[-1] if st else -1)
+        if ev["e"] == "return" and st:
+            st.pop()
+
+    seed = next(i for i, e in enumerate(events)
+                if "raw" in e.get("ch", {}))
+    fid0 = fids[seed]
+    live = {fid0: {"raw"}}
+    data, verd, ctrl = {seed}, set(), set()
+    gtaint = {}
+    for i in range(seed, len(events)):
+        ev, fid = events[i], fids[i]
+        lt = live.get(fid, set())
+        cond = ev.get("cond")
+        if cond and lt:
+            names = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*",
+                                   cond["x"]))
+            hit = bool(names & lt)
+            gtaint.setdefault(fid, {})[ev["l"]] = hit
+            if hit:
+                verd.add(i)
+        if i == seed or not ev.get("ch") or ev["e"] == "call":
+            continue
+        dfev = next((j for j in range(i - 1, -1, -1)
+                     if fids[j] == fid), None)
+        for nm in ev["ch"]:
+            if "." in nm:
+                continue
+            srcs = (df.get(str(events[dfev]["l"]), {}) or {}).get(nm) \
+                if dfev is not None else None
+            # [] means name-tracked with NO sources (a literal): it
+            # taints nothing and KILLS a live taint — None means the
+            # assignment isn't name-tracked at all
+            tainted = srcs is not None and bool(set(srcs) & lt)
+            if tainted:
+                live.setdefault(fid, set()).add(nm)
+                data.add(i)
+            elif srcs is not None and nm in lt:
+                lt.discard(nm)
+            if not tainted:
+                ctl = guards.get(str(events[dfev]["l"])) \
+                    if dfev is not None else None
+                if ctl and gtaint.get(fid, {}).get(ctl[0]):
+                    ctrl.add(i)
+
+    lines = {i: events[i]["l"] for i in range(len(events))}
+    # a change is REPORTED on the next executed line: result's event
+    # sits at L10, total's at L11
+    expect(any(lines[i] == 10 for i in data)
+           and any(lines[i] == 11 for i in data),
+           f"result (through-call) and total (direct) must taint: "
+           f"{sorted(lines[i] for i in data)}")
+    expect(any(lines[i] == 5 for i in verd),
+           f"the raw > 5 verdict read the taint: "
+           f"{sorted(lines[i] for i in verd)}")
+    expect(any(lines[i] == 5 and events[i].get('cond')
+               for i in verd) and all(i not in data or i == seed
+                                      for i in verd
+                                      if lines[i] == 5),
+           "the verdict mark is the verdict's, distinct from data")
+    label_i = next(i for i, e in enumerate(events)
+                   if "label" in e.get("ch", {}))
+    expect(label_i in ctrl and label_i not in data,
+           "label is CONTROL-influenced (the tainted guard chose "
+           "it), never data — the honest split")
+    after_i = next(i for i, e in enumerate(events)
+                   if "after" in e.get("ch", {}))
+    expect(after_i not in data and after_i not in ctrl,
+           "raw = 0.0 KILLED the taint — after must be clean")
+
+    with open(os.path.join(HERE, "replayer_template.html"),
+              encoding="utf-8") as fh:
+        tpl = fh.read()
+    for probe in ("provtaint", "computeTaint", "kmark",
+                  "influence, never copied",
+                  "KILLS its taint", 'id="taintbar"'):
+        expect(probe in tpl, f"taint surface missing: {probe}")
+
+
 @check("float hygiene: eq trap flags, ordering wobble, refusals (#123)")
 def _():
     src = fixture("fh123.py", (

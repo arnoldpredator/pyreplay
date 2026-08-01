@@ -592,6 +592,26 @@
   #slicebar .sfront { color: var(--warn); text-decoration: underline
     dotted; cursor: help; }
   #slicebar button { margin-left: 10px; padding: 0 8px; font-size: 11px; }
+  .prov .provtaint { background: none; border: 1px solid var(--border);
+    border-radius: 3px; color: #c792ea; font-size: 10px;
+    padding: 0 5px; cursor: pointer; }
+  .prov .provtaint:hover { border-color: #c792ea; }
+  #kmarks { position: relative; height: 7px; margin: 0 7px 2px; }
+  .kmark { position: absolute; top: 0; width: 3px; height: 7px;
+    background: #c792ea; border-radius: 1px; cursor: pointer;
+    transform: translateX(-1px); }
+  .kmark:hover { background: #e6c8ff; }
+  .kmark.kverd { background: #e78fbb; width: 5px; }
+  .kmark.kctrl { background: none; border: 1px solid #c792ea;
+    width: 4px; box-sizing: border-box; }
+  #taintbar { display: none; padding: 4px 14px; background: #241d33;
+    border-top: 1px solid var(--border); color: #c792ea;
+    font-size: 12px; }
+  #taintbar b { color: var(--text); }
+  #taintbar .sfront { color: var(--warn); text-decoration: underline
+    dotted; cursor: help; }
+  #taintbar button { margin-left: 10px; padding: 0 8px;
+    font-size: 11px; }
   .vval { overflow-x: auto; white-space: nowrap; padding-top: 3px; }
   .pv { word-break: break-all; }
   .pv.str { color: #a8d08a; }
@@ -827,6 +847,7 @@
   only the endpoints are recorded truth</div>
 <footer>
   <div id="slicebar"></div>
+  <div id="taintbar"></div>
   <div id="gatebar">
     <span class="gtitle">&#128302; predict, then step</span>
     <span class="gclaim">next line
@@ -4936,6 +4957,14 @@ function render() {
           ? (((DATA.dataflow || {})[events[pj].f] || {})[events[pj].l]
              || {})[r.label]
           : null;
+        // #76: the forward walk exists for EVERY change — a literal
+        // input (raw = 6.5) has no backward chain, but its
+        // descendants are exactly what taint is for
+        const taintBtn = ' <button class="provtaint" data-taint="' +
+          escapeHtml(r.label) + '" title="#76 forward taint: every ' +
+          'recorded event this value influenced downstream — data ' +
+          'flow solid, tainted verdicts and their control regions ' +
+          'marked distinctly">⇢ taint</button>';
         if (srcs && srcs.length) {
           const links = srcs.map(s => {
             const cl = changesFor(s, eventFrame[idx]);
@@ -4951,10 +4980,13 @@ function render() {
           });
           prov = '<div class="prov" title="what produced ' +
             escapeHtml(r.label) + '">← from ' + links.join(", ") +
+            taintBtn +
             ' <button class="provslice" data-slice="' +
             escapeHtml(r.label) + '" title="#75 backward slice: every ' +
             'recorded event that contributed to this value — pins the ' +
             'scrubber, ←/→ walk the chain">✂ slice</button></div>';
+        } else {
+          prov = '<div class="prov">' + taintBtn + "</div>";
         }
       }
       return '<div class="vrow' + (r.isCh && !resumed ? " changed" : "") +
@@ -5385,6 +5417,8 @@ $("vars").addEventListener("click", e => {
   } else if (t.classList.contains("vcount")) {
     historyVar = historyVar === t.dataset.var ? null : t.dataset.var;
     render();
+  } else if (t.classList.contains("provtaint")) {
+    enterTaint(t.dataset.taint);
   } else if (t.classList.contains("provslice")) {
     stop();
     enterSlice(t.dataset.slice);   // #75
@@ -5408,6 +5442,7 @@ document.addEventListener("keydown", e => {
   else if (e.key === "ArrowLeft") { stop(); sliceStep(-1); }
   else if (e.key === "Escape") {
     if (SLICE) exitSlice();
+    else if (TAINT) exitTaint();
     else if (document.body.classList.contains("presenting"))
       togglePresent();
   }
@@ -5669,14 +5704,189 @@ function exitSlice() {
   drawSlice();
 }
 function sliceStep(dir) {
-  if (!SLICE || !SLICE.order.length) { goto(idx + dir); return; }
-  const o = SLICE.order;
+  const mode = SLICE || TAINT;    // #75 backward or #76 forward walk
+  if (!mode || !mode.order.length) { goto(idx + dir); return; }
+  const o = mode.order;
   if (dir > 0) {
     for (const j of o) if (j > idx) { goto(j); return; }
   } else {
     for (let k = o.length - 1; k >= 0; k--)
       if (o[k] < idx) { goto(o[k]); return; }
   }
+}
+
+/* #76: forward taint — the #75 walk, transposed. Mark a value and
+   everything DOWNSTREAM lights up: data influence flows through the
+   same dataflow edges (assignments and through-call lines); a
+   verdict that READ a tainted name is a tainted decision; events on
+   lines that tainted guard controls are control-marked. The honest
+   split is kept: control marks are DISPLAY, never propagated as
+   data (an implicit flow is influence, not a copy — stated in the
+   bar). Overwriting a name with untainted sources KILLS its taint. */
+let TAINT = null;
+const TAINT_CAP = 600;
+const _taintNameCache = {};
+function guardNames(f, l, expr) {
+  const key = f + "|" + l;
+  if (key in _taintNameCache) return _taintNameCache[key];
+  let got = null;
+  let m = expr && expr.length < 200 ? expr : null;
+  if (m) {
+    // strings are not names: 'if name == "count"' must not read count
+    m = m.replace(/(["'])(?:\\.|[^\\])*?\1/g, "");
+    // every NAME read by the guard influences its verdict
+    const ids = m.match(/[A-Za-z_][A-Za-z0-9_]*/g);
+    if (ids) got = new Set(ids.filter(w =>
+      !["and", "or", "not", "in", "is", "if", "else", "for", "None",
+        "True", "False", "lambda"].includes(w)));
+  }
+  _taintNameCache[key] = got;
+  return got;
+}
+function computeTaint(label, at) {
+  const fid0 = eventFrame[at];
+  const seed = lastChangeBefore(label, fid0, at, true);
+  const res = { label, seed: at, data: new Set(), verd: new Set(),
+                ctrl: new Set(), frontier: [], truncated: false,
+                order: [] };
+  if (seed < 0) {
+    res.frontier.push({ n: label, why:
+      "no recorded change of it in this frame" });
+    return res;
+  }
+  const live = new Map();      // fid -> Set of live tainted names
+  const liveOf = fid => {
+    let st = live.get(fid);
+    if (!st) { st = new Set(); live.set(fid, st); }
+    return st;
+  };
+  liveOf(fid0).add(label);
+  res.data.add(seed);
+  const gTaint = new Map();    // fid -> Map(guardLine -> tainted?)
+  let callNote = 0;
+  // start AT the seed: a change lands on the NEXT executed line, so
+  // the seed event's own verdict may already read the tainted name
+  for (let i = seed; i < events.length; i++) {
+    if (res.data.size + res.ctrl.size >= TAINT_CAP) {
+      res.truncated = true;
+      break;
+    }
+    const ev = events[i], fid = eventFrame[i];
+    const lt = live.get(fid);
+    if (ev.cond && lt && lt.size) {
+      const names = guardNames(ev.f, ev.l, ev.cond.x);
+      const hit = names && [...names].some(n => lt.has(n));
+      let gm = gTaint.get(fid);
+      if (!gm) { gm = new Map(); gTaint.set(fid, gm); }
+      gm.set(ev.l, !!hit);
+      if (hit) res.verd.add(i);
+    }
+    if (ev.e === "call" && lt === undefined) {
+      // entering a callee from a frame that holds taint: v1 does not
+      // map caller expressions onto parameters — say so, once each
+      const pfid = i > 0 ? eventFrame[i - 1] : -1;
+      const plt = live.get(pfid);
+      if (plt && plt.size && callNote < 6) {
+        res.frontier.push({ n: ev.fn + "()", why:
+          "call entered while taint was live — parameter binding " +
+          "is not name-tracked (v1); through-call results ARE " +
+          "(y = f(x) taints y)" });
+        callNote++;
+      }
+    }
+    const ch = ev.ch;
+    if (!ch || i === seed) continue;   // the seed IS the source
+    // the assignment's own line: one executed frame-event earlier
+    let dfEv = -1;
+    for (let pj = i - 1; pj >= 0; pj--)
+      if (eventFrame[pj] === fid) { dfEv = pj; break; }
+    for (const nm of Object.keys(ch)) {
+      if (nm.includes(".")) continue;      // attr rows ride the base
+      if (ev.e === "call") continue;       // params: the frontier above
+      const srcs = dfEv >= 0
+        ? (((DATA.dataflow || {})[events[dfEv].f] || {})
+           [events[dfEv].l] || {})[nm]
+        : null;
+      const wasLive = lt && lt.has(nm);
+      const tainted = srcs && lt &&
+        srcs.some(sn => lt.has(sn));
+      if (tainted) {
+        liveOf(fid).add(nm);
+        res.data.add(i);
+      } else if (srcs && wasLive) {
+        lt.delete(nm);                     // clean overwrite kills it
+      } else if (!srcs && wasLive) {
+        // mutated/untracked while tainted: taint STAYS (in-place
+        // mutation cannot be proven clean) — honest asymmetry
+        res.data.add(i);
+      }
+      if (!tainted) {
+        // control region: the innermost controller decided this line
+        const gm = gTaint.get(fid);
+        const ctl = dfEv >= 0 &&
+          ((DATA.guards || {})[events[dfEv].f] || {})
+          [String(events[dfEv].l)];
+        if (gm && ctl && gm.get(ctl[0]))
+          res.ctrl.add(i);
+      }
+    }
+  }
+  res.order = [...new Set([...res.data, ...res.verd, ...res.ctrl])]
+    .sort((a, b) => a - b);
+  return res;
+}
+function drawTaint() {
+  let box = document.getElementById("kmarks");
+  if (!box) {
+    box = document.createElement("div");
+    box.id = "kmarks";
+    const bar = document.getElementById("qbar");
+    bar.parentNode.insertBefore(box, bar);
+  }
+  const bar = $("taintbar");
+  box.innerHTML = "";
+  box.style.display = "none";
+  if (!TAINT) { bar.style.display = "none"; return; }
+  const total = Math.max(1, events.length - 1);
+  TAINT.order.forEach(j => {
+    const p = document.createElement("span");
+    p.className = "kmark" +
+      (TAINT.verd.has(j) ? " kverd" :
+       TAINT.ctrl.has(j) && !TAINT.data.has(j) ? " kctrl" : "");
+    p.style.left = (j / total * 100) + "%";
+    p.title = (TAINT.verd.has(j) ? "tainted verdict — the decision " +
+        "read a tainted value"
+      : TAINT.ctrl.has(j) && !TAINT.data.has(j)
+        ? "control-marked — a tainted guard decided this line ran"
+        : "data taint") + " — event " + (j + 1);
+    p.onclick = () => { stop(); goto(j); };
+    box.appendChild(p);
+  });
+  box.style.display = "";
+  const fr = TAINT.frontier;
+  bar.innerHTML = "⇢ TAINT of <b>" + escapeHtml(TAINT.label) +
+    "</b> @ ev " + (TAINT.seed + 1) + " — " + TAINT.data.size +
+    " data · " + TAINT.verd.size + " tainted verdict(s) · " +
+    TAINT.ctrl.size + " control-marked (influence, never copied " +
+    "— not propagated)" +
+    (fr.length ? ' · <span class="sfront" title="' +
+      escapeHtml(fr.slice(0, 12).map(f => f.n + ": " + f.why)
+        .join("\n")) + '">' + fr.length +
+      " frontier note(s)</span>" : "") +
+    (TAINT.truncated ? " · capped at " + TAINT_CAP : "") +
+    " · ←/→ walk it" +
+    '<button id="taintoff">exit (Esc)</button>';
+  bar.style.display = "block";
+  $("taintoff").onclick = exitTaint;
+}
+function enterTaint(label) {
+  if (SLICE) exitSlice();     // one walk mode at a time
+  TAINT = computeTaint(label, idx);
+  drawTaint();
+}
+function exitTaint() {
+  TAINT = null;
+  drawTaint();
 }
 
 function runQuery() {

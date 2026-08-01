@@ -7,7 +7,7 @@ can pick an item and implement it. Features are numbered **#63 onward**, continu
 in FEATURES.md. Fifteen roadmap items have shipped since the list was
 written (63, 64, 65, 70, 77, 79, 80, 98, 101 v1, 103, 104 Tier 1,
 106, 109, 118, 120 v1) — their rows below are struck through;
-**26 remain unbuilt** (plus the stated remainders of 66/74/75/85/88/89/101/104/119/120/126/127/128/132/134).
+**25 remain unbuilt** (plus the stated remainders of 66/74/75/85/88/89/101/104/119/120/126/127/128/132/134).
 
 ## Start here — how to contribute
 
@@ -82,7 +82,7 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
 | 73 | ~~Contracts checked during the run (--invariant)~~ **shipped** | — | ★★ |
 | 74 | ~~Mine the invariants the runs never broke~~ **shipped (map rows remain)** | L | ★★★ |
 | 75 | ~~Full backward slice of a value~~ **shipped (v1; caller-arg crossing remains)** | — | ★★★ |
-| 76 | Forward taint from an input | L | ★★ |
+| 76 | ~~Forward taint from an input~~ **shipped (v1)** | L | ★★ |
 | 77 | ~~"Why didn't this line run?"~~ **shipped** | — | ★★★ |
 | 78 | ~~Nontermination detector (state recurrence)~~ **shipped** | M | ★★ |
 | 79 | ~~Catch the first NaN/Inf at birth~~ **shipped** | — | ★★★ |
@@ -335,6 +335,7 @@ software.
   of fragile bytecode value-stacks.
 
 ### 76. Forward taint ("descendants of this input")
+**Shipped 2026-08-01** — now catalog entry #76 in [FEATURES.md](FEATURES.md): ⇢ taint on every changed row (literal inputs included), forward walk over the #75 dataflow edges with honest kills, tainted verdicts + control-marked regions displayed distinctly and never propagated as data, frontier notes for call entry (v1; through-call results tracked).
 - **What:** the same walk, forward: mark a value (an stdin field, a
   config entry, a function argument) and highlight every variable and
   branch verdict it influenced downstream.

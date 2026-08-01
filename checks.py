@@ -2900,17 +2900,78 @@ def _():
         expect(probe in tpl, f"seq contract missing: {probe}")
 
 
+@check("branch verdicts: columns, semantics, the short-circuit (#86)")
+def _():
+    if not hasattr(sys, "monitoring"):
+        return    # pre-3.12: the fallback note is the feature here
+    src = fixture("br86.py", (
+        "def classify(a, b):\n"
+        "    size = 'big' if a > 5 else 'small'\n"
+        "    if a > 0 and b > 0:\n"
+        "        ok = True\n"
+        "    else:\n"
+        "        ok = False\n"
+        "    return size, ok\n"
+        "pairs = [(9, 2), (-1, 7), (3, 0), (8, -4)]\n"
+        "labels = [classify(a, b) for (a, b) in pairs]\n"
+        "evens = [a for (a, b) in pairs if a % 2 == 0]\n"))
+    p = run_trace(src, "--backend", "monitoring", name="br86")
+    lines = p["sources"]["br86.py"].split("\n")
+    agg = {}
+    for e in p["events"]:
+        if e["e"] != "br":
+            continue
+        seg = lines[e["l"] - 1][e["c0"]:e.get("c1")]
+        val = (not e["r"]) if e["op"] == "pjf" else bool(e["r"])
+        a = agg.setdefault((e["l"], seg), [0, 0])
+        a[0 if val else 1] += 1
+    # hand-traced truth over (9,2) (-1,7) (3,0) (8,-4):
+    expect(agg.get((2, "a > 5")) == [2, 2],
+           f"the ternary's test, at its own columns: "
+           f"{agg.get((2, 'a > 5'))}")
+    expect(agg.get((3, "a > 0")) == [3, 1],
+           f"first operand of the and: {agg.get((3, 'a > 0'))}")
+    expect(agg.get((3, "b > 0")) == [1, 2],
+           f"second operand, SEMANTIC values: {agg.get((3, 'b > 0'))}")
+    expect(sum(agg[(3, "b > 0")]) == 3 < sum(agg[(3, "a > 0")]),
+           "b > 0 evaluated fewer times than a > 0 ran — the "
+           "short-circuit, measured, never inferred")
+    expect(agg.get((10, "a % 2 == 0")) == [1, 3],
+           f"the comprehension's if records per ELEMENT even though "
+           f"its line event fires once: {agg.get((10, 'a % 2 == 0'))}")
+    expect(all(e.get("fn") for e in p["events"] if e["e"] == "br"),
+           "br events carry their frame's function like every event")
+
+    p2 = run_trace(src, name="br86st")
+    expect(not any(e["e"] == "br" for e in p2["events"]),
+           "settrace records no BRANCH events — the fallback is "
+           "absence plus the stated note, never synthesis")
+
+    with open(os.path.join(HERE, "replayer_template.html"),
+              encoding="utf-8") as fh:
+        tpl = fh.read()
+    for probe in ("function brVal", 'br: "br", branch: "br"',
+                  "badge brv", 'id="brline"',
+                  "column-precise (#86)",
+                  "the short-circuit, measured",
+                  "sub-line verdicts (#86) record",
+                  '|| ev.e === "br"'):
+        expect(probe in tpl, f"branch surface missing: {probe}")
+
+
 @check("monitoring LINE: settrace parity + the stated comp delta (#102)")
 def _():
     if not hasattr(sys, "monitoring"):
         return    # pre-3.12: the engine does not exist here
     def canon(p):
+        # br events are #86's ADDITION on this engine — parity is
+        # claimed over the event kinds both engines share
         return [(e["e"], e.get("f"), e.get("l"), e.get("fn"),
                  tuple(sorted((e.get("ch") or {}).keys())),
                  (e.get("g") or {}).get("s"),
                  (e.get("cond") or {}).get("r"),
                  (e.get("cond") or {}).get("i"))
-                for e in p["events"]]
+                for e in p["events"] if e["e"] != "br"]
     # event-for-event parity where no inlined comprehension runs:
     # generators+exceptions, aliases/mutation, match/except, dunders
     for fx in ("example_exceptions.py", "example_machinery.py",

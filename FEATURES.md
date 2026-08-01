@@ -1785,6 +1785,40 @@ dead or invented panel; every cap and truncation is announced.
 
   [![Feature 39 — mro](screenshots/39-mro.png)](screenshots/39-mro.png)
 
+### 86. Sub-line branch verdicts — the blind spot, closed on 3.12+
+- **Measured:** on the PEP 669 engine (`--backend monitoring`, line
+  granularity), BRANCH events ride #102's per-code arming — only
+  in-scope code fires them. A cached per-code map keeps exactly the
+  conditional jumps worth a verdict (`POP_JUMP_IF_FALSE/TRUE/NONE/
+  NOT_NONE` and the `OR_POP` pair) with their `co_positions` columns;
+  FOR_ITER is excluded on purpose — iteration truth is the whole-line
+  verdict's job. The condition's VALUE follows instruction
+  semantics, never a guess: `POP_JUMP_IF_FALSE` jumped means the
+  operand was False.
+- **Displayed:** a violet **BRANCH — TRUE/FALSE** badge whose Event
+  panel shows the source line with the sub-expression underlined at
+  column precision in its verdict color (`if a > 0 and <u>b > 0</u>`);
+  `type:br` in the query bar; and the #137 decision table grows
+  **↳ sub-rows** per guard — each ternary test, and/or operand and
+  comprehension `if` with its own ran/true/false counts and
+  first-occurrence jumps.
+- **Why:** the honesty note used to say sub-line branching is not
+  visible; this deletes the caveat where the interpreter allows it.
+  And an operand evaluated FEWER times than its guard ran is the
+  short-circuit — measured, never inferred.
+- **Use case:** `if a > 0 and b > 0:` over four calls — the table
+  reads `a > 0` 4× (3T/1F), `↳ b > 0` **3×** (1T/2F): the skipped
+  evaluation is the short-circuit made countable. A comprehension's
+  `if` records per element even though its line event fires once.
+- **Command:** `python3 tracer.py --backend monitoring app.py` →
+  step onto a BRANCH event, or open **Anatomy → DECISIONS**.
+  Fallback honesty: under settrace there are no br events and the
+  table says where they record.
+- **Screenshot** — the and-guard's sub-rows with the measured
+  short-circuit, and the underlined operand at its own columns:
+
+  [![Feature 86 — branch verdicts](screenshots/86-branch-verdicts.png)](screenshots/86-branch-verdicts.png)
+
 ### 85. The anatomy panel — AST + bytecode of the current line (static tiers)
 - **Measured:** at trace-write time every recorded source file is
   parsed and compiled fresh — nothing executes. Per record (`<module>`

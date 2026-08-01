@@ -1731,6 +1731,31 @@ class Tracer:
         if self.invariants and event == "line":
             self._check_invariants(frame, ev)
 
+    def _record_br(self, frame, info, taken):
+        """#86: one sub-line branch verdict — the column-precise truth
+        of a ternary test, an and/or operand, or a comprehension's if,
+        straight from the interpreter's BRANCH event."""
+        if not self.armed or self.truncated \
+                or len(self.events) >= self.max_events:
+            return
+        rel = self._rel(frame.f_code.co_filename)
+        if rel is None:
+            return
+        _target, op, l0, c0, l1, c1 = info
+        ev = {"e": "br", "f": rel, "l": l0, "fn": frame.f_code.co_name,
+              "c0": c0, "c1": c1, "op": op, "r": bool(taken),
+              "ch": {}}
+        if l1 is not None and l1 != l0:
+            ev["l1"] = l1
+        tname = self._thread_label()
+        if tname != "MainThread":
+            ev["t"] = tname
+        tk = (self._tk_pin.get(id(frame)) if self._tk_pin else None) \
+            or self._task_name()
+        if tk is not None:
+            ev["tk"] = tk
+        self.events.append(ev)
+
     def _check_invariants(self, frame, line_ev):
         """#73: contracts checked at every line event. A VIOLATION is
         the TRANSITION into falsehood — recovery re-arms, the #79 trip
@@ -1846,6 +1871,7 @@ class MonitoringBackend:
         self.tool = None
         self.line_mode = line_mode   # #102: LINE via set_local_events
         self._armed = set()          # code ids already given local LINE
+        self._brmaps = {}            # #86: code id -> offset -> branch
         self._mark = None   # (frame id, exc id) already recorded "exc"
         self._callbacks = None   # (event, fn) pairs, so stop() can detach
 
@@ -1882,7 +1908,10 @@ class MonitoringBackend:
             # #102: LINE is registered but NOT in the global mask — a
             # per-code set_local_events arms it only for in-scope code
             # objects (the whole trick: the stdlib never fires a line)
-            self._callbacks += ((E.LINE, self._line),)
+            # #86: BRANCH rides the same per-code arming — sub-line
+            # verdicts at column precision, only where code is ours
+            self._callbacks += ((E.LINE, self._line),
+                                (E.BRANCH, self._branch))
         try:
             mask = 0
             for ev, fn in self._callbacks:
@@ -1925,7 +1954,9 @@ class MonitoringBackend:
         if self.line_mode and id(code) not in self._armed:
             self._armed.add(id(code))
             try:
-                MON.set_local_events(self.tool, code, MON.events.LINE)
+                MON.set_local_events(self.tool, code,
+                                     MON.events.LINE
+                                     | MON.events.BRANCH)
             except Exception:
                 pass
 
@@ -1948,6 +1979,42 @@ class MonitoringBackend:
     def _line(self, code, line):
         # only armed (in-scope) code objects ever fire this
         self.t(sys._getframe(1), "line", None)
+
+    # #86: conditional-branch instructions worth a verdict, with the
+    # semantic each op gives to "took the jump". FOR_ITER is excluded
+    # on purpose: iteration truth is the whole-line verdict's job.
+    BR_OPS = {"POP_JUMP_IF_FALSE": "pjf", "POP_JUMP_IF_TRUE": "pjt",
+              "POP_JUMP_IF_NONE": "pjn",
+              "POP_JUMP_IF_NOT_NONE": "pjnn",
+              "JUMP_IF_FALSE_OR_POP": "pjf",
+              "JUMP_IF_TRUE_OR_POP": "pjt"}
+
+    def _brmap(self, code):
+        m = self._brmaps.get(id(code))
+        if m is None:
+            m = {}
+            try:
+                for ins in dis.get_instructions(code):
+                    op = self.BR_OPS.get(ins.opname)
+                    if op is None:
+                        continue
+                    pos = getattr(ins, "positions", None)
+                    if pos is None or pos.lineno is None:
+                        continue
+                    m[ins.offset] = (ins.argval, op, pos.lineno,
+                                     pos.col_offset, pos.end_lineno,
+                                     pos.end_col_offset)
+            except Exception:
+                pass
+            self._brmaps[id(code)] = m
+        return m
+
+    def _branch(self, code, off, dest):
+        info = self._brmap(code).get(off)
+        if info is None:
+            return               # FOR_ITER and friends: not ours
+        self.t._record_br(sys._getframe(1), info,
+                          dest == info[0])
 
     def _start(self, code, off):
         if self._skip(code):

@@ -867,6 +867,15 @@ their original node — no phantom calls), and the 4000-node render cap
 announces itself. Works at both granularities — on an fn-level trace
 of a real codebase it is the whole run's shape in one panel.
 
+**Sub-line verdicts.** On that same engine, the parts of a line get
+their own truth: every ternary test, every `and`/`or` operand, every
+comprehension `if` records a BRANCH event at its exact columns.
+Stepping onto one shows the sub-expression underlined in its verdict
+color; the DECISIONS table grows ↳ sub-rows per guard — and when an
+operand was evaluated fewer times than its guard ran, that difference
+IS the short-circuit, measured. Under the default engine these events
+simply don't exist, and the table says so instead of pretending.
+
 **The PEP 669 line engine.** On 3.12+, `--backend monitoring` now
 traces lines too: in-scope code objects get LINE events armed
 per-code, out-of-scope code costs one disabled event instead of a

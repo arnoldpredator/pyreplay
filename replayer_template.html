@@ -312,6 +312,17 @@
   .dct.z { color: var(--dim); cursor: default; }
   .dct.z:hover { text-decoration: none; }
   .dcnever { color: #e5c07b; }
+  .dctab tr.dcsub td { border-top: none; color: var(--dim); }
+  .dctab tr.dcsub .dcg { color: #c792ea; }
+  .badge.brv { background: #c792ea; }
+  #brline { font-size: 12px; margin-top: 4px; }
+  #brline .brsrc { white-space: pre; font-size: 12px;
+    color: var(--dim); display: block; overflow-x: auto; }
+  #brline u { text-decoration-thickness: 2px;
+    text-underline-offset: 3px; font-weight: 700; }
+  #brline u.brt { color: #7ee08a; text-decoration-color: #7ee08a; }
+  #brline u.brf { color: #e06c75; text-decoration-color: #e06c75; }
+  #brline u.brn { color: #e5c07b; text-decoration-color: #e5c07b; }
   .dcna { color: var(--dim); font-style: italic; }
   .astbox { max-height: 200px; overflow: auto; background: #171a22;
     border: 1px solid var(--border); border-radius: 4px;
@@ -817,6 +828,7 @@
       <div id="hint"></div>
       <div id="retval"></div>
       <div id="wake"></div>
+  <div id="brline" style="display:none"></div>
       <div id="iface"></div>
       <div id="minedrow"></div>
       <div id="mro"></div>
@@ -2772,7 +2784,8 @@ function computeStacks(idx) {
   }
   for (let i = start; i <= idx; i++) {
     const ev = events[i];
-    if (ev.e === "chap" || ev.e === "hb" || ev.e === "viol") {
+    if (ev.e === "chap" || ev.e === "hb" || ev.e === "viol"
+        || ev.e === "br") {
       maybeKeyframe(i, idx, stacks, curT);   // boundaries, wakes and
       continue;                              // verdicts are not frames
     }
@@ -4033,6 +4046,30 @@ function decisionRows(rec, rel) {
   }
   return [...lines].sort((a, b) => a - b);
 }
+let brAggCache = null;
+function brAgg() {
+  if (brAggCache) return brAggCache;
+  const agg = {};
+  for (let i = 0; i < events.length; i++) {
+    const ev = events[i];
+    if (ev.e !== "br") continue;
+    const key = ev.f + "|" + ev.l;
+    const sub = (agg[key] || (agg[key] = {}));
+    const k2 = ev.c0 + "|" + (ev.c1 == null ? "" : ev.c1) + "|" +
+      ev.op;
+    let a = sub[k2];
+    if (!a) a = sub[k2] = { c0: ev.c0, c1: ev.c1, op: ev.op,
+                            t: 0, f: 0, iT: -1, iF: -1 };
+    const v = brVal(ev);
+    if (v === true || v === "notnone") {
+      a.t++; if (a.iT < 0) a.iT = i;
+    } else {
+      a.f++; if (a.iF < 0) a.iF = i;
+    }
+  }
+  brAggCache = agg;
+  return agg;
+}
 function decisionTable(rec, rel, curLine) {
   const rows = decisionRows(rec, rel);
   if (!rows.length) return "";
@@ -4076,12 +4113,46 @@ function decisionTable(rec, rel, curLine) {
         ? "exhausted " + a.f + "×"
         : "verdict false " + a.f + "×") +
       "<td>" + flag + "</td></tr>";
+    // #86: sub-condition rows — the and/or operands, ternary tests
+    // and comprehension ifs recorded INSIDE this guard line
+    const subs = brAgg()[rel + "|" + ln];
+    if (subs) {
+      const lineTxt = src[ln - 1] || "";
+      for (const a2 of Object.values(subs).sort(
+          (x, y) => x.c0 - y.c0)) {
+        const seg = lineTxt.slice(a2.c0,
+          a2.c1 == null ? undefined : a2.c1).trim() || "?";
+        const isNone = a2.op === "pjn" || a2.op === "pjnn";
+        h += '<tr class="dcsub"><td></td><td class="dcg">↳ ' +
+          esc2(seg.slice(0, 28)) + "</td>" +
+          cell(a2.t + a2.f,
+               a2.iT >= 0 && (a2.iF < 0 || a2.iT < a2.iF)
+                 ? a2.iT : a2.iF,
+               "", "this sub-expression was evaluated " +
+               (a2.t + a2.f) + "× (fewer than the guard ran = " +
+               "short-circuit, measured)") +
+          cell(a2.t, a2.iT, "vt", (isNone ? "not None " : "true ") +
+               a2.t + "×") +
+          cell(a2.f, a2.iF, "vf", (isNone ? "None " : "false ") +
+               a2.f + "×") +
+          "<td>" + (a2.t === 0 && a2.t + a2.f > 0
+            ? '<span class="dcnever">never true</span>'
+            : a2.f === 0 && a2.t + a2.f > 0
+              ? '<span class="dcnever">never false</span>' : "") +
+          "</td></tr>";
+      }
+    }
   }
   h += "</table>";
-  h += '<div class="anote">whole guards only — sub-conditions of ' +
-    "<code>a and b</code> are not separated (sub-line branch " +
-    "verdicts are #86, unbuilt); for-rows read entered/exhausted." +
-    "</div>";
+  const anyBr = Object.keys(brAgg()).length > 0;
+  h += '<div class="anote">' +
+    (anyBr
+      ? "↳ sub-rows are #86's BRANCH events — column-precise " +
+        "sub-conditions (an operand evaluated fewer times than its " +
+        "guard ran is the short-circuit, measured); "
+      : "whole guards only here — sub-line verdicts (#86) record " +
+        "under <code>--backend monitoring</code> on 3.12+; ") +
+    "for-rows read entered/exhausted.</div>";
   return h;
 }
 
@@ -4469,6 +4540,23 @@ $("anatomy").addEventListener("click", e => {
   if (line && rel) whyline(rel, line); // ran → jump; didn't → the why
 });
 
+/* #86: what a branch op's "jumped" means for the CONDITION value —
+   instruction semantics, never a guess: POP_JUMP_IF_FALSE consumes
+   the condition and jumps when it was False. */
+function brVal(ev) {
+  if (ev.op === "pjf") return !ev.r;
+  if (ev.op === "pjt") return !!ev.r;
+  if (ev.op === "pjn") return ev.r ? null : "notnone";
+  if (ev.op === "pjnn") return ev.r ? "notnone" : null;
+  return null;
+}
+function brValText(ev) {
+  const v = brVal(ev);
+  if (v === true) return "true";
+  if (v === false) return "false";
+  if (v === null) return "was None";
+  return "was not None";
+}
 function render() {
   const ev = events[idx];
   if (!ev) return;
@@ -4535,6 +4623,9 @@ function render() {
   if (ev.e === "viol") {
     badge.className = "badge excsoft";
     badge.textContent = "⚖ INVARIANT VIOLATED";
+  } else if (ev.e === "br") {
+    badge.className = "badge brv";
+    badge.textContent = "BRANCH — " + brValText(ev).toUpperCase();
   } else if (ev.e === "hb") {
     badge.className = "badge hb";
     const HB = { create: "WAKE — task created",
@@ -4567,6 +4658,27 @@ function render() {
   } else {
     badge.className = "badge " + ev.e;
     badge.textContent = ev.e.toUpperCase();
+  }
+  // #86: the sub-expression, underlined at column precision
+  const brl = $("brline");
+  if (ev.e === "br") {
+    const srcLine = (DATA.sources[ev.f] || "").split("\n")[ev.l - 1]
+      || "";
+    const c0 = Math.max(0, Math.min(ev.c0, srcLine.length));
+    const c1 = Math.max(c0, Math.min(ev.c1 == null ? srcLine.length
+      : ev.c1, srcLine.length));
+    const val = brVal(ev);
+    brl.innerHTML = '<span class="brsrc">' +
+      esc2(srcLine.slice(0, c0)) +
+      '<u class="' + (val === true ? "brt" : val === false ? "brf"
+        : "brn") + '">' + esc2(srcLine.slice(c0, c1)) + "</u>" +
+      esc2(srcLine.slice(c1)) + "</span>" +
+      '<div class="anote">' + brValText(ev) + " — the interpreter's " +
+      "own BRANCH event, column-precise (#86)" +
+      (ev.l1 ? " · spans to line " + ev.l1 : "") + "</div>";
+    brl.style.display = "block";
+  } else {
+    brl.style.display = "none";
   }
   const evTh = ev.t || "main";
   $("thread").textContent = ev.tk
@@ -5670,6 +5782,7 @@ function parseQuery(q) {
                   call: "call", return: "return", ret: "return",
                   chap: "chap", test: "chap", log: "log",
                   console: "log", hb: "hb", wake: "hb", viol: "viol",
+                  br: "br", branch: "br",
                   invariant: "viol", yield: "yield",
                   resume: "resume" }[m[1].toLowerCase()];
       if (!k) { bad.push(tok); return; }

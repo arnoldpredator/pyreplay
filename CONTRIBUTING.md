@@ -7,7 +7,7 @@ can pick an item and implement it. Features are numbered **#63 onward**, continu
 in FEATURES.md. Fifteen roadmap items have shipped since the list was
 written (63, 64, 65, 70, 77, 79, 80, 98, 101 v1, 103, 104 Tier 1,
 106, 109, 118, 120 v1) — their rows below are struck through;
-**23 remain unbuilt** (plus the stated remainders of 66/74/75/85/88/89/101/104/119/120/126/127/128/132/134).
+**22 remain unbuilt** (plus the stated remainders of 66/74/75/85/88/89/101/104/119/120/126/127/128/132/134).
 
 ## Start here — how to contribute
 
@@ -92,7 +92,7 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
 | 83 | Array shape/dtype timeline | M | ★★★ |
 | 84 | I/O lane via audit hooks; resource-leak pairing | M | ★★ |
 | 85 | ~~Code anatomy: AST + bytecode panel~~ **static tiers shipped; Tier 2 (instruction events) remains** | S–XL | ★★ |
-| 86 | Ternary/short-circuit verdicts via BRANCH events | L | ★★ |
+| 86 | ~~Ternary/short-circuit verdicts via BRANCH events~~ **shipped** | L | ★★ |
 | 87 | Memory heat on the map (tracemalloc) | M | ★★ |
 | 88 | ~~Who-woke-whom arrows across tasks/threads~~ **shipped (v1; queue correlation remains)** | — | ★★★ |
 | 89 | ~~Critical path through a concurrent run~~ **shipped (v1; multi-core DAG remains)** | — | ★★ |
@@ -476,6 +476,7 @@ software.
   visible in no mainstream tool.
 
 ### 86. Sub-line branch verdicts (BRANCH events)
+**Shipped 2026-08-01** — now catalog entry #86 in [FEATURES.md](FEATURES.md): BRANCH on #102's per-code arming, instruction-semantic values at co_positions columns, violet badge + column-precise underline, ↳ sub-rows in the #137 table (short-circuits measured, comp-ifs per element), type:br, settrace fallback stated. Remains: the CFG ladder's sub-line edge refinement.
 - **What:** the documented blind spot — ternaries, `and`/`or`
   short-circuits, comprehension `if`s — closed on 3.12+ via
   `sys.monitoring` BRANCH/JUMP events: verdicts for branches *inside*

@@ -1130,6 +1130,66 @@ deco(1); deco(2)
            f"decorator must record the FIRST call only: {wd}")
 
 
+@check("diverge: state vs control divergence, identical pair, exits (#64)")
+def _():
+    # env-controlled fixture: same control flow, different values ->
+    # STATE diverges while CONTROL never does
+    fx = fixture("fx_div.py", (
+        "import os\n"
+        "v = int(os.environ.get('DIV', '1'))\n"
+        "acc = 0\n"
+        "for i in range(3):\n"
+        "    acc += v\n"
+        "print(acc)\n"))
+    outs = {}
+    for tag, div in (("a", "1"), ("b", "2"), ("a2", "1")):
+        outs[tag] = os.path.join(TMP, f"t_div_{tag}.html")
+        env = dict(os.environ, DIV=div)
+        r = subprocess.run([PY, os.path.join(HERE, "tracer.py"),
+                            "--out", outs[tag], fx],
+                           capture_output=True, text=True, cwd=TMP,
+                           env=env, timeout=120)
+        expect(os.path.exists(outs[tag]), f"trace {tag} missing: {r.stderr}")
+
+    def diverge(x, y):
+        return subprocess.run([PY, os.path.join(HERE, "tracer.py"),
+                               "--diverge", outs[x], outs[y]],
+                              capture_output=True, text=True, cwd=TMP,
+                              timeout=60)
+
+    r = diverge("a", "b")
+    expect(r.returncode == 1, f"diverged pair must exit 1: {r.stdout}")
+    expect("STATE diverges first" in r.stdout
+           and "control flow never diverges" in r.stdout,
+           f"state-only divergence misreported:\n{r.stdout}")
+    expect("v:  1  vs  2" in r.stdout,
+           f"the differing variable must be named with both values:\n"
+           f"{r.stdout}")
+    expect("#ev=" in r.stdout, "deep links missing from the report")
+    r2 = diverge("a", "a2")
+    expect(r2.returncode == 0 and "identical" in r2.stdout,
+           f"identical runs must exit 0:\n{r2.stdout}")
+    # control divergence: a value-dependent branch
+    fx2 = fixture("fx_div2.py", (
+        "import os\n"
+        "v = int(os.environ.get('DIV', '1'))\n"
+        "if v == 1:\n"
+        "    x = 'low'\n"
+        "else:\n"
+        "    x = 'high'\n"
+        "print(x)\n"))
+    for tag, div in (("c", "1"), ("d", "2")):
+        outs[tag] = os.path.join(TMP, f"t_div_{tag}.html")
+        subprocess.run([PY, os.path.join(HERE, "tracer.py"),
+                        "--out", outs[tag], fx2],
+                       capture_output=True, text=True, cwd=TMP,
+                       env=dict(os.environ, DIV=div), timeout=120)
+    r3 = diverge("c", "d")
+    expect(r3.returncode == 1
+           and "control flow follows at event" in r3.stdout,
+           f"branch divergence must show the control moment:\n{r3.stdout}")
+
+
 @check("runs: N-run harness classifies outcomes, keeps one trace each (#63)")
 def _():
     # a counter file makes the "flake" fully deterministic: 6 runs share

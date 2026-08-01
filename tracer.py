@@ -15,6 +15,7 @@ overwritten. Use --out NAME.html to pick a name (that one DOES overwrite).
     python tracer.py --start-when "i == 56" <script.py> [args...]
     python tracer.py --trip nan <script.py>            # NaN/Inf tripwire
     python tracer.py --runs 50 <script.py>             # N-run statistics
+    python tracer.py --diverge good.html bad.html      # first divergence
     python tracer.py -m pytest tests/                  # trace a test suite
     python tracer.py --root brian2 -m pytest           # pytest scoped to --root
     python tracer.py --root . -m pytest tests/ -q      # explicit test path
@@ -65,6 +66,16 @@ per class (min/median/p95/max, tracer-inclusive — comparable to each
 other, not to bare runtime) and links each class to its replayable
 trace. Exit code 0 only if every run was clean, so `git bisect run`
 can consume it directly. Ctrl-C reports the runs completed so far.
+
+--diverge A.html B.html: where did two runs of the same code first part
+ways? Reported twice, honestly: STATE divergence (the same line runs on
+both sides but its values differ — usually nearer the cause; the
+differing variables are named) and CONTROL divergence (a different line
+runs — the symptom). Timestamps and memory addresses inside reprs are
+canonicalized away first, so what remains differing is real. Prints
+deep links that open both traces AT the divergence. Exit 0 identical,
+1 diverged — pairs with --runs (compare a kept clean trace against a
+kept failing one).
 
 Traces every file inside the SCOPE ROOT — by default the entry script's
 directory tree (your project). Pass --root DIR to set it explicitly; that is
@@ -2130,7 +2141,151 @@ def _run_harness(orig_argv, n_runs, out, entry_label, granularity,
     return 0 if set(counts) == {"clean"} else 1
 
 
+_ADDR = re.compile(r"0x[0-9a-fA-F]+")
+
+
+def _brief_enc(enc, cap=48):
+    """One-line human summary of an encoded value for the diverge report."""
+    if not isinstance(enc, dict):
+        return "?"
+    t = enc.get("t")
+    if t in ("p", "s", "o"):
+        s = str(enc.get("v"))
+    elif t in ("list", "tuple", "set"):
+        inner = ", ".join(_brief_enc(x, 12) for x in (enc.get("v") or [])[:6])
+        s = ("[%s]" if t == "list" else "(%s)" if t == "tuple"
+             else "{%s}") % inner
+        if enc.get("n", 0) > 6:
+            s += f" +{enc['n'] - 6}"
+    elif t in ("dict", "obj"):
+        inner = ", ".join(f"{p[0]}: {_brief_enc(p[1], 10)}"
+                          for p in (enc.get("v") or [])[:4]
+                          if isinstance(p, (list, tuple)) and len(p) == 2)
+        s = "{%s}" % inner
+        if enc.get("n", 0) > 4:
+            s += f" +{enc['n'] - 4}"
+    else:
+        s = "?"
+    return s if len(s) <= cap else s[:cap - 1] + "…"
+
+
+def _diverge(path_a, path_b):
+    """#64 v1: the first event where two traces of the same code part
+    ways — reported twice, honestly. STATE divergence (same control
+    path, different values: usually nearer the cause) and CONTROL
+    divergence (a different line runs: the symptom). Canonicalization
+    strips what differs between any two healthy runs — timestamps, and
+    memory addresses inside reprs — so what remains differing is real.
+    v1 aligns by identical prefix; runs that differ from event 1
+    (different inputs, say) are reported as exactly that."""
+    try:
+        pa, pb = _extract_payload(path_a), _extract_payload(path_b)
+    except Exception as exc:
+        print(f"error: not a pair of pyreplay traces ({exc})")
+        return 2
+    if pa.get("granularity") != pb.get("granularity"):
+        print(f"error: different granularities ({pa.get('granularity')} "
+              f"vs {pb.get('granularity')}) — retrace one side; tokens "
+              f"are not comparable across granularities")
+        return 2
+    if pa.get("script") != pb.get("script"):
+        print(f"note: different entries ({pa.get('script')} vs "
+              f"{pb.get('script')}) — comparing anyway")
+    ea, eb = pa.get("events", []), pb.get("events", [])
+    na, nb = os.path.basename(path_a), os.path.basename(path_b)
+
+    def ctrl_tok(e):
+        return (e.get("e"), e.get("f"), e.get("l"), e.get("fn"),
+                (e.get("g") or {}).get("s"), e.get("t"), e.get("tk"))
+
+    def state_tok(e):
+        core = {k: e.get(k) for k in ("ch", "ret", "x") if k in e}
+        return _ADDR.sub("0xADDR", json.dumps(core, sort_keys=True))
+
+    def first_mismatch(xs, ys):
+        n = min(len(xs), len(ys))
+        for i in range(n):
+            if xs[i] != ys[i]:
+                return i
+        return None if len(xs) == len(ys) else n
+
+    ca, cb = [ctrl_tok(e) for e in ea], [ctrl_tok(e) for e in eb]
+    kc = first_mismatch(ca, cb)
+    ks = first_mismatch([(c, state_tok(e)) for c, e in zip(ca, ea)],
+                        [(c, state_tok(e)) for c, e in zip(cb, eb)])
+    print(f"pyreplay diverge: {na} ({len(ea)} events) vs {nb} "
+          f"({len(eb)} events) · {pa.get('granularity')} granularity")
+    if ks is None:
+        print("  identical: state and control flow agree event for "
+              "event (timestamps and memory addresses excluded).")
+        return 0
+
+    def where(evs, i):
+        if i >= len(evs):
+            return "(run already over)"
+        e = evs[i]
+        gm = (e.get("g") or {}).get("s")
+        kind = {"c": "call(gen)", "r": "resume", "y": "yield",
+                "e": "exhaust"}.get(gm, e.get("e"))
+        w = f"{kind} {e.get('f')}:{e.get('l')} in {e.get('fn')}"
+        if e.get("x"):
+            w += f" [{e['x'].get('t')}]"
+        return w
+
+    def src_line(p, evs, i):
+        if i >= len(evs):
+            return None
+        e = evs[i]
+        text = (p.get("sources") or {}).get(e.get("f"))
+        if not text:
+            return None
+        lines = text.splitlines()
+        return lines[e["l"] - 1].strip() if 0 < e["l"] <= len(lines) \
+            else None
+
+    print(f"  identical for the first {ks} event"
+          f"{'s' if ks != 1 else ''}.")
+    if ks == kc:
+        print(f"  CONTROL and state diverge together at event {ks + 1}:")
+    else:
+        print(f"  STATE diverges first, at event {ks + 1} "
+              f"(the same line runs on both sides — its values differ):")
+    for name, evs, p in ((na, ea, pa), (nb, eb, pb)):
+        line = src_line(p, evs, ks)
+        print(f"    {name}: {where(evs, ks)}"
+              + (f"  |  {line}" if line else ""))
+    if ks < len(ea) and ks < len(eb) and ca[ks] == cb[ks]:
+        cha, chb = ea[ks].get("ch") or {}, eb[ks].get("ch") or {}
+
+        def canon(v):
+            return _ADDR.sub("0xADDR", json.dumps(v, sort_keys=True))
+
+        for nm in sorted(set(cha) | set(chb)):
+            if canon(cha.get(nm)) != canon(chb.get(nm)):
+                print(f"      {nm}:  {_brief_enc(cha.get(nm))}  vs  "
+                      f"{_brief_enc(chb.get(nm))}")
+    if kc is not None and kc != ks:
+        print(f"  control flow follows at event {kc + 1}:")
+        for name, evs, p in ((na, ea, pa), (nb, eb, pb)):
+            line = src_line(p, evs, kc)
+            print(f"    {name}: {where(evs, kc)}"
+                  + (f"  |  {line}" if line else ""))
+    elif kc is None:
+        print(f"  control flow never diverges — both sides run the same "
+              f"{min(len(ea), len(eb))} events through different values.")
+    print(f"  open both at the divergence (deep links, #106):")
+    print(f"    {os.path.abspath(path_a)}#ev={ks + 1}")
+    print(f"    {os.path.abspath(path_b)}#ev={ks + 1}")
+    return 1
+
+
 def main(argv):
+    if argv[:1] == ["--diverge"]:
+        # a mode, not a flag: compares two existing traces, runs nothing
+        if len(argv) != 3:
+            print("usage: tracer.py --diverge A.html B.html")
+            return 2
+        return _diverge(argv[1], argv[2])
     orig_argv = list(argv)   # the N-run harness re-issues these to children
     out = None
     max_events = MAX_EVENTS

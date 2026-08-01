@@ -2690,6 +2690,74 @@ def _():
            "fn traces must not carry anatomy (no line to dissect)")
 
 
+@check("cfg: typed edges, exact observed weights, dead code (#131)")
+def _():
+    src = fixture("cfg131.py", (
+        "def classify(xs):\n"
+        "    total = 0\n"
+        "    for x in xs:\n"
+        "        if x < 0:\n"
+        "            continue\n"
+        "        if x > 100:\n"
+        "            break\n"
+        "        total += x\n"
+        "    else:\n"
+        "        total += 1\n"
+        "    return total\n"
+        "\n"
+        "def dead_tail(a):\n"
+        "    return a\n"
+        "    a += 1\n"
+        "\n"
+        "def pick(flag):\n"
+        "    if flag:\n"
+        "        return 1\n"
+        "    return 0\n"
+        "\n"
+        "print(classify([4, -1, 7, 2]), classify([50, 200, 9]),\n"
+        "      dead_tail(1), pick(True))\n"))
+    p = run_trace(src)
+    recs = {r["q"]: r for r in p["cfg"]["cfg131.py"]["recs"]}
+    c = recs["classify"]
+    kinds = {k for _, _, k in c["edges"]}
+    expect({"seq", "true", "false", "loop", "continue", "break",
+            "return"} <= kinds, f"edge grammar incomplete: {kinds}")
+    ln2b = {}
+    for bi, lines in enumerate(c["blocks"]):
+        for ln in lines:
+            ln2b.setdefault(ln, bi)
+    w = c.get("w") or {}
+
+    def wof(a, b, k=None):
+        for s, d, kk in c["edges"]:
+            if s == ln2b[a] and d == ln2b[b] and (k is None or kk == k):
+                return w.get(f"{s}-{d}", 0)
+        raise Fail(f"no edge L{a}->L{b} ({k})")
+    # hand-traced: [4,-1,7,2] exhausts into the else; [50,200,9] breaks
+    expect(wof(5, 3, "continue") == 1, "continue must be observed once")
+    expect(wof(7, 11, "break") == 1, "break must skip the for-else once")
+    expect(wof(3, 10, "false") == 1,
+           "for-else entered exactly once (the broken run skips it)")
+    expect(wof(8, 3, "loop") == 4, "four normal iterations loop back")
+    expect(wof(4, 5, "true") == 1 and wof(4, 6, "false") == 5,
+           "if x<0 verdict counts must be 1/5")
+    expect((c.get("h") or {}).get(str(c["entry"])) == 2,
+           "classify entered twice")
+    expect(recs["dead_tail"]["unreach"],
+           "code after return must be unreachable by construction")
+    pk = recs["pick"]
+    ghost = [f"{s}-{d}" for s, d, k in pk["edges"] if k == "false"]
+    expect(ghost and all((pk.get("w") or {}).get(g, 0) == 0
+                         for g in ghost),
+           "pick(True) only: the false edge exists and carries no "
+           "weight — ghosted, never conflated with unreachable")
+    expect(not recs["pick"]["unreach"],
+           "pick's untaken branch is reachable — ghost, not unreach")
+    q = run_trace(src, "--granularity", "fn", name="cfg131_fn")
+    expect(not q.get("cfg"),
+           "fn traces carry no CFG weights (no line events to walk)")
+
+
 # ---------------------------------------------------------------- runner
 
 def main():

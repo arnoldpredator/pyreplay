@@ -241,6 +241,27 @@
   .disrow .diso { min-width: 26px; text-align: right; color: var(--dim); }
   .disrow .disop { color: var(--text); font-weight: 600; }
   .disrow.cur .disop, .disrow.cur .disl { color: var(--changed-text); }
+  .cfgbox { max-height: 320px; overflow: auto; background: #171a22;
+    border: 1px solid var(--border); border-radius: 4px;
+    margin-top: 3px; }
+  .cfgbox svg { display: block; }
+  .cfgb rect { fill: #232838; stroke: #9db0d8; stroke-width: 1.3;
+    cursor: pointer; }
+  .cfgb text { fill: var(--text); font-size: 10px; pointer-events: none; }
+  .cfgb .cfgl { fill: var(--accent); font-weight: 700; }
+  .cfgb.cur rect { stroke: var(--changed-text); stroke-width: 2.4;
+    fill: #3d3320; }
+  .cfgb.cur text, .cfgb.cur .cfgl { fill: var(--changed-text); }
+  .cfgb.ghost rect { stroke-dasharray: 4 3; opacity: .55; }
+  .cfgb.ghost text { opacity: .55; }
+  .cfgb.unre rect { stroke: var(--err); stroke-dasharray: 3 3; }
+  .cfgb.unre text, .cfgb.unre .cfgl { fill: var(--err); }
+  .cfgb.exitb rect { fill: #1c2130; stroke: var(--dim); }
+  .cfge { fill: none; }
+  .cfge.ghost, polygon.cfgah.ghost { stroke-dasharray: 3 4;
+    opacity: .4; }
+  .cfgt { font-size: 8.5px; }
+  .cfgt.ghost { opacity: .5; }
   #qmarks { position: relative; height: 7px; margin: 0 7px 2px; }
   .qmark {
     position: absolute; top: 0; width: 4px; height: 7px;
@@ -2227,6 +2248,121 @@ function astHtml(n, l) {
     "><summary>" + esc2(lab) + pos + "</summary>" +
     kids.map(k => astHtml(k, l)).join("") + "</details>";
 }
+/* #131: the CFG — the code as a graph, the run as a path on it.
+   Record resolved by the CURRENT FRAME's function (the run's truth),
+   blocks laddered in line order, observed edges weighted ×N,
+   never-observed ghosted, unreachable-by-construction marked apart.
+   Clicking a block asks the whyline: ran → jump, didn't → the why. */
+function cfgRecFor(f, l, fname) {
+  const c = (DATA.cfg || {})[f];
+  if (!c || !c.recs) return null;
+  let best = null, bestAny = null;
+  for (const r of c.recs) {
+    if (r.l0 > l || l > r.l1) continue;
+    if (!bestAny || (r.l1 - r.l0) <= (bestAny.l1 - bestAny.l0))
+      bestAny = r;
+    if (fname) {
+      const ok = fname === "<module>" ? r.q === "<module>"
+        : r.q !== "<module>" && r.q.split(".").pop() === fname;
+      if (!ok) continue;
+    }
+    if (!best || (r.l1 - r.l0) <= (best.l1 - best.l0)) best = r;
+  }
+  return best || bestAny;
+}
+const CFG_KC = { true: "#7ee08a", false: "#e06c75", loop: "#5eb1ff",
+  continue: "#5eb1ff", exc: "#e5c07b", break: "#e5c07b",
+  raise: "#e5c07b", case: "#c792ea", nomatch: "#7d8493" };
+function cfgSvg(rec, curB, rel) {
+  const order = rec.blocks.map((_, i) => i).sort((a, b) => {
+    const la = rec.blocks[a].length ? rec.blocks[a][0] : 1e9;
+    const lb = rec.blocks[b].length ? rec.blocks[b][0] : 1e9;
+    return la - lb || a - b;
+  });
+  const row = {};
+  order.forEach((b, i) => row[b] = i);
+  const W = rec.w || {}, H = rec.h || {};
+  const rowH = 34, bx = 40, bw = 148, bh = 22;
+  const y = b => 8 + row[b] * rowH;
+  const src = (DATA.sources[rel] || "").split("\n");
+  let fl = 0, bl = 0;
+  const parts = [];
+  for (const [s, d, k] of rec.edges) {
+    const w = W[s + "-" + d] || 0;
+    const col = CFG_KC[k] || "#93a1c0";
+    const cls = "cfge" + (w ? "" : " ghost");
+    const sw = w ? Math.min(1.2 + Math.log2(w + 1), 4) : 1.2;
+    const lbl = (k !== "seq" ? k : "") + (w ? " ×" + w : "");
+    let lx, ly;
+    if (row[d] === row[s] + 1) {
+      const x = bx + bw / 2 +
+        (k === "false" ? 30 : k === "true" ? -30 : 0);
+      parts.push('<path class="' + cls + '" stroke="' + col +
+        '" stroke-width="' + sw + '" d="M' + x + " " + (y(s) + bh) +
+        " L" + x + " " + y(d) + '"/>');
+      parts.push('<polygon class="cfgah' + (w ? "" : " ghost") +
+        '" fill="' + col + '" points="' + (x - 3.5) + "," +
+        (y(d) - 6) + " " + (x + 3.5) + "," + (y(d) - 6) + " " + x +
+        "," + y(d) + '"/>');
+      lx = x + 4; ly = (y(s) + bh + y(d)) / 2 + 3;
+    } else if (row[d] > row[s]) {
+      const lane = bx + bw + 14 + (fl++ % 6) * 13;
+      const y1 = y(s) + bh / 2, y2 = y(d) + bh / 2;
+      parts.push('<path class="' + cls + '" stroke="' + col +
+        '" stroke-width="' + sw + '" d="M' + (bx + bw) + " " + y1 +
+        " C" + lane + " " + y1 + " " + lane + " " + y2 + " " +
+        (bx + bw + 6) + " " + y2 + '"/>');
+      parts.push('<polygon class="cfgah' + (w ? "" : " ghost") +
+        '" fill="' + col + '" points="' + (bx + bw + 7) + "," +
+        (y2 - 3.5) + " " + (bx + bw + 7) + "," + (y2 + 3.5) + " " +
+        (bx + bw + 1) + "," + y2 + '"/>');
+      lx = lane - 10; ly = (y1 + y2) / 2 + 3;
+    } else {
+      const lane = bx - 16 - (bl++ % 3) * 10;
+      const y1 = y(s) + bh / 2, y2 = y(d) + bh / 2;
+      parts.push('<path class="' + cls + '" stroke="' + col +
+        '" stroke-width="' + sw + '" d="M' + bx + " " + y1 +
+        " C" + lane + " " + y1 + " " + lane + " " + y2 + " " +
+        (bx - 6) + " " + y2 + '"/>');
+      parts.push('<polygon class="cfgah' + (w ? "" : " ghost") +
+        '" fill="' + col + '" points="' + (bx - 7) + "," +
+        (y2 - 3.5) + " " + (bx - 7) + "," + (y2 + 3.5) + " " +
+        (bx - 1) + "," + y2 + '"/>');
+      lx = Math.max(2, lane - 2); ly = (y1 + y2) / 2 - 4;
+    }
+    if (lbl) parts.push('<text class="cfgt' + (w ? "" : " ghost") +
+      '" fill="' + col + '" x="' + lx + '" y="' + ly + '">' + lbl +
+      "</text>");
+  }
+  for (const b of order) {
+    const lines = rec.blocks[b];
+    const un = (rec.unreach || []).indexOf(b) >= 0;
+    const hit = H[String(b)];
+    const isExit = b === rec.exit;
+    const label = isExit ? "EXIT"
+      : lines.length > 1 && lines[0] !== lines[lines.length - 1]
+        ? "L" + lines[0] + "–" + lines[lines.length - 1]
+        : "L" + lines[0];
+    const snip = isExit ? ""
+      : esc2((src[lines[0] - 1] || "").trim().slice(0, 17));
+    const title = un
+      ? "unreachable by construction — no static path from entry"
+      : !hit ? "never observed in this run — click for the whyline"
+      : "entered " + hit + "× — click to jump to its first execution";
+    parts.push('<g class="cfgb' + (b === curB ? " cur" : "") +
+      (un ? " unre" : !hit && !isExit ? " ghost" : "") +
+      (isExit ? " exitb" : "") + '" data-cfgb="' + b + '" data-cfgl="' +
+      (lines[0] || "") + '"' + (un ? ' data-un="1"' : "") +
+      '><rect x="' + bx + '" y="' + y(b) + '" width="' + bw +
+      '" height="' + bh + '" rx="5"/><text x="' + (bx + 6) + '" y="' +
+      (y(b) + 15) + '"><tspan class="cfgl">' + label + "</tspan> " +
+      snip + "</text><title>" + title + "</title></g>");
+  }
+  const hgt = 16 + order.length * rowH;
+  return '<svg class="cfgsvg" width="300" height="' + hgt +
+    '" viewBox="0 0 300 ' + hgt + '">' + parts.join("") + "</svg>";
+}
+
 function updateAnatomy() {
   if (!anatBox.open) return;
   const ev = events[idx];
@@ -2249,7 +2385,7 @@ function updateAnatomy() {
     anatKey = null;
     return;
   }
-  const key = ev.f + " " + rec.q + " " + ev.l;
+  const key = ev.f + "|" + rec.q + "|" + ev.l;
   if (key === anatKey) return;
   anatKey = key;
   $("anatname").textContent = "· " + rec.q;
@@ -2278,15 +2414,44 @@ function updateAnatomy() {
         esc2(r[2]) + "</div>";
     }).join("") + "</div>";
   }
+  const { stack } = computeStacks(idx);
+  const top = stack[stack.length - 1];
+  const crec = cfgRecFor(ev.f, ev.l, top && top.fn);
+  if (crec) {
+    let curB = null;
+    for (let bi = 0; bi < crec.blocks.length && curB === null; bi++)
+      if (crec.blocks[bi].indexOf(ev.l) >= 0) curB = bi;
+    h += '<div class="ahead" title="#131: the code as the graph it ' +
+      'is, the run as a path on it">control flow — cfg · ' +
+      esc2(crec.q) + "</div>";
+    h += '<div class="cfgbox">' + cfgSvg(crec, curB, ev.f) + "</div>";
+    h += '<div class="anote">solid ×N = observed traversals · ' +
+      "dashed = never observed · red dash = unreachable by " +
+      "construction · exception edges leave the try header (any " +
+      "line inside may raise); a finally's interception of returns " +
+      "is not drawn.</div>";
+  }
   body.innerHTML = h;
   const cur = body.querySelector(".disrow.cur");
   const box = body.querySelector(".disbox");
   if (cur && box)
     box.scrollTop = cur.offsetTop - box.clientHeight / 2;
+  const cb = body.querySelector(".cfgb.cur");
+  const cbox = body.querySelector(".cfgbox");
+  if (cb && cbox)
+    cbox.scrollTop = cb.querySelector("rect").y.baseVal.value -
+      cbox.clientHeight / 2;
 }
 anatBox.addEventListener("toggle", () => {
   anatKey = null;
   updateAnatomy();
+});
+$("anatomy").addEventListener("click", e => {
+  const g = e.target.closest("[data-cfgb]");
+  if (!g || g.dataset.un) return;      // unreachable: no path to ask about
+  const line = +g.dataset.cfgl;
+  const rel = events[idx] && events[idx].f;
+  if (line && rel) whyline(rel, line); // ran → jump; didn't → the why
 });
 
 function render() {

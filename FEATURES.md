@@ -1055,6 +1055,43 @@ dead or invented panel; every cap and truncation is announced.
 
   [![Feature 118 — console lane](screenshots/118-console-lane.png)](screenshots/118-console-lane.png)
 
+### 131. The CFG view — the code as a graph, the run as a path
+- **Measured:** a static pass builds each record's control-flow graph
+  from the ast — one node per statement coalesced into basic blocks,
+  edges typed `seq / true / false / loop / break / continue / exc /
+  case / nomatch / return / raise`, ENTRY and EXIT explicit,
+  statically unreachable blocks computed by construction. Then the
+  event stream is walked with per-frame stacks (generator
+  suspend/resume included): every observed block→block transition and
+  block entry is counted and folded into the record.
+- **Displayed:** the CONTROL FLOW section of the Anatomy panel — a
+  ladder of blocks in line order (`L5 continue`, first source line as
+  the label), true/false verdicts as colored straight drops, loops
+  and continues as left-side back arcs, breaks/exceptions as
+  right-side arcs. Observed edges are solid and wear ×N; the current
+  event's block is lit — the token walking the graph. Never-observed
+  edges and blocks are dashed ghosts; unreachable-by-construction
+  blocks are red-dashed — the two are never conflated. Clicking a
+  block asks the whyline: if it ran you jump to its first execution,
+  if it didn't you get the causal chain.
+- **Why:** control flow *is* a graph; source text hides it. The
+  for-else, the break that skips it, the continue's back edge — every
+  construct's true shape is drawn, and the run's path over it is
+  measured, not imagined.
+- **Use case:** a classifier loop processes two batches. The graph
+  shows `continue ×1`, `break ×1`, the for-else edge `×1` — and the
+  break arc visibly bypassing the else block: why `total` got its +1
+  in one run and not the other, one picture.
+- **Command:** any line-granularity trace → open **Anatomy** → the
+  CONTROL FLOW section. Honesty (stated in-panel): exception edges
+  leave the try *header* — any line inside the region may raise; a
+  finally's interception of returns is not drawn.
+- **Screenshot** — the classifier mid-`continue`: the current block
+  amber, back arcs left, `break ×1` arcing past the for-else,
+  verdict counts on every branch.
+
+  [![Feature 131 — cfg](screenshots/131-cfg.png)](screenshots/131-cfg.png)
+
 ## F. Replayer — the interpreter's hidden machinery
 
 ### 33. Generators & coroutines tell the truth

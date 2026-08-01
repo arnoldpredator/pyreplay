@@ -631,6 +631,18 @@ with the CPython version: the specialized opcodes the adaptive
 interpreter may have quickened at run time are not these rows. Under
 fn granularity the panel says why it can't answer (no current line).
 
+**The CFG.** Below the instructions, the same panel draws the
+function as the graph it is: blocks laddered in line order, edges
+typed and colored (true/false drops, loop and continue back arcs,
+break and exception arcs), and the run drawn onto it — every observed
+edge solid with its ×N traversal count, the current block lit as the
+replay advances. Never-observed edges are dashed ghosts; blocks with
+no static path from entry are red-dashed "unreachable by
+construction" — the graph never conflates the two. Click any block:
+if it ran, you jump to its first execution; if it never ran, the
+whyline answers with the guards that said no. The for-else you were
+never sure about, the break that skips it: drawn, with counts.
+
 ## 4f. Recording for real life: the black box, the capsule, the chunks (2026-08)
 
 **The flight recorder (`--black-box`).** Recording becomes a ring

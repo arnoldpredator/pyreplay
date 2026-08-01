@@ -2388,6 +2388,263 @@ def build_anatomy(text, rel):
             "py": "%d.%d.%d" % sys.version_info[:3]}
 
 
+def build_cfg(text, rel):
+    """#131 static half: per-record control-flow graph — the code as
+    the graph it is. One node per statement, coalesced into basic
+    blocks; typed edges (seq/true/false/loop/break/continue/exc/case/
+    nomatch/return/raise); ENTRY = the record's header, EXIT = a
+    pseudo-block. Records mirror build_anatomy's: <module> plus every
+    def. Honest simplifications, stated in the panel: exception edges
+    are drawn from the try HEADER (any line in the region may raise),
+    and a finally's interception of returns is not drawn."""
+    try:
+        tree = ast.parse(text, filename=rel)
+    except SyntaxError:
+        return None
+    Try = (ast.Try, getattr(ast, "TryStar", ast.Try))
+    recs = []
+
+    def make_record(qual, header_line, l0, l1, body):
+        nodes = []                      # node id -> line (None = EXIT)
+        edges = []                      # (src, dst, kind) node-level
+
+        def new_node(line):
+            nodes.append(line)
+            return len(nodes) - 1
+
+        entry = new_node(header_line)
+        ret_exits = []                  # (node, "return"/"raise")
+
+        def build(stmts, loops, prev):
+            # prev = dangling (node, kind) exits awaiting their target;
+            # returns the dangling exits of this statement list
+            for st in stmts:
+                n = new_node(st.lineno)
+                for m, k in prev:
+                    edges.append((m, n, k))
+                if isinstance(st, ast.If):
+                    p_body = build(st.body, loops, [(n, "true")])
+                    if st.orelse:
+                        p_else = build(st.orelse, loops, [(n, "false")])
+                        prev = p_body + p_else
+                    else:
+                        prev = p_body + [(n, "false")]
+                elif isinstance(st, (ast.While, ast.For, ast.AsyncFor)):
+                    lp = {"header": n, "breaks": []}
+                    body_exits = build(st.body, loops + [lp],
+                                       [(n, "true")])
+                    for m, _ in body_exits:      # fallthrough loops back
+                        edges.append((m, n, "loop"))
+                    brk = [(b, "break") for b in lp["breaks"]]
+                    if st.orelse:
+                        prev = build(st.orelse, loops,
+                                     [(n, "false")]) + brk
+                    else:
+                        prev = [(n, "false")] + brk
+                elif isinstance(st, Try):
+                    body_exits = build(st.body, loops, [(n, "seq")])
+                    handler_exits = []
+                    for h in st.handlers:
+                        hn = new_node(h.lineno)
+                        edges.append((n, hn, "exc"))
+                        handler_exits += build(h.body, loops,
+                                               [(hn, "seq")])
+                    if st.orelse:
+                        body_exits = build(st.orelse, loops, body_exits)
+                    prev = body_exits + handler_exits
+                    if st.finalbody:
+                        prev = build(st.finalbody, loops, prev)
+                elif isinstance(st, (ast.With, ast.AsyncWith)):
+                    prev = build(st.body, loops, [(n, "seq")])
+                elif hasattr(ast, "Match") and isinstance(st, ast.Match):
+                    case_exits = []
+                    for c in st.cases:
+                        cn = new_node(c.pattern.lineno)
+                        edges.append((n, cn, "case"))
+                        case_exits += build(c.body, loops, [(cn, "seq")])
+                    prev = case_exits + [(n, "nomatch")]
+                elif isinstance(st, ast.Return):
+                    ret_exits.append((n, "return"))
+                    prev = []
+                elif isinstance(st, ast.Raise):
+                    ret_exits.append((n, "raise"))
+                    prev = []
+                elif isinstance(st, ast.Break):
+                    if loops:
+                        loops[-1]["breaks"].append(n)
+                    prev = []
+                elif isinstance(st, ast.Continue):
+                    if loops:
+                        edges.append((n, loops[-1]["header"],
+                                      "continue"))
+                    prev = []
+                else:
+                    # simple statements — and def/class, whose bodies
+                    # are their own records
+                    prev = [(n, "seq")]
+            return prev
+
+        exits = build(body, [], [(entry, "seq")])
+        xid = new_node(None)
+        for m, k in exits:
+            edges.append((m, xid, "return" if k == "seq" else k))
+        for m, k in ret_exits:
+            edges.append((m, xid, k))
+
+        # ---- coalesce straight seq chains into basic blocks
+        succ = collections.defaultdict(list)
+        pred = collections.defaultdict(list)
+        for s, d, k in edges:
+            succ[s].append((d, k))
+            pred[d].append((s, k))
+
+        def mergeable(m):
+            return (m not in (entry, xid) and len(pred[m]) == 1
+                    and pred[m][0][1] == "seq"
+                    and len(succ[pred[m][0][0]]) == 1)
+
+        blk_of, blocks = {}, []
+        for L in range(len(nodes)):
+            if mergeable(L):
+                continue
+            chain, cur = [L], L
+            while (len(succ[cur]) == 1 and succ[cur][0][1] == "seq"
+                   and mergeable(succ[cur][0][0])):
+                cur = succ[cur][0][0]
+                chain.append(cur)
+            bid = len(blocks)
+            for m in chain:
+                blk_of[m] = bid
+            blocks.append(chain)
+        bedges = sorted({(blk_of[s], blk_of[d], k) for s, d, k in edges
+                         if blk_of[s] != blk_of[d] or k != "seq"})
+        seen = {blk_of[entry]}
+        queue = [blk_of[entry]]
+        while queue:
+            b = queue.pop()
+            for s, d, _ in bedges:
+                if s == b and d not in seen:
+                    seen.add(d)
+                    queue.append(d)
+        recs.append({
+            "q": qual, "l0": l0, "l1": l1,
+            "blocks": [[nodes[m] for m in chain
+                        if nodes[m] is not None] for chain in blocks],
+            "edges": [list(e) for e in bedges],
+            "entry": blk_of[entry], "exit": blk_of[xid],
+            "unreach": sorted(b for b in range(len(blocks))
+                              if b not in seen),
+        })
+
+    def visit(node, prefix):
+        for ch in ast.iter_child_nodes(node):
+            if isinstance(ch, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                qual = prefix + ch.name
+                make_record(qual, ch.lineno, ch.lineno,
+                            ch.end_lineno or ch.lineno, ch.body)
+                visit(ch, qual + ".<locals>.")
+            elif isinstance(ch, ast.ClassDef):
+                visit(ch, prefix + ch.name + ".")
+            else:
+                visit(ch, prefix)
+
+    nlines = text.count("\n") + 1
+    make_record("<module>", 1, 1, nlines, tree.body)
+    visit(tree, "")
+    return {"recs": recs}
+
+
+def _cfg_weights(events, cfg):
+    """#131 dynamic half: observed block→block traversal counts ("w")
+    and block entry counts ("h") folded into each CFG record — the
+    run as a path on the code's graph. Frames are walked with the
+    annotate_conditionals stack pattern (generator suspend/resume
+    included) so every transition is attributed to the frame that
+    made it, never to an interleaved caller."""
+    l2b, by_l0, mod_rec, spans = {}, {}, {}, {}
+    for rel, c in (cfg or {}).items():
+        if not c:
+            continue
+        maps = []
+        for ri, r in enumerate(c["recs"]):
+            m = {}
+            for bi, lines in enumerate(r["blocks"]):
+                for ln in lines:
+                    m.setdefault(ln, bi)
+            maps.append(m)
+            if r["q"] == "<module>":
+                mod_rec[rel] = ri
+            else:
+                by_l0.setdefault(rel, {})[
+                    (r["q"].rsplit(".", 1)[-1], r["l0"])] = ri
+        l2b[rel] = maps
+        spans[rel] = sorted(
+            ((r["l0"], r["l1"], ri) for ri, r in enumerate(c["recs"])
+             if r["q"] != "<module>"), key=lambda s: s[1] - s[0])
+    W, H = {}, {}
+    stacks, gen_saved = {}, {}
+    for ev in events:
+        e = ev.get("e")
+        stack = stacks.setdefault(ev.get("t", "main"), [])
+        if e == "call":
+            gm = ev.get("g")
+            if gm is not None and gm.get("s") == "r" \
+                    and gm.get("i") in gen_saved:
+                stack.append(gen_saved.pop(gm["i"]))
+                continue
+            rel, fn, ln = ev.get("f"), ev.get("fn"), ev.get("l")
+            ridx = None
+            if rel in l2b:
+                if fn == "<module>":
+                    ridx = mod_rec.get(rel)
+                else:
+                    ridx = by_l0.get(rel, {}).get((fn, ln))
+                    if ridx is None:      # decorated: call line ≠ l0
+                        for l0, l1, ri in spans.get(rel, ()):
+                            if l0 <= ln <= l1 and cfg[rel]["recs"][ri][
+                                    "q"].rsplit(".", 1)[-1] == fn:
+                                ridx = ri
+                                break
+            stack.append({"rec": (rel, ridx), "prev": None})
+            continue
+        if not stack:
+            continue
+        fr = stack[-1]
+        rel, ridx = fr.get("rec", (None, None))
+        if e == "return":
+            gm = ev.get("g")
+            if gm is not None and gm.get("s") == "y":
+                gen_saved[gm["i"]] = fr      # suspended, not dead
+            elif ridx is not None and fr["prev"] is not None:
+                rec = cfg[rel]["recs"][ridx]
+                key = (rel, ridx)
+                pair = (fr["prev"], rec["exit"])
+                W.setdefault(key, {})[pair] = \
+                    W.get(key, {}).get(pair, 0) + 1
+                H.setdefault(key, {})[rec["exit"]] = \
+                    H.get(key, {}).get(rec["exit"], 0) + 1
+            stack.pop()
+            continue
+        if e == "line" and ridx is not None:
+            b = l2b[rel][ridx].get(ev["l"])
+            if b is not None:
+                key = (rel, ridx)
+                pb = fr["prev"]
+                if pb != b:
+                    H.setdefault(key, {})[b] = \
+                        H.get(key, {}).get(b, 0) + 1
+                    if pb is not None:
+                        W.setdefault(key, {})[(pb, b)] = \
+                            W.get(key, {}).get((pb, b), 0) + 1
+                fr["prev"] = b
+    for (rel, ridx), wmap in W.items():
+        cfg[rel]["recs"][ridx]["w"] = {
+            "%d-%d" % p: n for p, n in sorted(wmap.items())}
+    for (rel, ridx), hmap in H.items():
+        cfg[rel]["recs"][ridx]["h"] = {
+            str(b): n for b, n in sorted(hmap.items())}
+
+
 def annotate_conditionals(events, sources):
     """Post-processing: walk the event stream with per-thread frame
     stacks; each event on an if/while line becomes 'pending' and is
@@ -2881,6 +3138,11 @@ def _write_trace(tr, out, granularity, entry_label, error,
     honest truncation notes)."""
     if granularity == "line":
         annotate_conditionals(tr.events, tr.sources)
+    cfg = {}
+    if granularity == "line":
+        cfg = {rel: build_cfg(text, rel)
+               for rel, text in tr.sources.items()}
+        _cfg_weights(tr.events, cfg)
     payload = {
         "script": entry_label,
         "granularity": granularity,
@@ -2900,6 +3162,7 @@ def _write_trace(tr, out, granularity, entry_label, error,
         "anatomy": {rel: build_anatomy(text, rel)
                     for rel, text in tr.sources.items()}
                    if granularity == "line" else {},
+        "cfg": cfg,
         "events": tr.events,
         "truncated": tr.truncated,
         "error": error,

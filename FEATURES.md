@@ -3240,7 +3240,50 @@ Statistics over many runs: rates instead of anecdotes, divergences instead of gu
 
   [![Feature 121 — metamorphic relations](screenshots/126-relations.png)](screenshots/126-relations.png)
 
-### 122. Mutation-survivor forensics — why did this mutant live?
+### 122. Memory calorimetry — where the run RETAINED (`--memory`)
+- **Measured:** time-heat says where the run computed; memory-heat
+  says where it *retained*. `--memory` samples `tracemalloc` through
+  the run — cheap current/peak totals every stride events build a
+  growth curve, and a full snapshot at a coarser cadence attributes
+  bytes to the modules that hold them (in-scope files only, so the
+  tracer's own event buffer never pollutes the per-module numbers).
+- **Displayed:** a **📈 memory** banner with the peak and the
+  high-water top module; a growth strip-chart under the scrubber —
+  a filled area for current traced bytes with the peak (a monotonic
+  high-water mark) as a line above it, click-to-jump to the nearest
+  sample. A leak announces itself as a rising floor *while it grows*,
+  instead of at the OOM kill; the per-module distribution and the
+  peak print at exit.
+- **Why:** the 38 GB brian2 incident, announced as it climbs rather
+  than discovered at the kill. Retention bugs — leaks, caches gone
+  wrong, a list that never gets freed — are invisible to a time
+  profile and obvious on a growth curve.
+- **Use case:** a demo that accumulates 25 batches then trims to 5:
+  the curve climbs as batches pile up and the peak line records the
+  high-water mark; `peak 43.6 MB traced`, the in-scope allocations
+  attributed to the demo module, the two `print`s on the console
+  lane.
+- **Command:** `python3 tracer.py --memory main.py` (works at `fn`
+  granularity too — the sampler is granularity-independent). Honesty
+  on every surface: recorded UNDER tracemalloc (real ~2× allocation
+  overhead); process totals include the tracer's own event buffer
+  while the per-module bytes are your code's allocations; and
+  tracemalloc sees **Python-level allocations only** — a numpy/torch
+  tensor allocated in C reads ~zero here while system RSS climbs
+  (Memray is the native-allocation specialist in the funnel). Gates:
+  `--black-box` (the ring would drift the sample indices) and
+  `--backend monitoring` (the sampler rides the settrace dispatcher)
+  are refused with reasons.
+- **Stated v1 remainder:** the map's third palette (BYTES ALLOCATED
+  per module) — the per-module distribution already ships in the
+  trace payload and prints at exit; painting it onto the map is the
+  follow-up.
+- **Screenshot** — the growth curve under the scrubber and the 📈
+  banner with the peak and the high-water top module.
+
+  [![Feature 122 — memory calorimetry](screenshots/r6-memory.png)](screenshots/r6-memory.png)
+
+### 123. Mutation-survivor forensics — why did this mutant live?
 - **Measured:** the bridge uses **mutmut as-is** (never rebuilt): the
   survivor list from `mutmut results`, the nearest covering test
   from mutmut's own coverage mapping (`mutants/mutmut-stats.json`),
@@ -3276,9 +3319,9 @@ Statistics over many runs: rates instead of anecdotes, divergences instead of gu
   missing assertion named), one traced-identical
   (possibly-equivalent, said plainly).
 
-  [![Feature 122 — forensics](screenshots/125-forensics.png)](screenshots/125-forensics.png)
+  [![Feature 123 — forensics](screenshots/125-forensics.png)](screenshots/125-forensics.png)
 
-### 123. The scaling bench — `--sweep`, the doubling experiment as a command
+### 124. The scaling bench — `--sweep`, the doubling experiment as a command
 - **Measured:** the target is run once per rung of a value ladder
   (`--sweep "n=1000,2000,4000,8000"`, or `alpha=3.0..5.0:5` for a
   knob), each child a fresh tracer run whose stdin comes from the
@@ -3320,13 +3363,13 @@ Statistics over many runs: rates instead of anecdotes, divergences instead of gu
   time chart honestly wobbling (startup noise at tiny n), ratios
   marching to 4.
 
-  [![Feature 123 — scaling bench](screenshots/127-scaling-bench.png)](screenshots/127-scaling-bench.png)
+  [![Feature 124 — scaling bench](screenshots/127-scaling-bench.png)](screenshots/127-scaling-bench.png)
 
 ## Part 15 — Infrastructure
 
 What keeps all of the above honest.
 
-### 124. `checks.py` — the regression suite
+### 125. `checks.py` — the regression suite
 68 data-level checks (no browser): the tracer re-runs the permanent
 example suite and the mapper its fixtures, the embedded JSON is
 extracted from each generated HTML (chunked or not), and the honesty
@@ -3348,7 +3391,7 @@ after every change, always.
 - **Command:** `python3 checks.py` — prints the green table, exits
   non-zero on any red.
 
-### 125. The teaching fleet
+### 126. The teaching fleet
 `example_{sort,prefix,histogram,dp,graph,exceptions,control,machinery,
 mro,tasks,threads,watch,dunder,bigarray,heavy,nan,flaky,race}.py` — one small script per feature family, each with its
 pre-built `trace_*.html`; `tinyshop/` — a multi-file teaching project

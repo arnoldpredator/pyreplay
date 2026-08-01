@@ -1103,6 +1103,22 @@ of transitive stdlib imports stay out of the way. Honesty: audit
 hooks see the Python layer, not raw C syscalls, and endpoints are
 captured but payloads stay external (bridge mitmproxy for those).
 
+**Where memory went (`--memory`).** Time-heat shows where the code
+ran; memory-heat shows where it held on. `python3 tracer.py --memory
+main.py` samples `tracemalloc` through the run and draws a growth
+strip-chart under the scrubber — the filled area is current traced
+bytes, the line above is the peak (a high-water mark) — so a leak
+shows as a rising floor while it grows, not at the OOM kill. A
+coarser snapshot attributes bytes to the modules holding them
+(printed at exit; in-scope only, so the tracer's own buffer is
+excluded). Read the honesty on the banner: it's recorded under
+tracemalloc's ~2× overhead, the process totals include the tracer's
+event buffer, and it sees Python-level allocations only — a
+numpy/torch tensor allocated in C reads ~zero here while RSS climbs
+(that's Memray's job). Works at `fn` granularity too. The map's
+BYTES-per-module palette is the stated next step; the data already
+rides in the trace.
+
 **Input shrinking (`--shrink`).** A huge input that crashes is a
 chore; the tiny core that still crashes is a diagnosis. Pipe the
 input and `--shrink` runs Zeller's ddmin over it — lines by default,

@@ -4706,6 +4706,70 @@ def _():
            "--no-console starves the output channel — refused")
 
 
+@check("memory: tracemalloc growth curve + per-module bytes, honest "
+       "(roadmap #6)")
+def _():
+    tgt = fixture("mem6.py", (
+        "def make(n):\n"
+        "    return [{'v': i, 'pad': [i] * 8} for i in range(n)]\n"
+        "\n"
+        "keep = []\n"
+        "for k in range(20):\n"
+        "    keep.append(make(40))\n"
+        "print('rows', sum(len(b) for b in keep))\n"))
+    p = run_trace(tgt, "--memory", name="mem6")
+    m = p.get("memory")
+    expect(m is not None, "the trace must carry a memory report")
+    s = m["samples"]
+    expect(len(s) >= 2, f"at least two growth samples: {len(s)}")
+    # samples are [event_index, current, peak]; peak is a monotonic
+    # high-water mark, and the run grew (it retained 800 dicts)
+    expect(all(s[i][2] <= s[i + 1][2] for i in range(len(s) - 1)),
+           "peak must be a monotonic high-water mark")
+    expect(m["peak"] >= s[-1][2] and m["peak"] > s[0][2],
+           f"the run's peak must exceed its start (it retained): "
+           f"{s[0][2]} -> {m['peak']}")
+    expect(all(0 <= si[0] <= len(p["events"]) for si in s),
+           "every sample's event index must be in range (aligned)")
+    # per-module attribution: the target's OWN allocations, tracer
+    # frames excluded (out of scope) — so the tracer's event buffer
+    # never pollutes the palette
+    expect(m["perFile"].get("mem6.py", 0) > 0,
+           f"the target's allocations must attribute to it: "
+           f"{m['perFile']}")
+    expect(all("tracer.py" not in f for f in m["perFile"]),
+           "the tracer's own buffer must NEVER enter the per-module "
+           "palette")
+    # fn granularity works too (sampling is granularity-independent)
+    pf = run_trace(tgt, "--memory", "--granularity", "fn",
+                   name="mem6fn")
+    expect(pf["memory"] and len(pf["memory"]["samples"]) >= 2,
+           "the growth curve records at fn granularity too")
+    # gates, each with its reason
+    def gate(*flags):
+        out = os.path.join(TMP, "mem6_gate.html")
+        return subprocess.run([PY, os.path.join(HERE, "tracer.py"),
+                               "--out", out, "--memory", *flags, tgt],
+                              capture_output=True, text=True, cwd=TMP,
+                              stdin=subprocess.DEVNULL, timeout=120)
+    b = gate("--black-box")
+    expect(b.returncode == 2 and "reference event indices" in b.stdout,
+           "--memory with --black-box refused (indices would drift)")
+    # the honesty notes ride every surface
+    with open(os.path.join(TMP, "mem6.html"), encoding="utf-8") as fh:
+        html = fh.read()
+    expect("C-extension memory is invisible" in html
+           or "C-extension memory invisible" in html,
+           "the C-extension blind spot must be stated in the trace")
+    with open(os.path.join(HERE, "replayer_template.html"),
+              encoding="utf-8") as fh:
+        tpl = fh.read()
+    for needle in ("memory (tracemalloc)", "memchart",
+                   "high-water"):
+        expect(needle in tpl,
+               f"template must carry the memory contract: {needle}")
+
+
 @check("io lane: audit events, frame attribution, leak pairing "
        "(roadmap #5)")
 def _():

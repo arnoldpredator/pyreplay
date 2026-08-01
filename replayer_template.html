@@ -165,6 +165,9 @@
     transform: translateX(-2px);
   }
   .imark:hover { background: #f2989e; }
+  #memchart { display: block; width: calc(100% - 14px); height: 30px;
+    margin: 2px 7px; cursor: pointer;
+    background: linear-gradient(var(--panel), var(--bg)); }
   #iomarks { position: relative; height: 7px; margin: 0 7px 2px; }
   .iomark { position: absolute; top: 0; width: 4px; height: 7px;
     border-radius: 2px; cursor: pointer; transform: translateX(-2px);
@@ -1245,6 +1248,34 @@ if (DATA.inject) {
         " (nothing injected there — check the name)"
       : "") +
     " — failure paths explored on purpose.";
+  b.appendChild(s);
+}
+/* roadmap #6: memory calorimetry — the growth curve's headline */
+if (DATA.memory && DATA.memory.samples && DATA.memory.samples.length) {
+  const b = $("banner");
+  if (!b.style.display || b.style.display === "none") {
+    b.className = "info";
+    b.style.display = "block";
+  }
+  const hb = n => {
+    n = Number(n);
+    for (const u of ["B", "KB", "MB"]) {
+      if (Math.abs(n) < 1024) return (u === "B" ? n.toFixed(0)
+        : n.toFixed(1)) + " " + u;
+      n /= 1024;
+    }
+    return n.toFixed(1) + " GB";
+  };
+  const M = DATA.memory;
+  const top = Object.entries(M.perFile || {})
+    .sort((a, c) => c[1] - a[1])[0];
+  const s = document.createElement("span");
+  s.textContent = " 📈 memory (tracemalloc) — peak " + hb(M.peak) +
+    " traced" +
+    (top ? " · high-water top: " + top[0] + " " + hb(top[1]) : "") +
+    (M.capped ? " · sampling capped" : "") +
+    " — Python-level only (C-extension memory invisible); process " +
+    "totals include the tracer's own buffer.";
   b.appendChild(s);
 }
 /* roadmap #5: the I/O lane — say what the program touched, and flag
@@ -6026,6 +6057,67 @@ renderTour();
     });
     box.after(cbox);
   }
+})();
+/* roadmap #6: the memory strip — tracemalloc's growth curve under the
+   scrubber. Filled area = current traced bytes, the line above = peak
+   (a high-water mark, monotonic). A leak announces itself as a rising
+   floor here, while it grows, instead of at the OOM kill. */
+(function () {
+  const M = DATA.memory;
+  if (!M || !M.samples || M.samples.length < 2) return;
+  const total = Math.max(1, events.length - 1);
+  const hi = Math.max(1, ...M.samples.map(s => s[2]));   // global peak
+  const hb = n => {
+    n = Number(n);
+    for (const u of ["B", "KB", "MB"]) {
+      if (Math.abs(n) < 1024) return (u === "B" ? n.toFixed(0)
+        : n.toFixed(1)) + " " + u;
+      n /= 1024;
+    }
+    return n.toFixed(1) + " GB";
+  };
+  const W = 1000, H = 30;
+  const x = idx => (idx / total) * W;
+  const yC = v => H - (v / hi) * H;
+  const curPts = M.samples.map(s => x(s[0]).toFixed(1) + "," +
+    yC(s[1]).toFixed(1));
+  const peakPts = M.samples.map(s => x(s[0]).toFixed(1) + "," +
+    yC(s[2]).toFixed(1));
+  const area = "0," + H + " " + curPts.join(" ") + " " +
+    x(M.samples[M.samples.length - 1][0]).toFixed(1) + "," + H;
+  const svg = document.createElementNS("http://www.w3.org/2000/svg",
+    "svg");
+  svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+  svg.setAttribute("preserveAspectRatio", "none");
+  svg.id = "memchart";
+  svg.innerHTML =
+    '<polygon points="' + area + '" fill="#56b6c233"/>' +
+    '<polyline points="' + peakPts.join(" ") + '" fill="none" ' +
+    'stroke="#e5c07b" stroke-width="1" vector-effect="non-scaling-' +
+    'stroke" opacity="0.8"/>' +
+    '<polyline points="' + curPts.join(" ") + '" fill="none" ' +
+    'stroke="#56b6c2" stroke-width="1.5" vector-effect="non-scaling-' +
+    'stroke"/>';
+  svg.setAttribute("title",
+    "memory (tracemalloc): peak " + hb(M.peak) + " · fill = current " +
+    "traced bytes, line = peak (high-water). Totals include the " +
+    "tracer's own buffer; C-extension memory is invisible here." +
+    (M.capped ? " Sampling capped — the curve coarsens past the cap."
+      : ""));
+  // click maps x back to the nearest sample's event index
+  svg.addEventListener("click", ev => {
+    const r = svg.getBoundingClientRect();
+    const frac = (ev.clientX - r.left) / r.width;
+    const wantIdx = frac * total;
+    let best = M.samples[0], bd = Infinity;
+    for (const s of M.samples) {
+      const d = Math.abs(s[0] - wantIdx);
+      if (d < bd) { bd = d; best = s; }
+    }
+    stop(); goto(best[0]);
+  });
+  const footer = document.querySelector("footer");
+  footer.insertBefore(svg, footer.firstChild);
 })();
 
 let stackVisible = true;

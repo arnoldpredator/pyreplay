@@ -19,6 +19,7 @@ overwritten. Use --out NAME.html to pick a name (that one DOES overwrite).
     python tracer.py --oracle brute.py fast.py < in.txt   # differential
     python tracer.py --inject "shop.pay:raises=TimeoutError:on_call=3" main.py
     python tracer.py --io main.py                      # what did it touch?
+    python tracer.py --memory main.py                  # where memory lived
     python tracer.py --diverge good.html bad.html      # first divergence
     python tracer.py -m pytest tests/                  # trace a test suite
     python tracer.py --root brian2 -m pytest           # pytest scoped to --root
@@ -106,6 +107,22 @@ Repeat --inject for multiple faults. Error-handling paths are the
 least-tested code anywhere; injection is the only way to SEE them
 run — watch the raise propagate and find out what actually catches
 it.
+
+--memory adds tracemalloc calorimetry: time-heat says where the run
+computed, memory-heat says where it RETAINED. A growth curve is
+sampled through the run (current + peak traced bytes, event-aligned)
+and drawn as a strip-chart under the scrubber, so a leak announces
+itself while it grows instead of at the OOM kill; at a coarser
+cadence a full snapshot attributes bytes to the modules that hold
+them (per-module bytes carried in the trace payload and printed at
+exit — painting them as the map's third palette is the stated v1
+remainder). Honesty, stated in the banner and the trace:
+recorded UNDER tracemalloc (real ~2x allocation overhead); the
+process totals include the tracer's own event buffer, while the
+per-module numbers are your code's allocations (tracer frames are
+out of scope); and tracemalloc sees Python-level allocations ONLY —
+a numpy/torch tensor allocated in C reads ~zero here while system RSS
+climbs (Memray is the native-allocation specialist in the funnel).
 
 --io opens the I/O lane: every file the program opened, host it
 contacted, subprocess it spawned, exec/eval it ran and import your
@@ -285,6 +302,7 @@ import subprocess
 import sys
 import threading
 import time
+import tracemalloc
 import weakref
 import types
 
@@ -1513,6 +1531,16 @@ class Tracer:
         self._io_capped = False
         self._io_handles = []   # (weakref(fh), event index, path) for
         #                         open/close pairing — leaks named at end
+        self.memory = False     # roadmap #6: tracemalloc calorimetry
+        self._mem_samples = []  # [event_index, current bytes, peak bytes]
+        self._mem_stride = 25   # events between cheap (cur,peak) samples
+        self._mem_last = 0
+        self._mem_snap_stride = 500   # events between per-file snapshots
+        self._mem_snap_last = 0
+        self._mem_peak = 0
+        self._mem_perfile = {}        # rel file -> bytes at the high-water
+        self._mem_perfile_peak = -1   # the peak this distribution came from
+        self._mem_capped = False
         # False = watching but not recording
         self.armed = start_at is None and start_when is None
         # #103: ring mode — a bounded window that never truncates the
@@ -1560,6 +1588,8 @@ class Tracer:
         return rel
 
     def __call__(self, frame, event, arg):
+        if self.memory:
+            self._mem_tick()     # roadmap #6: sample tracemalloc
         if event == "call":
             # Returning None here tells Python: don't trace inside this
             # function. This is where stdlib/site-packages get filtered out.
@@ -1816,6 +1846,66 @@ class Tracer:
                      detail))
             except TypeError:
                 pass          # some handles aren't weakref-able
+
+    def _mem_tick(self):
+        """Roadmap #6: sample tracemalloc during the run. Cheap
+        (current, peak) totals every stride events build the growth
+        curve; a full snapshot every snap-stride events attributes
+        bytes to the modules that hold them (the high-water
+        distribution is kept — where the memory was when it peaked).
+        Bounded: the stride doubles as samples accumulate so a huge
+        run stays a few thousand points, not one per event."""
+        if not self.memory or not self.armed:
+            return
+        n = len(self.events)
+        if n - self._mem_last < self._mem_stride:
+            return
+        self._mem_last = n
+        try:
+            cur, peak = tracemalloc.get_traced_memory()
+        except Exception:
+            return
+        if peak > self._mem_peak:
+            self._mem_peak = peak
+        if n - self._mem_snap_last >= self._mem_snap_stride:
+            self._mem_snap_last = n
+            try:
+                snap = tracemalloc.take_snapshot()
+                self._absorb_perfile(snap, peak)
+            except Exception:
+                pass
+        self._mem_samples.append([n, cur, peak])
+        # keep the series bounded without ever losing the peak
+        if len(self._mem_samples) and \
+                len(self._mem_samples) % 400 == 0:
+            self._mem_stride *= 2
+            self._mem_snap_stride *= 2
+        if len(self._mem_samples) >= 4000:
+            self._mem_capped = True
+            self.memory = False   # stop sampling; peak already held
+
+    def _absorb_perfile(self, snap, peak):
+        """Per-module bytes from a snapshot — in-scope files only, so
+        the tracer's OWN event buffer (allocated in tracer.py, out of
+        scope) never pollutes the module palette. Kept only when this
+        snapshot is a new high-water mark: the map shows where memory
+        lived when the process held the most."""
+        if peak < self._mem_perfile_peak:
+            return
+        dist = {}
+        try:
+            stats = snap.statistics("filename")
+        except Exception:
+            return
+        for st in stats:
+            fn = (st.traceback[0].filename
+                  if st.traceback else None)
+            rel = self._rel(fn) if fn else None
+            if rel is not None:
+                dist[rel] = dist.get(rel, 0) + st.size
+        if dist:
+            self._mem_perfile_peak = peak
+            self._mem_perfile = dist
 
     def resolve_io(self):
         """Roadmap #5: at trace end, a wrapped-open file still not
@@ -7368,6 +7458,7 @@ def main(argv):
     oracle_file = None   # roadmap #3: the reference implementation
     inject_specs = []    # roadmap #2: forced faults at call sites
     io_lane = False      # roadmap #5: the I/O + resource lane
+    memory = False       # roadmap #6: tracemalloc calorimetry
     mine_flag = False    # #74: --runs N --mine (multi-run mining)
     fsm_expr = None      # #132: the ONE declared state name
     fsm_declared = None  # #132: declared transitions, or None
@@ -7529,6 +7620,9 @@ def main(argv):
             argv = argv[2:]
         elif argv[0] == "--io":
             io_lane = True
+            argv = argv[1:]
+        elif argv[0] == "--memory":
+            memory = True
             argv = argv[1:]
         elif argv[0] == "--mine":
             mine_flag = True
@@ -7713,6 +7807,18 @@ def main(argv):
             print("error: --inject perturbs the run on purpose — a "
                   "Perfetto timeline of it would read as timing "
                   "truth. Export from an unperturbed run instead.")
+            return 2
+    if memory:
+        if black_box:
+            print("error: --black-box rotates events out of a ring, "
+                  "but --memory's samples reference event indices — "
+                  "the growth curve would point at the wrong moments. "
+                  "Run them separately.")
+            return 2
+        if backend == "monitoring":
+            print("error: --memory samples from the settrace "
+                  "dispatcher; the sys.monitoring backend isn't wired "
+                  "for it yet — drop --backend monitoring")
             return 2
     if granularity is None:
         # -m runs (a test suite, a module) default to fn: line-level over
@@ -8074,6 +8180,18 @@ def main(argv):
     # #88: hooks go in AFTER the tracer's own heartbeat thread started —
     # the tracer's machinery must never appear as a wake edge
     hb_undo = _install_hb_hooks(tracer)
+    mem_started = False
+    if memory:
+        tracer.memory = True
+        if not tracemalloc.is_tracing():
+            tracemalloc.start(1)   # depth 1: enough for filename stats
+            mem_started = True
+        print("pyreplay: --memory — tracemalloc calorimetry: the "
+              "growth curve + per-module bytes. Recorded UNDER "
+              "tracemalloc (real overhead, ~2x allocation cost); it "
+              "sees Python-level allocations only — a numpy/torch "
+              "buffer allocated in C shows ~zero here while system "
+              "RSS climbs", flush=True)
     io_undo = None
     if io_lane:
         tracer.io = True
@@ -8184,6 +8302,18 @@ def main(argv):
             tracer.chaos.unhook()
         if io_undo is not None:
             io_undo()
+        if mem_started:
+            # capture the final high-water distribution before stopping
+            try:
+                tracer._absorb_perfile(tracemalloc.take_snapshot(),
+                                       tracer._mem_peak)
+                cur, peak = tracemalloc.get_traced_memory()
+                tracer._mem_peak = max(tracer._mem_peak, peak)
+                tracer._mem_samples.append([len(tracer.events),
+                                            cur, peak])
+            except Exception:
+                pass
+            tracemalloc.stop()
         if injector is not None:
             injector.uninstall()
         if old_switch is not None:
@@ -8275,12 +8405,44 @@ def main(argv):
                   "operations reached traced code (an observation, "
                   "not a guarantee — audit hooks see the Python "
                   "layer, not C-level syscalls)", flush=True)
+    mem_report = None
+    if memory:
+        def _hb(n):
+            n = float(n)
+            for unit in ("B", "KB", "MB"):
+                if abs(n) < 1024:
+                    return f"{n:.0f} {unit}" if unit == "B" \
+                        else f"{n:.1f} {unit}"
+                n /= 1024
+            return f"{n:.1f} GB"
+        peak = tracer._mem_peak
+        perfile = dict(sorted(tracer._mem_perfile.items(),
+                              key=lambda kv: -kv[1]))
+        mem_report = {"peak": peak,
+                      "samples": tracer._mem_samples,
+                      "perFile": perfile,
+                      "perFilePeak": tracer._mem_perfile_peak,
+                      "capped": tracer._mem_capped}
+        print(f"memory (tracemalloc): peak {_hb(peak)} traced across "
+              f"{len(tracer._mem_samples)} sample(s)"
+              + ("; sampling capped — the curve coarsens past the cap"
+                 if tracer._mem_capped else ""), flush=True)
+        if perfile:
+            print("  where it lived at the high-water mark "
+                  "(Python-level, in-scope modules):", flush=True)
+            for f, b in list(perfile.items())[:5]:
+                print(f"    {_hb(b):>10}  {f}", flush=True)
+        print("  note: totals include the tracer's own event buffer; "
+              "the per-module bytes above are your code's allocations "
+              "(tracer frames are out of scope). C-extension memory is "
+              "invisible to tracemalloc.", flush=True)
     bounds = _boundaries(tracer.events)
     extra = {"capsule": capsule,
              "ring": ring_info,
              "chaos": tracer.chaos.report() if tracer.chaos else None,
              "inject": injector.report() if injector else None,
              "io": io_report,   # roadmap #5
+             "memory": mem_report,   # roadmap #6
              "critical": _critical_path(tracer.events)
              if granularity == "fn" else None,
              "invariants": [{"src": s,

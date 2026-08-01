@@ -1,9 +1,9 @@
 # pyreplay — the roadmap & contribution guide
 
-Everything already built lives in **FEATURES.md** (the catalog, 125
+Everything already built lives in **FEATURES.md** (the catalog, 126
 entries, ordered the way you use the tool) and **TUTORIAL.md** (the
 guide, same order). This file is the other half: **the features not
-built yet** — numbered 1–17 below, 13 still open (a shipped one keeps
+built yet** — numbered 1–17 below, 12 still open (a shipped one keeps
 its number, struck through, so references stay stable) — and how to
 contribute one. It's written so a stranger can pick an item and
 implement it.
@@ -12,7 +12,7 @@ implement it.
 
 New here and want to help? Three steps:
 
-1. **Pick something.** The **Index** below lists the 13 open
+1. **Pick something.** The **Index** below lists the 12 open
    features. Bug reports, edge cases, and more `example_*.py`
    programs are just as welcome. Adding **another language** is the
    biggest prize — see "Support another language" and the event-log
@@ -77,7 +77,7 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
 | ~~3~~ | ~~Compare implementations on the same inputs~~ — **shipped**: catalog #118 (`--oracle`) | M | ★★ |
 | 4 | Object-reference graph at an event | L | ★★ |
 | ~~5~~ | ~~I/O lane via audit hooks; resource-leak pairing~~ — **shipped**: catalog #120 (`--io`) | M | ★★ |
-| 6 | Memory heat on the map (tracemalloc) | M | ★★ |
+| ~~6~~ | ~~Memory heat on the map (tracemalloc)~~ — **shipped** (v1): catalog #122 (`--memory`); map palette is the stated remainder | M | ★★ |
 | 7 | Lock-wait attribution | L | ★★ |
 | 8 | Multiprocessing children traced into lanes | XL | ★★★ |
 | 9 | Live streaming replayer (--serve) | L | ★★ |
@@ -154,28 +154,21 @@ which for a leaked file may never come) — the leak test is instead
 "a tracked handle whose `.closed` is still False at trace end", so
 only provably-open resources are flagged.
 
-### 6. Memory heat (calorimetry)
-- **What:** `--memory` — sample `tracemalloc` snapshots at intervals
-  (and at call boundaries in fn mode); the map gains a third palette:
-  **BYTES ALLOCATED (net / peak)** per module; the replayer shows a
-  memory strip-chart with event-aligned markers.
-- **Why:** time-heat says where the run computed; memory-heat says
-  where it *retained* — leaks, caches gone wrong, the 38 GB brian2
-  incident announced while it grows rather than at the OOM kill.
-- **How:** tracemalloc is stdlib with per-file statistics
-  (`snapshot.statistics('filename')` aggregates straight onto map
-  modules); overhead is real and announced (banner: "recorded under
-  tracemalloc ×N overhead"). Schema: periodic MEM events. Honesty —
-  the C-extension trap: tracemalloc sees only Python-level
-  allocations; a numpy/torch tensor allocated in C shows ~zero here
-  while system RSS climbs — the banner must say so, and the
-  native-allocation specialist in the funnel is Memray (external,
-  used as-is). `statistics('lineno')` also enables per-line
-  attribution inside a microscope view.
-- **Effort:** M.
-- **Prior art:** tracemalloc/memray; the physics analogy is
-  calorimetry — measure what the system absorbed, not just what it
-  did.
+### 6. Memory heat (calorimetry) — SHIPPED (v1)
+Now **catalog #122** (`--memory`): `tracemalloc` sampled through the
+run into a growth strip-chart under the scrubber (current + peak
+high-water), with per-module bytes attributed from periodic
+snapshots (in-scope only — the tracer's own event buffer stays out).
+Honesty on every surface: ~2× overhead, process totals include the
+tracer's buffer, and the C-extension blind spot (numpy/torch in C
+reads ~zero; Memray is the native specialist). One design choice
+worth recording: samples are a payload OVERLAY
+(`memory.samples = [[event_index, cur, peak]]`), not stream MEM
+events — a measurement isn't a program moment, and this keeps every
+other feature's event handling untouched. **Stated v1 remainder:**
+the map's third palette (BYTES per module) — `memory.perFile` ships
+in the payload already; painting it on the map is the next step. A
+good, self-contained contribution.
 
 ---
 
@@ -384,8 +377,9 @@ The learner's cut of the open seventeen:
    brute force is the specification, the loop closed end to end.
 3. ~~**#5 the I/O lane**~~ — **shipped** (catalog #120): "what did
    this program touch?" from audit hooks, unclosed resources named.
-4. **#6 memory heat** — time-heat says where it computed;
-   memory-heat says where it retained.
+4. ~~**#6 memory heat**~~ — **shipped** (v1, catalog #122): the
+   growth curve; memory-heat says where it retained. (Map palette
+   is the stated remainder.)
 5. **#10 attach** — the one thing external samplers still have over
    pyreplay: joining a process already running.
 

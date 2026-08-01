@@ -15,6 +15,7 @@ overwritten. Use --out NAME.html to pick a name (that one DOES overwrite).
     python tracer.py --start-when "i == 56" <script.py> [args...]
     python tracer.py --trip nan <script.py>            # NaN/Inf tripwire
     python tracer.py --runs 50 <script.py>             # N-run statistics
+    python tracer.py --fuzz gen.py --runs 50 <script.py>  # input search
     python tracer.py --diverge good.html bad.html      # first divergence
     python tracer.py -m pytest tests/                  # trace a test suite
     python tracer.py --root brian2 -m pytest           # pytest scoped to --root
@@ -72,6 +73,17 @@ statistics do the boring half of debugging before you read anything.
 Correlation, not causation, and the report says so; at fn granularity
 the units are call/return/raise lines (line granularity gives
 statement-level suspects).
+
+--fuzz GEN.py aims the N-run experiment at INPUTS: you don't have a
+failing case yet — go find one while you sleep. GEN.py defines
+gen(rng) -> str|bytes (the run's stdin) or [args…] (its argv); rng is
+a random.Random seeded fuzz-seed+i-1 for run i (--fuzz-seed pins the
+base, default 1234), so every input is reproducible forever. Each
+class's first input is SAVED beside its kept trace; the first failure
+gets a line-level microscope trace and a ready-to-paste --shrink
+command. Composes with --check (a property, not just a crash, as the
+failure), --mine and --chaos-schedule (inputs × schedules explored
+together, both seeds recorded).
 
 Past 100k events a trace auto-CHUNKS (#101): the events move out of
 the single JSON string into gzip+base64 chunks — files shrink 5-25x,
@@ -3963,12 +3975,20 @@ def _boundaries(events):
 
 
 def _run_harness(orig_argv, n_runs, out, entry_label, granularity,
-                 module, script, chaos_seed=None, mine=False):
+                 module, script, chaos_seed=None, mine=False,
+                 fuzz_file=None, fuzz_seed=1234):
     """#63: one run is an anecdote; N runs are an experiment. Execute the
     target N times (each a fresh child tracer with identical stdin),
     classify every outcome (exception type + crash site), keep ONE
     representative trace per class — first seen, not N files — and write
-    a self-contained report. Exit 0 only if every run was clean."""
+    a self-contained report. Exit 0 only if every run was clean.
+
+    Roadmap #1 (--fuzz GEN.py): the same experiment aimed at INPUTS —
+    run i's stdin comes from gen(rng) with rng seeded fuzz_seed+i-1
+    (recorded, so any run replays forever). First-per-class inputs are
+    saved beside their kept traces; the first failure gets a line-level
+    microscope re-run and a composed --shrink command — the funnel
+    hands you the next instrument, it never auto-runs it."""
     stem = (module.replace(".", "_") if module is not None
             else os.path.splitext(os.path.basename(script))[0])
     if out is None:
@@ -3991,13 +4011,16 @@ def _run_harness(orig_argv, n_runs, out, entry_label, granularity,
               "--exclude", "--granularity", "--max-events", "--start-at",
               "--start-count", "--start-when", "--backend", "--trip",
               "--runs", "--check", "--chaos-schedule", "--fsm",
-              "--fsm-declare", "--memo", "--starve-ms", "--probe-reduction"}
+              "--fsm-declare", "--memo", "--starve-ms",
+              "--probe-reduction", "--fuzz", "--fuzz-seed"}
     # --chaos-schedule is stripped and re-issued per child with a
     # DERIVED seed (base+i-1): N runs under one seed would explore one
     # biased stream N times; N seeds explore N different ones, and any
     # failing child remains reproducible from its own recorded seed.
+    # --fuzz is stripped too: the PARENT generates each child's stdin —
+    # a child that re-fuzzed would fork a harness of its own.
     strip = {"--runs", "--out", "--granularity", "--chaos-schedule",
-             "--mine"}
+             "--mine", "--fuzz", "--fuzz-seed"}
     child_flags, i = [], 0
     while i < len(orig_argv):
         tok = orig_argv[i]
@@ -4010,13 +4033,40 @@ def _run_harness(orig_argv, n_runs, out, entry_label, granularity,
         i += step
     child_flags = ["--granularity", granularity] + child_flags
 
+    genfn = None
+    if fuzz_file:
+        ns = runpy.run_path(os.path.realpath(fuzz_file))
+        genfn = ns.get("gen")
+        if not callable(genfn):
+            print("error: --fuzz file must define gen(rng) -> "
+                  "str|bytes (the run's stdin) or [args…] (its argv) "
+                  "— rng is a random.Random seeded per run")
+            return 2
+        import inspect
+        try:
+            req = [p for p in
+                   inspect.signature(genfn).parameters.values()
+                   if p.default is p.empty and p.kind in
+                   (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)]
+        except (TypeError, ValueError):
+            req = [None]
+        if len(req) != 1:
+            print("error: --fuzz gen takes ONE argument, gen(rng) — "
+                  "gen(value, seed) is the --sweep/--relation "
+                  "protocol (a declared input, not a search)")
+            return 2
+
     # the measurement protocol: every run gets the SAME stdin bytes.
     # Probe before blocking — a daemon/CI stdin that never closes must
     # not hang run 0 (found the hard way: this exact hang was the
     # suite's ghost flake) — and ANNOUNCE before any blocking read, so
     # a slow pipe is never mistaken for a freeze.
     stdin_bytes = b""
-    if not sys.stdin.isatty():
+    if genfn is not None:
+        if not sys.stdin.isatty():
+            print("pyreplay: --fuzz generates each run's stdin — the "
+                  "piped stdin is ignored", flush=True)
+    elif not sys.stdin.isatty():
         try:
             import select
             ready, _, _ = select.select([sys.stdin], [], [], 0.5)
@@ -4036,8 +4086,15 @@ def _run_harness(orig_argv, n_runs, out, entry_label, granularity,
 
     shown = " ".join([os.path.basename(sys.executable),
                       os.path.basename(SELF)] + child_flags)
-    print(f"pyreplay: {n_runs} runs of {entry_label} ({granularity} "
-          f"granularity), identical stdin each run", flush=True)
+    if genfn is not None:
+        print(f"pyreplay: {n_runs} runs of {entry_label} "
+              f"({granularity} granularity), stdin from gen(rng) in "
+              f"{os.path.basename(fuzz_file)} — base seed {fuzz_seed}, "
+              f"run i gets seed base+i-1 (recorded: every run replays "
+              f"forever)", flush=True)
+    else:
+        print(f"pyreplay: {n_runs} runs of {entry_label} ({granularity} "
+              f"granularity), identical stdin each run", flush=True)
     if chaos_seed is not None:
         print(f"pyreplay: schedule chaos — seed base {chaos_seed}, run i "
               f"gets seed {chaos_seed}+i-1; every run is PERTURBED on "
@@ -4050,14 +4107,48 @@ def _run_harness(orig_argv, n_runs, out, entry_label, granularity,
     n_fail_cov = n_pass_cov = 0
     mine_acc = {}        # #74: fingerprints survive the trace deletion
     fsm_acc = None       # #132: N runs merged into ONE machine
+    first_fail = None    # roadmap #1: the first failing generated input
     try:
         for i in range(1, n_runs + 1):
             tr_path = f"{rep_base}_run{i}.html"
+            run_seed = fuzz_seed + i - 1 if genfn is not None else None
+            run_stdin, run_args, gen_err = stdin_bytes, [], None
+            if genfn is not None:
+                try:
+                    raw = genfn(random.Random(run_seed))
+                except Exception as exc:
+                    gen_err = f"gen() raised {type(exc).__name__}"
+                if gen_err is None:
+                    if isinstance(raw, str):
+                        run_stdin = raw.encode()
+                    elif isinstance(raw, (bytes, bytearray)):
+                        run_stdin = bytes(raw)
+                    elif isinstance(raw, (list, tuple)) and all(
+                            isinstance(a, (str, int, float))
+                            for a in raw):
+                        run_args = [str(a) for a in raw]
+                        run_stdin = b""
+                    else:
+                        gen_err = (f"gen() returned "
+                                   f"{type(raw).__name__} (need "
+                                   f"str|bytes stdin or [args…])")
+            if gen_err is not None:
+                # a broken generator is a run outcome, not a crash of
+                # the harness — counted, classed, never exit 0
+                seen_cls.add(gen_err)
+                per_run.append({"i": i, "cls": gen_err, "ms": 0.0,
+                                "ev": 0, "kept": None, "note": None,
+                                "seed": run_seed, "inFile": None,
+                                "inBytes": None, "args": None})
+                print(f"  run {i}/{n_runs}: {gen_err} "
+                      f"(seed {run_seed})", flush=True)
+                continue
             cmd = [sys.executable, SELF, "--out", tr_path] \
                 + (["--chaos-schedule", str(chaos_seed + i - 1)]
-                   if chaos_seed is not None else []) + child_flags
+                   if chaos_seed is not None else []) + child_flags \
+                + run_args
             t0 = time.perf_counter()
-            r = subprocess.run(cmd, input=stdin_bytes,
+            r = subprocess.run(cmd, input=run_stdin,
                                capture_output=True)
             ms = (time.perf_counter() - t0) * 1000.0
             cls, ev_count, note = f"no trace (exit {r.returncode})", 0, None
@@ -4134,11 +4225,32 @@ def _run_harness(orig_argv, n_runs, out, entry_label, granularity,
                 kept = os.path.basename(tr_path)
             elif os.path.exists(tr_path):
                 os.remove(tr_path)
-            per_run.append({"i": i, "cls": cls,
-                            "ms": round(ms, 1), "ev": ev_count,
-                            "kept": kept, "note": note})
+            in_file = None
+            if genfn is not None and first:
+                # the input is the treasure — saved for every class's
+                # first run (clean included: the known-good for diffs)
+                in_file = os.path.basename(
+                    f"{rep_base}_run{i}_input.txt")
+                with open(f"{rep_base}_run{i}_input.txt", "wb") as fh:
+                    fh.write(run_stdin if not run_args else
+                             shlex.join(run_args).encode())
+            row = {"i": i, "cls": cls, "ms": round(ms, 1),
+                   "ev": ev_count, "kept": kept, "note": note}
+            if genfn is not None:
+                row.update({"seed": run_seed, "inFile": in_file,
+                            "inBytes": (len(run_stdin)
+                                        if not run_args else None),
+                            "args": run_args or None})
+                if cls != "clean" and first_fail is None:
+                    first_fail = {"i": i, "seed": run_seed,
+                                  "cls": cls, "stdin": run_stdin,
+                                  "args": run_args,
+                                  "in_file": in_file}
+            per_run.append(row)
             print(f"  run {i}/{n_runs}: {cls} ({ms:.0f} ms, "
-                  f"{ev_count} events)", flush=True)
+                  f"{ev_count} events"
+                  + (f", seed {run_seed}" if genfn is not None
+                     else "") + ")", flush=True)
     except KeyboardInterrupt:
         interrupted = True
         print(f"pyreplay: interrupted — reporting the {len(per_run)} "
@@ -4199,6 +4311,8 @@ def _run_harness(orig_argv, n_runs, out, entry_label, granularity,
                "python": sys.version.split()[0],
                "cmd": shown,   # child_flags already ends with the target
                "chaos": chaos_seed,   # #68: seed base, or null
+               "fuzz": ({"gen": os.path.basename(fuzz_file),
+                         "seed": fuzz_seed} if fuzz_file else None),
                "interrupted": interrupted,
                "suspicion": suspicion,
                "mined": mined,        # #74, or null without --mine
@@ -4243,6 +4357,34 @@ def _run_harness(orig_argv, n_runs, out, entry_label, granularity,
         if fsm_acc["viol"]:
             print(f"  ⚠ {fsm_acc['viol']} undeclared transition(s) — "
                   f"each is a viol event in its kept trace")
+    if genfn is not None and first_fail is not None:
+        print(f"fuzz: first failure at run {first_fail['i']} "
+              f"(seed {first_fail['seed']}) — {first_fail['cls']}; "
+              f"input -> {first_fail['in_file']}", flush=True)
+        if granularity != "line":
+            micro = os.path.abspath(f"trace_fuzz_{stem}.html")
+            mcmd = [sys.executable, SELF, "--out", micro,
+                    "--granularity", "line"] + child_flags[2:] \
+                + first_fail["args"]
+            subprocess.run(mcmd, input=first_fail["stdin"],
+                           capture_output=True)
+            if os.path.exists(micro):
+                print(f"  line-level microscope of that input -> "
+                      f"{os.path.basename(micro)}")
+        if not first_fail["args"]:
+            # the funnel hands you the next instrument (#115's ddmin),
+            # it never auto-runs it — shrinking is its own experiment
+            print("  shrink it: python3 " + os.path.basename(SELF)
+                  + " --shrink "
+                  + " ".join(shlex.quote(t) for t in child_flags[2:])
+                  + " < " + first_fail["in_file"])
+        else:
+            print("  (--shrink minimizes stdin — an argv input "
+                  "shrinks by hand)")
+    elif genfn is not None:
+        print(f"fuzz: no failing input in {len(per_run)} run(s) — an "
+              f"observation over these seeds, never a proof (more "
+              f"--runs explore more)", flush=True)
     print(f"report -> {out}")
     return 0 if set(counts) == {"clean"} else 1
 
@@ -5359,8 +5501,9 @@ def _relation_harness(orig_argv, relations, gen_file, trials, seed,
               + (f" — PYTHONHASHSEED is {hashseed}; pin it (or "
                  f"--runs first) before trusting the verdict"
                  if hashseed == "random" else "")
-              + ". Input shrinking (#66) is unbuilt — shrink by "
-                "hand or with a smaller --gen value.")
+              + ". --shrink minimizes a crashing/--check input; a "
+                "relation-oracle shrink is unbuilt — meanwhile a "
+                "smaller --gen value shrinks by hand.")
         return 1
     print(f"\nall relations held on every trial — an observation "
           f"over {trials} trial(s), never a proof.")
@@ -6466,6 +6609,8 @@ def main(argv):
     gen_file = None      # #127: minimal #67 protocol — gen(v, seed)
     predict_src = None   # #127: claimed growth, e.g. "n^2"
     sweep_seed = 1234
+    fuzz_file = None     # roadmap #1: gen(rng) input search
+    fuzz_seed = 1234
     mine_flag = False    # #74: --runs N --mine (multi-run mining)
     fsm_expr = None      # #132: the ONE declared state name
     fsm_declared = None  # #132: declared transitions, or None
@@ -6600,6 +6745,19 @@ def main(argv):
                 print("error: --sweep-seed expects an integer")
                 return 2
             argv = argv[2:]
+        elif argv[0] == "--fuzz" and len(argv) >= 2:
+            if not os.path.isfile(argv[1]):
+                print(f"error: --fuzz file not found: {argv[1]}")
+                return 2
+            fuzz_file, argv = argv[1], argv[2:]
+        elif argv[0] == "--fuzz-seed" and len(argv) >= 2:
+            try:
+                fuzz_seed = int(argv[1])
+            except ValueError:
+                print("error: --fuzz-seed expects an integer (same "
+                      "seed = same input sequence, forever)")
+                return 2
+            argv = argv[2:]
         elif argv[0] == "--mine":
             mine_flag = True
             argv = argv[1:]
@@ -6709,6 +6867,28 @@ def main(argv):
     if start_count > 1 and not (start_at or start_when):
         print("error: --start-count needs --start-at and/or --start-when")
         return 2
+    if fuzz_file and sweep_spec:
+        print("error: --fuzz and --sweep are different experiments — "
+              "an input SEARCH vs a size LADDER. Run them separately.")
+        return 2
+    if fuzz_file and relations:
+        print("error: --relation draws trials from its own --gen "
+              "protocol — --fuzz belongs to --runs (find a failing "
+              "input first, then declare its symmetries)")
+        return 2
+    if fuzz_file and shrink_flag:
+        print("error: --shrink minimizes ONE failing input; --fuzz "
+              "FINDS one — fuzz first, then paste the composed "
+              "--shrink command it prints")
+        return 2
+    if fuzz_seed != 1234 and not fuzz_file:
+        print("error: --fuzz-seed belongs to --fuzz GEN.py")
+        return 2
+    if fuzz_file and not runs_n:
+        runs_n = 20
+        print("pyreplay: --fuzz without --runs defaults to 20 runs "
+              "(each gets its own seeded input) — pass --runs N to "
+              "search wider", flush=True)
     if granularity is None:
         # -m runs (a test suite, a module) default to fn: line-level over
         # a whole suite is the runaway-slowness trap — ~100x overhead on
@@ -6722,6 +6902,7 @@ def main(argv):
             granularity = "fn"
             if not doctor:
                 what = ("-m runs" if module is not None
+                        else "--fuzz" if fuzz_file
                         else "--runs" if runs_n
                         else "--sweep" if sweep_spec
                         else "--relation" if relations
@@ -6761,7 +6942,8 @@ def main(argv):
         return 2
     if gen_file and not sweep_spec and not relations:
         print("error: --gen feeds --sweep (a size ladder) or "
-              "--relation (metamorphic trials) — add one of them")
+              "--relation (metamorphic trials) — add one of them "
+              "(an input SEARCH is --fuzz GEN.py)")
         return 2
     if mine_flag and not runs_n:
         print("error: --mine rides --runs (mine N runs together), or "
@@ -6887,7 +7069,8 @@ def main(argv):
     if runs_n:
         return _run_harness(orig_argv, runs_n, out, entry_label,
                             granularity, module, script, chaos_seed,
-                            mine=mine_flag)
+                            mine=mine_flag, fuzz_file=fuzz_file,
+                            fuzz_seed=fuzz_seed)
 
     if sweep_spec:
         return _sweep_harness(orig_argv, sweep_spec, gen_file,

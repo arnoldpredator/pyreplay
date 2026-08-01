@@ -76,6 +76,10 @@ $("subtitle").textContent = "· " + DATA.script + " · " + R.length +
   (DATA.interrupted ? " of " + DATA.requested + " (interrupted)" : "") +
   " runs · " + DATA.granularity + " granularity · python " + DATA.python;
 $("cmdline").textContent = "each run: " + DATA.cmd +
+  (DATA.fuzz
+    ? "  ·  🎲 fuzz: stdin from " + DATA.fuzz.gen + ", seed base " +
+      DATA.fuzz.seed + " (run i = base+i−1, recorded)"
+    : "") +
   (DATA.chaos !== null && DATA.chaos !== undefined
     ? "  ·  ⚡ PERTURBED: schedule chaos, seed base " + DATA.chaos +
       " (run i = base+i−1)"
@@ -84,7 +88,10 @@ $("honesty").textContent = "Wall times are tracer-inclusive (interpreter " +
   "start-up + " + DATA.granularity + "-granularity recording overhead) — " +
   "comparable to each other, not to bare runtime. Outcomes are classified " +
   "by exception type + crash site; two different bugs sharing both would " +
-  "collapse into one class. N = " + R.length + ".";
+  "collapse into one class. N = " + R.length + "." +
+  (DATA.fuzz ? " Every run got its OWN generated input (that is the " +
+    "point) — classes compare inputs, and each class's first input is " +
+    "saved beside its kept trace." : "");
 
 /* classes, in first-seen order; clean is green, failures walk a red hue */
 const order = [];
@@ -124,6 +131,14 @@ order.forEach(cls => {
   const runs = byCls.get(cls);
   const st = stats(runs.map(r => r.ms));
   const rep = runs.find(r => r.kept);
+  const repIn = runs.find(r => r.inFile);
+  let repCell = rep ? "<a href=\"" + rep.kept + "\">run " + rep.i +
+    " — replay</a>" : "—";
+  if (repIn) {
+    repCell += " · <a href=\"" + repIn.inFile + "\" title=\"the " +
+      "generated input of this class's first run (seed " + repIn.seed +
+      ")\">input</a>";
+  }
   rows += "<tr><td class=cls><span class=swatch style=\"background:" +
     color(cls) + "\"></span>" + cls.replace(/</g, "&lt;") + "</td>" +
     "<td class=num>" + runs.length + "</td>" +
@@ -132,8 +147,7 @@ order.forEach(cls => {
     "<td class=num>" + fmt(st.med) + "</td>" +
     "<td class=num>" + fmt(st.p95) + "</td>" +
     "<td class=num>" + fmt(st.max) + "</td>" +
-    "<td>" + (rep ? "<a href=\"" + rep.kept + "\">run " + rep.i +
-      " — replay</a>" : "—") + "</td></tr>";
+    "<td>" + repCell + "</td></tr>";
 });
 $("classes").innerHTML = rows;
 
@@ -142,7 +156,9 @@ R.forEach(r => {
   c.className = "runcell" + (r.kept ? " kept" : "");
   c.style.background = color(r.cls);
   c.title = "run " + r.i + " — " + r.cls + " — " + fmt(r.ms) +
-    " — " + r.ev + " events" + (r.kept ? " (click to replay)" : "");
+    " — " + r.ev + " events" +
+    (r.seed !== undefined && r.seed !== null ? " — seed " + r.seed : "") +
+    (r.kept ? " (click to replay)" : "");
   if (r.kept) c.onclick = () => { window.location.href = r.kept; };
   $("strip").appendChild(c);
 });

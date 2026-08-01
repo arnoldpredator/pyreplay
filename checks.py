@@ -4494,6 +4494,117 @@ def _():
            "no failure on the full input -> refused with the reason")
 
 
+@check("fuzz: seeded input search, saved inputs, shrink handoff "
+       "(roadmap #1)")
+def _():
+    import random as _rnd
+    tgt = fixture("fz1.py", (
+        "import sys\n"
+        "total = 0\n"
+        "for line in sys.stdin:\n"
+        "    parts = line.split()\n"
+        "    if parts and parts[0] == 'order':\n"
+        "        total += int(parts[1])\n"
+        "    elif parts and parts[0] == 'refund':\n"
+        "        total -= int(parts[1])\n"
+        "    elif parts and parts[0] == 'audit':\n"
+        "        assert total >= 0, 'books negative'\n"
+        "print(total)\n"))
+    genf = fixture("fz1_gen.py", (
+        "def gen(rng):\n"
+        "    n = rng.randint(1, 40)\n"
+        "    if rng.random() < 0.4:\n"
+        "        return f'refund {n}\\naudit\\n'\n"
+        "    return f'order {n}\\naudit\\n'\n"))
+
+    def mirror(seed):
+        # the harness's contract, mirrored bit for bit: run i's input
+        # IS gen(random.Random(base+i-1)) — reproducible forever
+        rng = _rnd.Random(seed)
+        n = rng.randint(1, 40)
+        return (f"refund {n}\naudit\n" if rng.random() < 0.4
+                else f"order {n}\naudit\n")
+
+    def fuzz(*args):
+        return subprocess.run([PY, os.path.join(HERE, "tracer.py"),
+                               *args], capture_output=True, text=True,
+                              cwd=TMP, timeout=600,
+                              stdin=subprocess.DEVNULL)
+    out = os.path.join(TMP, "fz1_report.html")
+    r = fuzz("--fuzz", genf, "--runs", "6", "--fuzz-seed", "70",
+             "--out", out, tgt)
+    want = [mirror(70 + i - 1) for i in range(1, 7)]
+    fail_runs = [i for i, w in enumerate(want, 1)
+                 if w.startswith("refund")]
+    expect(fail_runs and len(fail_runs) < 6,
+           f"seed window 70-75 must mix outcomes (fixture drifted): "
+           f"{fail_runs}")
+    expect(r.returncode == 1, f"failing runs must exit 1: "
+           f"{r.stdout[-300:]}")
+    with open(out, encoding="utf-8") as fh:
+        m = re.search(r'<script id="runs-data" '
+                      r'type="application/json">(.*?)</script>',
+                      fh.read(), re.S)
+    expect(m is not None, "no embedded runs data")
+    data = json.loads(m.group(1).replace("<\\/", "</"))
+    expect(data["fuzz"] == {"gen": "fz1_gen.py", "seed": 70},
+           f"report must carry the generator + base seed: "
+           f"{data['fuzz']}")
+    per = data["perRun"]
+    expect([p["seed"] for p in per] == list(range(70, 76)),
+           f"run i's recorded seed must be base+i-1: "
+           f"{[p['seed'] for p in per]}")
+    expect([p["i"] for p in per if p["cls"] != "clean"] == fail_runs,
+           f"outcomes must follow the mirrored seeds exactly: "
+           f"{[p['cls'] for p in per]}")
+    # first-per-class inputs saved, byte-identical to the mirror
+    for p in per:
+        if p["inFile"]:
+            with open(os.path.join(TMP, p["inFile"]), "rb") as fh:
+                expect(fh.read() == want[p["i"] - 1].encode(),
+                       f"saved input of run {p['i']} must equal the "
+                       f"seeded generation")
+    saved = [p for p in per if p["inFile"]]
+    expect(len(saved) == 2, f"one input per class (clean + failing), "
+           f"got {len(saved)}")
+    # the first failure: microscope trace + composed shrink command
+    micro = os.path.join(TMP, "trace_fuzz_fz1.html")
+    p = payload(micro)
+    expect(p["granularity"] == "line"
+           and (p["error"] or "").startswith("AssertionError"),
+           "first failing input must get a line-level microscope "
+           "with the same failure")
+    expect("shrink it:" in r.stdout and "--shrink" in r.stdout
+           and "seed" in r.stdout,
+           "the handoff must name the seed and compose the --shrink "
+           "command (never auto-run it)")
+    # determinism: the same base seed replays the same experiment
+    out2 = os.path.join(TMP, "fz1_report2.html")
+    fuzz("--fuzz", genf, "--runs", "6", "--fuzz-seed", "70",
+         "--out", out2, tgt)
+    with open(out2, encoding="utf-8") as fh:
+        m2 = re.search(r'<script id="runs-data" '
+                       r'type="application/json">(.*?)</script>',
+                       fh.read(), re.S)
+    d2 = json.loads(m2.group(1).replace("<\\/", "</"))
+    expect([p["cls"] for p in d2["perRun"]]
+           == [p["cls"] for p in per],
+           "same base seed must replay the same class sequence")
+    # gates
+    b = fuzz("--fuzz", genf, "--sweep", "n=1,2", tgt)
+    expect(b.returncode == 2 and "different experiments" in b.stdout,
+           "--fuzz with --sweep refused")
+    b = fuzz("--fuzz-seed", "7", tgt)
+    expect(b.returncode == 2 and "belongs to --fuzz" in b.stdout,
+           "--fuzz-seed without --fuzz refused")
+    two = fixture("fz1_gen2.py",
+                  "def gen(value, seed):\n    return 'x'\n")
+    b = fuzz("--fuzz", two, "--runs", "2", tgt)
+    expect(b.returncode == 2 and "ONE argument" in b.stdout
+           and "--sweep" in b.stdout,
+           "the sweep-protocol signature is named, not just refused")
+
+
 @check("nonterm: proven cycle vs downgraded recurrence (#78)")
 def _():
     src = fixture("nt78.py", (

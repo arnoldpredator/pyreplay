@@ -1031,6 +1031,25 @@ reproducible from the seed in its own Reproduce box. The bundled
 `example_race.py`: 12/12 clean naturally, 11/12 conservation-broken
 under chaos — the race that "never happens", as a rate.
 
+**Find the failing input (`--fuzz GEN.py`).** Every instrument above
+assumes you already have a failing case; this one finds it while you
+sleep. Write `gen(rng)` in a file — take the seeded `random.Random`
+it hands you, return the run's stdin (str/bytes) or its argv (a
+list) — and `python3 tracer.py --fuzz gen.py --runs 50 target.py`
+feeds every run its own generated input, run i seeded base+i−1
+(`--fuzz-seed` pins the base; every input reproducible forever).
+Outcomes classify as usual, the suspects fire when both classes
+appear, and each class's FIRST input is saved beside its kept trace
+— clean included, the known-good for diffing. On the first failure
+the harness prints the seed, writes a line-level microscope trace of
+exactly that input, and composes the `--shrink` command that
+minimizes it: fuzz finds, shrink distills, diverge explains. It
+stacks with `--chaos-schedule` (inputs × schedules, both seeds
+recorded) and with `--check` (fail on a property, not just a crash).
+The bundled `example_fuzz.py` carries its own `gen`: twenty runs, 7×
+"books negative", and the composed shrink cuts the failing ledger to
+its 2-line core.
+
 **Input shrinking (`--shrink`).** A huge input that crashes is a
 chore; the tiny core that still crashes is a diagnosis. Pipe the
 input and `--shrink` runs Zeller's ddmin over it — lines by default,

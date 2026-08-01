@@ -3020,7 +3020,50 @@ Statistics over many runs: rates instead of anecdotes, divergences instead of gu
 
   [![Feature 116 — schedule chaos](screenshots/68-chaos-runs.png)](screenshots/68-chaos-runs.png)
 
-### 117. Metamorphic relations — the symmetry is the oracle (`--relation`)
+### 117. The property/fuzz entry — find the failing input while you sleep (`--fuzz GEN.py`)
+- **Measured:** the N-run experiment aimed at INPUTS instead of
+  schedules. GEN.py defines `gen(rng)` → the run's stdin (str/bytes)
+  or its argv (a list); `rng` is a `random.Random` seeded
+  `fuzz-seed + i − 1` for run i (`--fuzz-seed` pins the base, default
+  1234), so every generated input is reproducible forever. Each run
+  is a fresh child tracer; outcomes classify exactly as in the N-run
+  harness, and the suspects, `--mine` and `--chaos-schedule` all
+  compose (inputs × schedules explored together, both seeds
+  recorded).
+- **Displayed:** the report header wears 🎲 with the generator and
+  the base seed; every run's cell carries its seed; each class's
+  FIRST input is saved beside its kept trace and linked from the
+  class table (clean included — the known-good for diffing). The
+  first failure prints its seed, gets a line-level microscope trace
+  of exactly that input, and composes the ready-to-paste `--shrink`
+  command — the funnel hands you the next instrument, it never
+  auto-runs it.
+- **Why:** every other lab instrument assumes you HAVE a failing
+  case. This one finds it: the runs-statistics idea (code that looks
+  reliable can hide an error that only sometimes shows) pointed at
+  the input space — keep the seed, save the case, minimize it.
+  Property-based testing's discipline (Hypothesis; AFL's keep-the-
+  seed philosophy) as one flag on the harness you already trust.
+- **Use case:** `example_fuzz.py` is a ledger with a planted boundary
+  bug that carries its own input model (one file, both roles: target
+  and generator). Twenty runs at the default seed: 13× clean, 7×
+  "books negative" — the suspects crown the assert (1.00, 7/7 vs
+  0/13), the first failing ledger is on disk, and pasting the
+  composed shrink cuts it to its 2-line core: `refund 8` + `audit`.
+- **Command:** `python3 tracer.py --fuzz example_fuzz.py --runs 20
+  example_fuzz.py` (without `--runs` it defaults to 20, announced).
+  A `gen()` that raises or returns the wrong shape is a counted run
+  outcome, never a silent skip; a `gen(value, seed)` file is named
+  as the `--sweep`/`--relation` protocol and refused, not just
+  rejected. Honesty: finding no failure is an observation over these
+  seeds, never a proof.
+- **Screenshot** — the fuzz run set: 🎲 header with the seed rule,
+  the 7×/13× split with per-class input links, the suspects led by
+  the assert.
+
+  [![Feature 117 — the fuzz entry](screenshots/r1-fuzz-runs.png)](screenshots/r1-fuzz-runs.png)
+
+### 118. Metamorphic relations — the symmetry is the oracle (`--relation`)
 - **Measured:** the oracle problem's cheapest instrument: the right
   answer may be unknown, but its symmetries are not.
   `--relation "TRANSFORM => RELATION"` declares an input transform
@@ -3062,9 +3105,9 @@ Statistics over many runs: rates instead of anecdotes, divergences instead of gu
   per trial, kept pairs, composed diverge commands, and the diverge
   output below pointing at the exact print that broke the symmetry.
 
-  [![Feature 117 — metamorphic relations](screenshots/126-relations.png)](screenshots/126-relations.png)
+  [![Feature 118 — metamorphic relations](screenshots/126-relations.png)](screenshots/126-relations.png)
 
-### 118. Mutation-survivor forensics — why did this mutant live?
+### 119. Mutation-survivor forensics — why did this mutant live?
 - **Measured:** the bridge uses **mutmut as-is** (never rebuilt): the
   survivor list from `mutmut results`, the nearest covering test
   from mutmut's own coverage mapping (`mutants/mutmut-stats.json`),
@@ -3100,9 +3143,9 @@ Statistics over many runs: rates instead of anecdotes, divergences instead of gu
   missing assertion named), one traced-identical
   (possibly-equivalent, said plainly).
 
-  [![Feature 118 — forensics](screenshots/125-forensics.png)](screenshots/125-forensics.png)
+  [![Feature 119 — forensics](screenshots/125-forensics.png)](screenshots/125-forensics.png)
 
-### 119. The scaling bench — `--sweep`, the doubling experiment as a command
+### 120. The scaling bench — `--sweep`, the doubling experiment as a command
 - **Measured:** the target is run once per rung of a value ladder
   (`--sweep "n=1000,2000,4000,8000"`, or `alpha=3.0..5.0:5` for a
   knob), each child a fresh tracer run whose stdin comes from the
@@ -3144,13 +3187,13 @@ Statistics over many runs: rates instead of anecdotes, divergences instead of gu
   time chart honestly wobbling (startup noise at tiny n), ratios
   marching to 4.
 
-  [![Feature 119 — scaling bench](screenshots/127-scaling-bench.png)](screenshots/127-scaling-bench.png)
+  [![Feature 120 — scaling bench](screenshots/127-scaling-bench.png)](screenshots/127-scaling-bench.png)
 
 ## Part 15 — Infrastructure
 
 What keeps all of the above honest.
 
-### 120. `checks.py` — the regression suite
+### 121. `checks.py` — the regression suite
 68 data-level checks (no browser): the tracer re-runs the permanent
 example suite and the mapper its fixtures, the embedded JSON is
 extracted from each generated HTML (chunked or not), and the honesty
@@ -3172,7 +3215,7 @@ after every change, always.
 - **Command:** `python3 checks.py` — prints the green table, exits
   non-zero on any red.
 
-### 121. The teaching fleet
+### 122. The teaching fleet
 `example_{sort,prefix,histogram,dp,graph,exceptions,control,machinery,
 mro,tasks,threads,watch,dunder,bigarray,heavy,nan,flaky,race}.py` — one small script per feature family, each with its
 pre-built `trace_*.html`; `tinyshop/` — a multi-file teaching project

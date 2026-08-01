@@ -1,16 +1,18 @@
 # pyreplay — the roadmap & contribution guide
 
-Everything already built lives in **FEATURES.md** (the catalog, 121
+Everything already built lives in **FEATURES.md** (the catalog, 122
 entries, ordered the way you use the tool) and **TUTORIAL.md** (the
 guide, same order). This file is the other half: **the features not
-built yet** — numbered 1–17 below — and how to contribute one. It's
-written so a stranger can pick an item and implement it.
+built yet** — numbered 1–17 below, 16 still open (a shipped one keeps
+its number, struck through, so references stay stable) — and how to
+contribute one. It's written so a stranger can pick an item and
+implement it.
 
 ## Start here — how to contribute
 
 New here and want to help? Three steps:
 
-1. **Pick something.** The **Index** below lists the 17 open
+1. **Pick something.** The **Index** below lists the 16 open
    features. Bug reports, edge cases, and more `example_*.py`
    programs are just as welcome. Adding **another language** is the
    biggest prize — see "Support another language" and the event-log
@@ -70,7 +72,7 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
 
 | # | Feature | Effort | Payoff |
 |---|---------|--------|--------|
-| 1 | Random-input entry with seed capture | M | ★★ |
+| ~~1~~ | ~~Random-input entry with seed capture~~ — **shipped**: catalog #117 (`--fuzz`) | M | ★★ |
 | 2 | Inject exceptions/latency on purpose | L | ★★ |
 | 3 | Compare implementations on the same inputs | M | ★★ |
 | 4 | Object-reference graph at an event | L | ★★ |
@@ -90,22 +92,13 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
 
 ## The features
 
-### 1. Property/fuzz entry
-- **What:** `--fuzz GEN.py` — run a user-supplied generator function
-  that yields random inputs (seeded, seed recorded per run) through
-  the N-run harness; on first failure, keep the seed, re-run traced,
-  and hand the input to catalog #115 to shrink.
-- **Why:** the runs-statistics idea aimed at *inputs* instead of
-  scheduling: you don't have a failing case yet — go find one while
-  you sleep.
-- **How:** generator protocol = a Python file with `def gen(rng):`
-  returning stdin-bytes/argv; seeds logged so every run is
-  reproducible forever. Optional bridge: if Hypothesis is installed,
-  accept a `@given` strategy as the generator; degrade gracefully
-  without it.
-- **Effort:** M.
-- **Prior art:** Hypothesis (MacIver), AFL's philosophy (keep the
-  seed, minimize the case), property-based testing.
+### 1. Property/fuzz entry — SHIPPED
+Now **catalog #117** (`--fuzz GEN.py`): seeded `gen(rng)` inputs
+through the N-run harness, run i seeded base+i−1 and recorded;
+first-per-class inputs saved beside their kept traces; the first
+failure gets a line-level microscope trace and the composed
+`--shrink` command. The Hypothesis `@given` bridge from the original
+sketch remains unbuilt (the `gen(rng)` protocol carries it).
 
 ### 2. Fault injection (chaos engineering for one process)
 - **What:** `--inject "shop.pay:raises=TimeoutError:on_call=3"` —
@@ -405,8 +398,8 @@ original brief)*
 
 The learner's cut of the open seventeen:
 
-1. **#1 property/fuzz entry** — you don't have a failing case yet;
-   go find one while you sleep, keep the seed, shrink it.
+1. ~~**#1 property/fuzz entry**~~ — **shipped** (catalog #117): find
+   the failing case while you sleep, keep the seed, shrink it.
 2. **#3 differential testing** — the brute force is the
    specification; automate the AtCoder workflow end to end.
 3. **#5 the I/O lane** — "what did this program touch?" answered

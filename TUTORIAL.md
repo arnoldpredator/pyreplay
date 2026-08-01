@@ -430,6 +430,14 @@ labeled tracer-inclusive), and ONE kept, replayable trace per distinct
 behavior. Exit code 0 only when every run is clean, so it drops
 straight into `git bisect run`. Ctrl-C reports what completed.
 
+**The suspects (SBFL).** When a run set contains both passing and
+failing runs, the report grows THE SUSPECTS: every executed line
+ranked by how exclusively the failing runs execute it (Ochiai), each
+suspect deep-linked into a kept failing trace at that line. It is
+correlation, not causation — the report says so — but the top of the
+table is where to read first: the statistics do the boring half of
+debugging before you open a single file.
+
 **Find where two runs part ways (`--diverge`).** `python3 tracer.py
 --diverge good.html bad.html` canonicalizes both event streams
 (timestamps and memory addresses stripped) and reports the first
@@ -439,6 +447,18 @@ values) — and CONTROL — a different line runs (the symptom). It prints
 deep links that open both traces at the divergence. The natural
 pipeline: `--runs`, then diverge a kept clean trace against a kept
 failing one.
+
+**Turn any question into an exit code (`--check`).** `python3
+tracer.py --check "total < 0" script.py` watches the expression two
+ways in one run: per line, against the frame's variables (like
+`--start-when`), and once at end-of-run against the run FACTS —
+`error`, `exc`, `events`, `output` (the console text), `hit`, `hits`,
+`tests_failed`, `truncated`. Exit 1 the moment either says yes; 0
+clean; **3** when the expression was never evaluable anywhere — a typo
+must never look like a clean run. That is exactly the yes/no oracle
+`git bisect run` wants: find the commit that introduced a warning with
+`--check "'deprecated' in output"`, no test required; compose with
+`--runs` and you can bisect a *rate* change in flaky behavior.
 
 **Catch the first NaN at birth (`--trip nan`).** For numerical code
 the crash site is thousands of operations downstream of the mistake.
@@ -463,6 +483,74 @@ issue and the reader lands on that event with that view open. Works on
 a fresh load and on an already-open trace (edit the hash). Every
 moment any tool above names is therefore shareable.
 
+## 4e. The replayer grows: chapters, console, query, whyline, schemas (2026-08)
+
+**Per-test chapters.** `python3 tracer.py -m pytest tests/` now
+dissects the suite: colored chapter spans over the scrubber (green
+pass, red fail), every event labeled with its owning test, TEST ▶/✓/✗
+badges in the stream. And the killer join: per-test coverage × per-test
+outcomes = the SUSPECTS from a single suite run, ranked in the banner,
+clickable straight to the guilty line inside the failing test's span.
+
+**The console lane.** Every line the target prints to stdout/stderr
+becomes an event tied to the frame that wrote it. The replayer's
+Console panel fills as the replay advances — output appears when it
+appeared, WARNING/ERROR colored from the recorded text — and clicking
+a line jumps to the moment it was written, stack and variables live.
+`--no-console` disables; caps are announced; writes below the Python
+layer (raw `os.write`) bypass the tee, and the trace says so.
+
+**The query bar.** Press `/` in any trace: `type:exc file:cart.py`,
+`changed:total total<0`, `fn:lookup`, `after:5000 mut:items`, or a
+bare word to match source text — terms AND-compose, hits become
+magenta pins on the scrubber, Enter cycles through them. Value tests
+look at recorded CHANGE moments (the facts, never interpolation), and
+a typo'd prefix is reported as a typo, never a silent zero hits.
+
+**The whyline.** Click the line *number* of a line that never ran and
+the viewer answers why not: the innermost guard that controlled it,
+with its recorded verdict counts — "ran 12× — 0× true — this branch
+was never chosen" — walked upward one controller at a time, each step
+jumpable to where execution actually arrived. Click an executed line's
+number and you jump to its first execution. Line granularity (under fn
+the panel says why it can't answer).
+
+**Boundary schemas.** Every trace aggregates each function's observed
+interface — the structural *shape* of arguments and returns (`dict{qty,
+price}`, `list[dict{sku, qty}]`), never values. Stable interfaces show
+their signature on call/return events; a wobbling one wears ⚠ with the
+distribution ("dict 13× / NoneType 1×") and jump links to the deviant
+calls, and the terminal summarizes every unstable interface after the
+run. The wrong-shape payload gets caught at the border, not five
+frames downstream.
+
+## 4f. Recording for real life: the black box, the capsule, the chunks (2026-08)
+
+**The flight recorder (`--black-box`).** Recording becomes a ring
+buffer of the last `--max-events` events: the run is never truncated,
+only the ring's own memory, and the banner counts what rotated out
+("the film starts mid-run"). `kill -USR1 <pid>` dumps the current
+window as a normal trace WITHOUT stopping the run; the end or a crash
+writes the final window. In-process: `watch(ring=N)`. Pay ~nothing
+forever; have the film when it matters.
+
+**The reproducibility capsule.** Every trace embeds the run's
+identity: exact command, cwd, python/platform, `PYTHONHASHSEED` (with
+a random-order warning), curated env keys — and the stdin bytes the
+run actually consumed, captured lazily so a never-closing pipe cannot
+hang the start. The viewer's Reproduce box prints the rerun command
+and offers `stdin.bin` for download: every trace is a specimen someone
+else can rerun, not just a report.
+
+**Chunked traces + keyframes.** Past 100k events the artifact
+auto-chunks: events move into gzip+base64 blocks (files shrink 5–25×)
+and the replayer seeks from state keyframes instead of replaying from
+event zero. Invisible when healthy — a missing chunk is announced
+loudly — and every reader (`--runs`, `--diverge`, map heat,
+`checks.py`) understands the format. `--chunked`/`--no-chunked`
+forces; replay needs `DecompressionStream` (Chrome 80+ / Firefox 113+
+/ Safari 16.4+).
+
 ## 5. Recipes
 
 ```bash
@@ -480,6 +568,13 @@ python3 tracer.py --start-when "x < 0" script.py
 
 # Compare two runs: trace, edit code, trace again → trace_x.html and
 # trace_x_2.html, open both in two browser tabs
+
+# Which commit broke it? A trace predicate as the bisect oracle
+git bisect run python3 tracer.py --check "tests_failed > 0" -m pytest tests/
+
+# Long-running process: keep only the last 200k events, snapshot live
+python3 tracer.py --black-box --max-events 200000 server.py
+kill -USR1 <pid>    # dumps the current window; the run continues
 ```
 
 ## 6. Field guide: studying a codebase you didn't write

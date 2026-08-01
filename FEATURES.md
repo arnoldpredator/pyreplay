@@ -20,8 +20,11 @@ small; clone them if you want to reproduce those shots:
 [nengo](https://github.com/nengo/nengo),
 [brian2](https://github.com/brian-team/brian2),
 [pymdp](https://github.com/infer-actively/pymdp). Features 61–62 are
-infrastructure and carry no shot; the 2026-08 additions (63, 64, 79,
-80, 106) await their shots from the next manual pass.
+infrastructure and carry no shot; 64 and 70 are terminal reports and
+101 is plumbing, so those three carry none. Of the 2026-08 additions,
+77, 104 and 109 still await their shots from the next manual pass
+(each needs a click or a typed query); the other nine were captured
+live from the commands their entries give.
 
 The two tools, one contract:
 
@@ -208,6 +211,58 @@ dead or invented panel; every cap and truncation is announced.
 
   [![Feature 09 — threads](screenshots/09-threads.png)](screenshots/09-threads.png)
 
+### 101. Chunked traces + keyframes (automatic past 100k events)
+- **Measured:** past 100k events the artifact changes gear: the event
+  JSON leaves the single embedded string and moves into gzip+base64
+  chunk tags (a 245k-event trace: 29 MB → 1.16 MB, 25×), and the
+  replayer builds **keyframes** — full state snapshots every 64k
+  events, made lazily on the first deep jump. `--chunked` forces the
+  format on, `--no-chunked` off.
+- **Displayed:** invisible when healthy — the trace boots with a brief
+  decompression progress note and replays identically; a deep jump
+  resumes from the nearest keyframe instead of replaying from event
+  zero (first jump ~115 ms while keyframes build, single-digit ms
+  after). A missing chunk is announced loudly in the banner, never
+  silently skipped. The Python readers — `--runs`, `--diverge`, map
+  heat, `checks.py` — all read chunked artifacts transparently.
+- **Why:** the single-JSON-string wall was the ceiling on everything
+  big: whole-suite traces, flight-recorder dumps, long fn-level runs.
+  Chunks remove the file-size wall; keyframes remove the
+  seek-from-zero cost. (Video codecs' I-frames — literally that.)
+- **Use case:** a whole-suite fn trace crosses 100k events; the file
+  stays small enough to attach to an issue, opens in seconds, and a
+  jump to event 200,000 doesn't replay 199,999 predecessors first.
+- **Command:** automatic past 100k events; `--chunked` / `--no-chunked`
+  to force. Replay needs `DecompressionStream` (Chrome 80+ /
+  Firefox 113+ / Safari 16.4+). (Plumbing — no screenshot; its visible
+  surface is the boot progress line and the banner.)
+
+### 103. The black-box flight recorder (`--black-box`)
+- **Measured:** recording becomes a ring buffer holding the LAST
+  `--max-events` events (fn granularity by default); older events are
+  rotated out and **counted** — the ring never truncates the run, only
+  its own memory, so the usual cap machinery stays silent. `kill -USR1
+  <pid>` dumps the current window as a normal trace WITHOUT stopping
+  the run; the end (or crash) writes the final window as usual.
+  In-process: `watch(ring=N)`.
+- **Displayed:** ordinary traces, honest about what they are: the
+  banner says how many early events rotated out — "the film starts
+  mid-run" — and snapshot dumps are separate files you can open while
+  the target keeps running.
+- **Why:** the bug that takes an hour to appear does not need an
+  hour-long trace. Pay ~nothing forever, have the film when it
+  matters — and photograph a live process mid-flight without killing
+  it.
+- **Use case:** a long spin traced with `--black-box`: 60 rounds in,
+  `kill -USR1` snapshots the live window (41 events already rotated
+  out, says the banner), the run continues, and the crash at the end
+  writes its own final window — the last moments, not the first.
+- **Command:** `python3 tracer.py --black-box server.py`, window size
+  set by `--max-events`; `kill -USR1 <pid>` for a mid-flight snapshot.
+- **Screenshot** — the banner tells the story: 175,883 events rotated out of a 120-event ring; the film starts mid-run, on a YIELD.
+
+  [![Feature 103 — black box](screenshots/103-black-box.png)](screenshots/103-black-box.png)
+
 ---
 
 ## B. Tracer — entries & environment (running other people's code)
@@ -315,6 +370,28 @@ dead or invented panel; every cap and truncation is announced.
 
   [![Feature 14 — doctor](screenshots/14-doctor.png)](screenshots/14-doctor.png)
 
+### 104. The reproducibility capsule (Tier 1)
+- **Measured:** every trace embeds the run's identity: the exact
+  command and argv, cwd, python/platform versions, `PYTHONHASHSEED`
+  (with a random-order warning when unset), a curated subset of env
+  keys, a timestamp — and the stdin bytes the run actually
+  **consumed**, captured by a lazy tee: only what was read is stored,
+  and a pipe that never closes cannot hang the start.
+- **Displayed:** the viewer's **Reproduce** box — the rerun command
+  with a copy button, the environment facts, and the consumed stdin
+  downloadable as `stdin.bin`. `watch()` traces carry a host capsule.
+- **Why:** a trace answers "what happened"; the capsule answers "can
+  anyone make it happen again" — the difference between a report and
+  a specimen. Every issue this tool produces becomes a rerunnable one.
+- **Use case:** a colleague sends `trace_solver.html`. The Reproduce
+  box hands you the exact command and the exact input bytes; one
+  paste and you are looking at the same bug live, not a description
+  of it.
+- **Command:** automatic in every trace — open the Reproduce box in
+  the viewer. (Seed capture and deterministic replay are this
+  feature's roadmap sequels, #104 Tiers 2–3.)
+- **Screenshot** — pending the next manual pass; any trace shows it.
+
 ---
 
 ## C. Replayer — navigation
@@ -415,6 +492,30 @@ dead or invented panel; every cap and truncation is announced.
 
 ---
 
+### 98. Per-test chapters — the suite dissected
+- **Measured:** `-m pytest` runs auto-inject a one-file plugin (passed
+  on the plugin module's handle — `runpy` swaps `__main__`, so the
+  obvious handoff fails); each test emits chapter events: start/end,
+  nodeid, outcome. At the end the tracer joins per-test coverage with
+  per-test outcomes — Ochiai suspiciousness (#65's math) from ONE
+  suite run.
+- **Displayed:** colored chapter spans over the scrubber (green pass,
+  red fail); the current event always labeled with its owning test;
+  TEST ▶/✓/✗ badges in the event stream; and when tests failed, THE
+  SUSPECTS appear in the banner — each ranked line clickable.
+- **Why:** a suite trace without chapters is one undifferentiated
+  river of events. With them, every event belongs to a test, a failing
+  test is a colored region you can scrub, and the pass/fail pattern
+  becomes fault localization for free.
+- **Use case:** on the verification mini-suite, the planted bug's line
+  scored 1.00 suspiciousness — trace open to bug in two clicks: click
+  the suspect, land on the line inside the failing test's span.
+- **Command:** `python3 tracer.py -m pytest tests/` — automatic for
+  pytest entries; fn granularity by default.
+- **Screenshot** — three tests as scrubber spans (green · green · red); the failing suite's suspects ranked and clickable in the banner.
+
+  [![Feature 98 — per-test chapters](screenshots/98-per-test-chapters.png)](screenshots/98-per-test-chapters.png)
+
 ### 106. Deep links — a URL that opens a moment
 - **Measured:** nothing new — the viewer state (event index, open
   variable, view choice, graph overlay) is serialized into the URL
@@ -433,8 +534,30 @@ dead or invented panel; every cap and truncation is announced.
 - **Command:** any trace; navigate, then copy the address. Out-of-range
   events clamp; unknown variables/views degrade to cells — no dead
   panel. Every feature below that names a moment composes with this.
-- **Screenshot** — pending the next manual pass; live in any trace:
-  append `#ev=20&var=<name>` to the address.
+- **Screenshot** — a pasted `#ev=100&var=adj&view=graph&ov=dist` link, freshly opened: mid-BFS, graph view up, distance tint applied, zero clicks.
+
+  [![Feature 106 — deep links](screenshots/106-deep-links.png)](screenshots/106-deep-links.png)
+
+### 109. The query bar — omniscient search
+- **Measured:** a fixed grammar evaluated over the recorded events —
+  `type:` `exc:` `fn:` `file:` `line:` `after:` `before:` `changed:`
+  `mut:` `task:` `thread:` `trip`, `VAR=value`, `VAR<n` / `VAR>n`, and
+  a bare word matches the source line's text — terms AND-composed.
+  Value tests look at recorded CHANGE moments: the facts, never
+  interpolation between them.
+- **Displayed:** `/` focuses the bar; every hit becomes a magenta pin
+  on the scrubber; Enter cycles through hits in order. A typo'd prefix
+  is reported as a typo — never a silent zero-hit.
+- **Why:** scrubbing answers "what does the run look like"; querying
+  answers questions: *when* did total first go negative, *which*
+  exceptions were born in this file — one line each, over the whole
+  recorded history at once.
+- **Use case:** `changed:total total<0` pins the first moment `total`
+  went negative — Enter, and you are there. `type:exc file:cart.py`
+  pins every exception cart.py ever raised in the run.
+- **Command:** in any trace: press `/`, type, Enter. Composes with
+  deep links (#106) — a queried moment is a shareable URL.
+- **Screenshot** — pending the next manual pass; live in any trace.
 
 ## D. Replayer — variables & data structures
 
@@ -641,8 +764,38 @@ dead or invented panel; every cap and truncation is announced.
 - **Command:** `python3 tracer.py example_prefix.py` → variable
   `running` → view `chart`; the partner select makes the portrait.
   Composes with deep links: `#ev=30&var=running&view=chart`.
-- **Screenshot** — pending the next manual pass; live via the command
-  above.
+- **Screenshot** — `running` as the staircase it is, mid-`prefix_sums` (9 changes charted), with the cells views above for contrast.
+
+  [![Feature 80 — oscilloscope](screenshots/80-oscilloscope.png)](screenshots/80-oscilloscope.png)
+
+### 120. Boundary schemas — observed interfaces at the borders (v1)
+- **Measured:** every trace (both granularities — call events carry
+  the arguments in each) aggregates, per function, the structural
+  SHAPE of its observed arguments and returns: types, dict keys,
+  nesting — `list[dict{sku, qty}]` — never values, honest to the
+  recorded depth. Per shape: how many calls, and the first event that
+  showed it. Comprehension frames are excluded (machinery, not
+  interfaces), generator resumes are not calls, and yields are not
+  return contracts.
+- **Displayed:** call and return events carry the function's
+  observed-signature panel. A function whose contract wobbled wears ⚠
+  with the distribution — `lookup(...) → dict{qty, price} 13× /
+  NoneType 1×` — and jump links to each deviant call. After the run,
+  the terminal prints a summary of every unstable interface.
+- **Why:** the wrong-shape payload — the guessed dict key, the API
+  that returns a list one day and a dict the next — crashes far
+  downstream of its cause. A schema checkpoint at the border catches
+  it at the door; in the LLM era this may be the most common bug
+  class of all.
+- **Use case:** a function returned `dict{qty, price}` thirteen times
+  and `NoneType` once. The ⚠ names the odd call out; one click and
+  you are at the arguments that produced it.
+- **Command:** automatic in every trace — watch for ⚠ on call/return
+  events, or read the terminal summary. (Cross-run schema diffing,
+  declared-schema checks and map rows are the roadmap sequel.)
+- **Screenshot** — a RETURN event wearing its observed signature: `lookup(sku: str) → ⚠ dict{qty, price} 3× / NoneType 2×`, with jump links to the deviants.
+
+  [![Feature 120 — boundary schemas](screenshots/120-boundary-schemas.png)](screenshots/120-boundary-schemas.png)
 
 ## E. Replayer — control flow & truth
 
@@ -709,6 +862,33 @@ dead or invented panel; every cap and truncation is announced.
 
 ---
 
+### 77. The whyline — "why didn't this line run?"
+- **Measured:** a static AST pass stamps every line with its innermost
+  controlling construct (then/else/loop/loop-else/except/case/def —
+  parents stamped before children, so the innermost wins by
+  construction), joined at click time with the recorded verdicts of
+  each controller (how often its condition ran, how often it was
+  true).
+- **Displayed:** click a line NUMBER. If the line executed, you jump
+  to its first execution. If it never ran, the panel answers with the
+  causal chain, one controller at a time — "the guard at line 12 ran
+  12× — 0× true — so this branch was never chosen" — each step with a
+  jump to the guard's arrivals. Bare `else:` / `try:` / `finally:`
+  headers are excluded from the dead tint: they never emit events
+  even when their bodies run.
+- **Why:** the most natural debugging question is a negative — *why
+  did nothing happen?* Negatives have no event to click. The whyline
+  gives absence a cause: the exact guards that said no, and how many
+  times they said it.
+- **Use case:** the discount branch never fires. Click its line
+  number: the eligibility guard ran 12×, true 0× — jump to an
+  arrival, and the cart totals that kept it false are on screen.
+- **Command:** any line-granularity trace — click the line number of
+  a line that didn't run (under fn granularity the panel says why it
+  can't answer).
+- **Screenshot** — pending the next manual pass; live via
+  `python3 tracer.py tinyshop/main.py`, then click a dead line.
+
 ### 79. NaN/Inf tripwire — where the poison was born
 - **Measured:** with `--trip nan`, the encoder's own bounded output is
   scanned for NaN/Inf leaves. An event records a trip when a
@@ -735,8 +915,37 @@ dead or invented panel; every cap and truncation is announced.
   granularity only (values live in line events). Honesty: only what
   encoded values visibly show is judged — beyond a cap or window is
   unknown = unmarked; C-object internals (arrays) stay invisible.
-- **Screenshot** — pending the next manual pass; live via the command
-  above.
+- **Screenshot** — the banner names the first Inf's birth in `amplify()` (click to jump); amber ☢ pins mark every poison event on the scrubber.
+
+  [![Feature 79 — NaN tripwire](screenshots/79-nan-tripwire.png)](screenshots/79-nan-tripwire.png)
+
+### 118. The console lane — stdout/stderr as events
+- **Measured:** the target's `stdout`/`stderr` are tee'd at the Python
+  layer during the run: fragmented `print()` writes joined into lines,
+  each line attributed to the nearest in-project frame that wrote it,
+  unterminated tails flushed at the end. The tracer's own heartbeat
+  and trigger prints go to the RAW streams — never recorded as target
+  output. Caps announced (20k lines); writes below the Python layer
+  (`os.write` to fd 1) bypass the tee, and the trace says so.
+- **Displayed:** a Console panel that fills as the replay advances —
+  the program's output appears when it appeared, WARNING/ERROR levels
+  colored from the recorded text (recorded, not interpreted). Click a
+  line to land on the event that wrote it; emitting events wear
+  CONSOLE badges; `type:log` finds lines in the query bar; log lines
+  become timeline instants in the Perfetto export.
+- **Why:** the print statement is the world's most-used debugger.
+  Recording the console as events makes every printed line a link
+  into the exact machine state that printed it — output and execution
+  finally on one clock.
+- **Use case:** "WARNING: negative total" scrolls by somewhere in a
+  10k-line log. Click it in the Console panel: you are at the write —
+  the stack that produced it live, the variables that made it true on
+  screen.
+- **Command:** automatic in every trace; `--no-console` disables the
+  lane.
+- **Screenshot** — the Console panel at the run's end: seven lines, the stderr WARNING colored, the current write highlighted — each one a jump.
+
+  [![Feature 118 — console lane](screenshots/118-console-lane.png)](screenshots/118-console-lane.png)
 
 ## F. Replayer — the interpreter's hidden machinery
 
@@ -1264,14 +1473,20 @@ dead or invented panel; every cap and truncation is announced.
 ## J. Infrastructure (no screenshots needed)
 
 ### 61. `checks.py` — the regression suite
-35 data-level checks (no browser): the tracer re-runs the permanent
+51 data-level checks (no browser): the tracer re-runs the permanent
 example suite and the mapper its fixtures, the embedded JSON is
-extracted from each generated HTML, and the honesty invariants are
-asserted in plain Python — windowed-change correctness, set-membership
-honesty, recursive partial flags, exception propagation chains,
-conditional verdicts, object encoding, mapper module/edge/class counts,
-settrace↔monitoring exception parity. Run before and after every
-change, always.
+extracted from each generated HTML (chunked or not), and the honesty
+invariants are asserted in plain Python — windowed-change correctness,
+set-membership honesty, recursive partial flags, exception propagation
+chains, conditional verdicts, object encoding, mapper
+module/edge/class counts, settrace↔monitoring exception parity, and
+the 2026-08 wave: runs-harness outcome classification + SBFL suspects,
+divergence depths, NaN-trip transitions, chart and query machinery,
+deep links, per-test chapters, `--check` exit codes, the black-box
+ring, capsule contents, console-lane attribution, whyline guards,
+boundary schemas. Every subprocess the suite spawns pins its stdin, so
+the result cannot depend on how the suite was invoked. Run before and
+after every change, always.
 - **Command:** `python3 checks.py` — prints the green table, exits
   non-zero on any red.
 
@@ -1315,8 +1530,9 @@ program behavior as a distribution to be measured.
   seen), the rest measured, classified, deleted. Exit 0 only if every
   run was clean, so `git bisect run` consumes it directly; Ctrl-C
   reports the runs completed so far.
-- **Screenshot** — pending the next manual pass; live via the command
-  above.
+- **Screenshot** — the whole experiment on one page: outcome bar (10× clean · 2× RuntimeError), per-class timings, the run strip, a failing run's stderr tail, the suspects.
+
+  [![Feature 63 — runs harness](screenshots/63-runs-harness.png)](screenshots/63-runs-harness.png)
 
 ### 64. The divergence finder (`--diverge A B`)
 - **Measured:** two traces' event streams, canonicalized — timestamps
@@ -1356,6 +1572,54 @@ program behavior as a distribution to be measured.
   strict prefix of the other diverges at its end. (Report is text —
   no screenshot needed.)
 
+### 65. The suspects — spectrum-based fault localization
+- **Measured:** during `--runs`, per-run coverage is collected before
+  the non-kept traces are deleted. When the run set contains BOTH
+  outcomes, every executed line is scored with Ochiai: how exclusively
+  do failing runs execute it?
+- **Displayed:** THE SUSPECTS — in `runs_<name>.html` and the
+  terminal: rank, score, `file:line`, executed-in counts (failing ·
+  passing), each suspect deep-linked (#106) into a kept failing trace.
+  The report says what the math is: correlation, not causation.
+- **Why:** statistics do the boring half of debugging before you read
+  a line of code — the lines only failing runs touch are where to
+  look first, and here they arrive ranked, clickable, attached to a
+  replayable specimen.
+- **Use case:** dogfooding caught a real one: SBFL flagged a line
+  inside the runs harness itself — an undefined variable swallowed by
+  a broad `except`. The top suspect was the bug.
+- **Command:** `python3 tracer.py --runs 20 example_flaky.py` —
+  automatic whenever runs both pass and fail. At fn granularity the
+  units are call/return/raise lines; line granularity gives
+  statement-level suspects.
+- **Screenshot** — the suspects table: the planted raise at 1.00, executed by 2/2 failing runs and 0/10 passing ones.
+
+  [![Feature 65 — SBFL suspects](screenshots/65-sbfl-suspects.png)](screenshots/65-sbfl-suspects.png)
+
+### 70. Behavioral bisect (`--check EXPR`)
+- **Measured:** EXPR is watched two ways in one run: per line against
+  the frame's variables (like `--start-when`: `"total < 0"`), and
+  once at end-of-run against the run FACTS — `error`, `exc`, `events`,
+  `output` (the console text as a queryable fact), `hit`, `hits`,
+  `tests_failed`, `truncated`.
+- **Displayed:** an exit code, by design: **1** the moment either side
+  says yes, **0** clean, **3** never-evaluable — a typo'd expression
+  must never look like a clean run. Overrides the usual
+  exit-0-when-the-target-crashes rule, and passes through `--runs`
+  (a child's hit becomes an outcome class — you can measure a rate).
+- **Why:** `git bisect` is the most powerful debugging tool that
+  nobody feeds well: it wants a yes/no oracle. `--check` turns any
+  traceable question — about state, output, exceptions, test
+  counts — into exactly that.
+- **Use case:** which commit introduced the deprecation warning?
+  `git bisect run python3 tracer.py --check "'deprecated' in output"
+  main.py` — no test to write, the console lane is the oracle. Flaky
+  version: wrap it in `--runs 10` and bisect the rate change.
+- **Command:** `python3 tracer.py --check "total < 0" script.py` —
+  state test, facts test (`--check "tests_failed > 0"` with
+  `-m pytest`), or both in one expression. (Terminal instrument — no
+  screenshot.)
+
 ## Appendix A — the manual test plan
 
 Agreed flow: work through the catalog top to bottom, ticking each
@@ -1374,3 +1638,12 @@ feature after exercising it by hand. Two codebases cover everything:
    `--doctor` (14) shows its addopts trap live; use the non-jax tests
    with `-n0`.
 3. `example_tasks.py` for 40–41 (asyncio + Perfetto).
+4. The 2026-08 additions, all in-repo: `example_flaky.py` runs the
+   whole lab — `--runs 20` (63), the SUSPECTS table (65), `--diverge`
+   on the kept clean/failing pair (64), `--check` on the failure (70).
+   Any trace at all shows 104 (Reproduce box), 106 (the address bar),
+   109 (`/`), 118 (Console panel), 120 (⚠ on an unstable interface);
+   a `tinyshop/main.py` line trace shows 77 (click a dead line);
+   `-m pytest` on a small suite shows 98 (chapters); `--black-box` on
+   `example_heavy.py` plus `kill -USR1` shows 103; 101 wants any run
+   past 100k events (a whole-suite fn trace does it).

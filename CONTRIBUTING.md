@@ -150,7 +150,7 @@ software.
 **Shipped 2026-08-01 (v1: identical-prefix alignment)** — now catalog entry #64 in [FEATURES.md](FEATURES.md), with the full measured/displayed/why/use-case record.
 
 ### 65. Spectrum-based fault localization (SBFL)
-**Shipped 2026-08-01.** Full record: the commit history and the usage docstring (`python3 tracer.py` prints it); the FEATURES.md catalog entry lands with the next docs pass.
+**Shipped 2026-08-01** — now catalog entry #65 in [FEATURES.md](FEATURES.md), with the full measured/displayed/why/use-case record.
 
 ### 66. Automatic input shrinking (delta debugging)
 - **What:** `--shrink` — given a failing run and a failure predicate
@@ -225,7 +225,7 @@ software.
   break it on the bench, not in the air.
 
 ### 70. Behavioral bisect (git × tracer)
-**Shipped 2026-08-01.** Full record: the commit history and the usage docstring (`python3 tracer.py` prints it); the FEATURES.md catalog entry lands with the next docs pass.
+**Shipped 2026-08-01** — now catalog entry #70 in [FEATURES.md](FEATURES.md), with the full measured/displayed/why/use-case record.
 
 ### 71. Differential testing against a reference implementation
 - **What:** `--oracle brute.py fast.py --fuzz GEN.py` — run two
@@ -333,7 +333,7 @@ software.
   data-lineage tooling in databases.
 
 ### 77. Whyline queries — "why didn't this line run?"
-**Shipped 2026-08-01.** Full record: the commit history and the usage docstring (`python3 tracer.py` prints it); the FEATURES.md catalog entry lands with the next docs pass.
+**Shipped 2026-08-01** — now catalog entry #77 in [FEATURES.md](FEATURES.md), with the full measured/displayed/why/use-case record.
 
 ### 78. Nontermination detector (state recurrence)
 - **What:** for a loop suspected of hanging: hash (line, frame's
@@ -667,7 +667,7 @@ software.
   the join is the feature.
 
 ### 98. Per-test chapters (the suite dissected)
-**Shipped 2026-08-01.** Full record: the commit history and the usage docstring (`python3 tracer.py` prints it); the FEATURES.md catalog entry lands with the next docs pass.
+**Shipped 2026-08-01** — now catalog entry #98 in [FEATURES.md](FEATURES.md), with the full measured/displayed/why/use-case record.
 
 ### 99. Import-cost view (startup autopsy)
 - **What:** a dedicated report from any fn trace: time under each
@@ -701,7 +701,7 @@ software.
 ## Section 6 — Scale & interchange
 
 ### 101. Chunked trace + keyframes (the long-planned scale unlock)
-**v1 shipped 2026-08-01** — gzip+base64 chunks past 100k events, async loading, lazy keyframes every 64k. What REMAINS of this entry is the XL sequel: the truly windowed O(window) replayer.
+**v1 shipped 2026-08-01** — now catalog entry #101 in [FEATURES.md](FEATURES.md): gzip+base64 chunks past 100k events, async loading, lazy keyframes every 64k. What REMAINS of this entry is the XL sequel: the truly windowed O(window) replayer.
 
 - **What:** break the single embedded JSON into gzipped chunks with
   periodic full-state **keyframes**; the replayer loads O(window)
@@ -733,10 +733,10 @@ software.
   sysmon-based speedups prove the win is real.
 
 ### 103. Black-box flight recorder
-**Shipped 2026-08-01.** Full record: the commit history and the usage docstring (`python3 tracer.py` prints it); the FEATURES.md catalog entry lands with the next docs pass.
+**Shipped 2026-08-01** — now catalog entry #103 in [FEATURES.md](FEATURES.md), with the full measured/displayed/why/use-case record.
 
 ### 104. Reproducibility capsule (tiers of rr)
-**Tier 1 shipped 2026-08-01** — capsule embedded (cmd, cwd, env facts, lazily-tee'd consumed stdin) with the viewer's Reproduce box. Tiers 2–3 below (--seed-all; deterministic replay) remain.
+**Tier 1 shipped 2026-08-01** — now catalog entry #104 in [FEATURES.md](FEATURES.md): capsule embedded (cmd, cwd, env facts, lazily-tee'd consumed stdin) with the viewer's Reproduce box. Tiers 2–3 below (--seed-all; deterministic replay) remain.
 
 - **What:** Tier 1 (S): every trace embeds the run's capsule — argv,
   cwd, env subset, python/platform versions, stdin **tee'd** into
@@ -809,7 +809,7 @@ software.
   guides; CodeTour (VS Code) — which tours *source*, not *execution*.
 
 ### 109. The query bar (omniscient search)
-**Shipped 2026-08-01.** Full record: the commit history and the usage docstring (`python3 tracer.py` prints it); the FEATURES.md catalog entry lands with the next docs pass.
+**Shipped 2026-08-01** — now catalog entry #109 in [FEATURES.md](FEATURES.md), with the full measured/displayed/why/use-case record.
 
 ### 110. Dual synced replayers
 - **What:** open two traces side by side with linked cursors —
@@ -935,7 +935,7 @@ checked against this list; most of both were already covered
 notes the section it thematically belongs to.
 
 ### 118. Console & logging lane (stdout/stderr/logging as events)
-**Shipped 2026-08-01.** Full record: the commit history and the usage docstring (`python3 tracer.py` prints it); the FEATURES.md catalog entry lands with the next docs pass.
+**Shipped 2026-08-01** — now catalog entry #118 in [FEATURES.md](FEATURES.md), with the full measured/displayed/why/use-case record.
 
 ### 119. Dynamic edges — what the run saw that the parse couldn't
 *(belongs with Section 5 — the map)*
@@ -964,7 +964,7 @@ notes the section it thematically belongs to.
   layers.
 
 ### 120. Boundary schemas — observed interfaces at the borders
-**v1 shipped 2026-08-01** — per-run observed interfaces with instability warnings and deviant-call jumps. What remains: cross-run diffing, declared-schema checks, map rows.
+**v1 shipped 2026-08-01** — now catalog entry #120 in [FEATURES.md](FEATURES.md): per-run observed interfaces with instability warnings and deviant-call jumps. What remains: cross-run diffing, declared-schema checks, map rows.
 
 *(belongs with Section 2/3 — causality & instruments)*
 - **What:** at function/module boundaries, record the *structural

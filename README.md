@@ -27,7 +27,10 @@ Two tools that share one JSON event-log format:
   variables changed) into a self-contained `trace_*.html` you step through
   like a video. Semantic views per data structure (a list is a row of cells,
   a graph is nodes and edges), asyncio tasks shown as parallel lanes, and
-  Perfetto timeline export.
+  Perfetto timeline export. Every trace also records the console (click a
+  printed line → the moment that wrote it) and embeds a reproducibility
+  capsule: the exact command, environment facts and consumed stdin needed
+  to run it again.
 - **`mapper.py`** — reads a codebase with `ast` (**nothing is executed**) into
   a zoomable `map_*.html`: modules laid out by import depth, packages that
   fold, import cycles drawn in red, and the "load-bearing walls" ranked by how
@@ -44,6 +47,10 @@ python3 tracer.py --runs 20 flaky.py            # run it 20x: outcome stats,
 python3 tracer.py --diverge good.html bad.html  # first event where two runs
                                                 #    part ways (cause, then symptom)
 python3 tracer.py --trip nan sim.py             # where the first NaN was BORN
+python3 tracer.py --check "total < 0" app.py    # any question about a run as an
+                                                #    exit code -> git bisect's oracle
+python3 tracer.py --black-box server.py         # flight recorder: ring of the LAST
+                                                #    N events; kill -USR1 = live snapshot
 ```
 
 Open the HTML in any browser. No server, no build step, no dependencies.
@@ -87,7 +94,7 @@ your target language). Both are laid out in
 ## Tests
 
 ```bash
-python3 checks.py     # data-level regression suite — should print all green
+python3 checks.py     # 51 data-level checks — should print all green
 ```
 
 Every feature is pinned by a check. Run it before and after any change; a
@@ -97,7 +104,7 @@ green suite is the contract that keeps contributions honest.
 
 Bug reports, edge cases, more example programs, and **other languages** are
 all very welcome. **[CONTRIBUTING.md](CONTRIBUTING.md) is the place to start** — one file
-with the roadmap of what to build (59 unbuilt features plus a "good first"
+with the roadmap of what to build (49 unbuilt features plus a "good first"
 list), the ground rules, and the event-log schema a new-language backend emits.
 
 ## License

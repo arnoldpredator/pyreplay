@@ -1272,7 +1272,8 @@ if (DATA.memory && DATA.memory.samples && DATA.memory.samples.length) {
   const s = document.createElement("span");
   s.textContent = " 📈 memory (tracemalloc) — peak " + hb(M.peak) +
     " traced" +
-    (top ? " · high-water top: " + top[0] + " " + hb(top[1]) : "") +
+    (top ? " · your code's peak top: " + top[0] + " " + hb(top[1])
+      : "") +
     (M.capped ? " · sampling capped" : "") +
     " — Python-level only (C-extension memory invisible); process " +
     "totals include the tracer's own buffer.";

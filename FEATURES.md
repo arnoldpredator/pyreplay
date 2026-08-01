@@ -3164,7 +3164,10 @@ Statistics over many runs: rates instead of anecdotes, divergences instead of gu
   on your behalf is kept and attributed to the line that triggered
   it, while the dozens of transitive stdlib imports (and the module
   bodies importlib `exec`s) are filtered out — direct imports and
-  dynamic code are yours, the rest is plumbing.
+  dynamic code are yours, the rest is plumbing. File coverage is
+  every flavor, not just the bare `open()` name: `os.open`, `io.open`
+  and `pathlib` all surface (they share the `open` audit event);
+  bytecode-cache (`.pyc`) reads are excluded as mechanism, not data.
 - **Displayed:** a **⇄ I/O lane** banner with per-kind counts and the
   leak verdict; each operation gets its own event (badge, a panel
   line spelling it out, `type:io` in the query bar) and a pin on a
@@ -3245,10 +3248,14 @@ Statistics over many runs: rates instead of anecdotes, divergences instead of gu
   says where it *retained*. `--memory` samples `tracemalloc` through
   the run — cheap current/peak totals every stride events build a
   growth curve, and a full snapshot at a coarser cadence attributes
-  bytes to the modules that hold them (in-scope files only, so the
-  tracer's own event buffer never pollutes the per-module numbers).
-- **Displayed:** a **📈 memory** banner with the peak and the
-  high-water top module; a growth strip-chart under the scrubber —
+  bytes to the modules that hold them — keeping the distribution of
+  the snapshot where **your code's** in-scope bytes were largest
+  (decoupled from the tracer's own event buffer, which is out of
+  scope and grows to the end). The exact peak may fall between
+  snapshots; the report says which one it kept.
+- **Displayed:** a **📈 memory** banner with the peak and the module
+  that held the most at your code's peak; a growth strip-chart under
+  the scrubber —
   a filled area for current traced bytes with the peak (a monotonic
   high-water mark) as a line above it, click-to-jump to the nearest
   sample. A leak announces itself as a rising floor *while it grows*,
@@ -3279,7 +3286,7 @@ Statistics over many runs: rates instead of anecdotes, divergences instead of gu
   trace payload and prints at exit; painting it onto the map is the
   follow-up.
 - **Screenshot** — the growth curve under the scrubber and the 📈
-  banner with the peak and the high-water top module.
+  banner with the peak and the top module at your code's peak.
 
   [![Feature 122 — memory calorimetry](screenshots/r6-memory.png)](screenshots/r6-memory.png)
 

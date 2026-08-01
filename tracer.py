@@ -1176,9 +1176,20 @@ class _Injector:
 
 IO_CAP = 5000            # recorded I/O events before the lane caps
 
-# event name -> (kind, formatter(args) -> detail str). Imports are
-# recorded DIRECT-only (see _Io); the rest attribute transitively.
+def _io_open(a):
+    # the `open` audit fires for builtins.open, io.open, os.open AND
+    # pathlib — args are (path, mode, flags). os.open passes no mode
+    # (an int flag set instead); say so rather than print an empty ()
+    path = _io_str(a[0]) if a else "?"
+    mode = a[1] if len(a) > 1 and a[1] else None
+    return f"{path} ({mode})" if mode else f"{path} (fd/os-level)"
+
+
+# event name -> (kind, formatter(args) -> detail str). Imports and
+# dynamic code are recorded DIRECT-only (see the hook); the rest —
+# including every flavor of file open — attribute transitively.
 _IO_EVENTS = {
+    "open": ("file", _io_open),
     "socket.connect": ("net", lambda a: _io_addr(a[1])),
     "socket.getaddrinfo": ("net", lambda a: "resolve " + str(a[0])),
     "socket.bind": ("net", lambda a: "bind " + _io_addr(a[1])),
@@ -1236,11 +1247,41 @@ def _io_audit_hook(event, args):
         return
     try:
         kind, fmt = spec
+        if kind == "file":
+            # Two file opens to reject. (1) The tracer reading its own
+            # source: a tracer.py frame OTHER than the open() wrapper
+            # sits between the open and any target frame. (Every open
+            # now routes through wrapped_open, itself in tracer.py, so
+            # a bare SELF check would wrongly drop the target's plain
+            # open() too — walk PAST the wrapper.) (2) The import
+            # system reading bytecode cache — mechanism, not data.
+            detail = fmt(args)
+            if "__pycache__" in detail or detail.split(" (")[0] \
+                    .endswith((".pyc", ".pyo")):
+                return
+            f = sys._getframe(1)
+            d = 0
+            while f is not None and d < 12:
+                cf = f.f_code.co_filename
+                if cf == SELF:
+                    if f.f_code.co_name != "wrapped_open":
+                        return       # a tracer method opened this
+                else:
+                    break            # reached real code: a true op
+                f = f.f_back
+                d += 1
+            frame = tr._io_frame(direct_only=False)
+            if frame is None:
+                return
+            idx = tr.record_io(kind, event, detail, frame)
+            if idx is not None:
+                tr._io_pending[threading.get_ident()] = idx
+            return
         # imports AND dynamic code fire transitively for every stdlib
         # module a target pulls in (importlib exec's each module body)
-        # — record only the ones your own code wrote DIRECTLY. File,
-        # net and subprocess stay transitive: a library opening a
-        # socket on your behalf is exactly what you want to see.
+        # — record only the ones your own code wrote DIRECTLY. Net and
+        # subprocess stay transitive: a library opening a socket on
+        # your behalf is exactly what you want to see.
         frame = tr._io_frame(direct_only=(kind in ("import", "code")))
         if frame is None:
             return
@@ -1266,19 +1307,19 @@ def _install_io(tracer):
     real = _IO_REAL_OPEN
 
     def wrapped_open(file, mode="r", *a, **kw):
+        # the `open` audit event (fired inside real()) already RECORDED
+        # this open — for every flavor (builtins/io/os/pathlib). Our
+        # only job here is to pair the returned handle with that event
+        # so an unclosed file is named at exit; the audit hook stashed
+        # the event index for this thread.
         fh = real(file, mode, *a, **kw)
         tr = _IO_ACTIVE
         if tr is not None:
             try:
-                # the tracer reads source files through its OWN open
-                # calls (immediate caller = SELF) — never the target's
-                caller = sys._getframe(1)
-                if caller.f_code.co_filename != SELF:
-                    frame = tr._io_frame(direct_only=False)
-                    if frame is not None:
-                        tr.record_io("file", "open",
-                                     f"{_io_str(file)} ({mode})",
-                                     frame, handle=fh)
+                idx = tr._io_pending.pop(threading.get_ident(), None)
+                if idx is not None:
+                    tr._io_handles.append(
+                        (weakref.ref(fh), idx, _io_str(file)))
             except Exception:
                 pass
         return fh
@@ -1531,6 +1572,8 @@ class Tracer:
         self._io_capped = False
         self._io_handles = []   # (weakref(fh), event index, path) for
         #                         open/close pairing — leaks named at end
+        self._io_pending = {}   # thread ident -> the file event index
+        #                         awaiting its handle from wrapped open()
         self.memory = False     # roadmap #6: tracemalloc calorimetry
         self._mem_samples = []  # [event_index, current bytes, peak bytes]
         self._mem_stride = 25   # events between cheap (cur,peak) samples
@@ -1538,8 +1581,8 @@ class Tracer:
         self._mem_snap_stride = 500   # events between per-file snapshots
         self._mem_snap_last = 0
         self._mem_peak = 0
-        self._mem_perfile = {}        # rel file -> bytes at the high-water
-        self._mem_perfile_peak = -1   # the peak this distribution came from
+        self._mem_perfile = {}        # rel file -> bytes at the largest snap
+        self._mem_perfile_cur = -1    # current bytes when it was captured
         self._mem_capped = False
         # False = watching but not recording
         self.armed = start_at is None and start_when is None
@@ -1812,17 +1855,17 @@ class Tracer:
             depth += 1
         return None
 
-    def record_io(self, kind, op, detail, frame, handle=None):
+    def record_io(self, kind, op, detail, frame):
         """Roadmap #5: one I/O operation as a first-class event
-        (e="io") on the lane, tied to the frame that caused it. A file
-        handle is tracked (weakref) so a close that never comes is
-        named at trace end — the honesty contract's resource half."""
+        (e="io") on the lane, tied to the frame that caused it. Returns
+        the event's index (so the open() wrapper can pair the returned
+        handle for leak detection) or None if nothing was recorded."""
         if not self.armed or self.truncated \
                 or len(self.events) >= self.max_events:
-            return
+            return None
         if self._io_count >= IO_CAP:
             self._io_capped = True
-            return
+            return None
         self._io_count += 1
         rel, lineno, fn = frame
         ev = {"e": "io", "io": kind, "op": op,
@@ -1839,22 +1882,16 @@ class Tracer:
         if tk is not None:
             ev["tk"] = tk
         self.events.append(ev)
-        if handle is not None:
-            try:
-                self._io_handles.append(
-                    (weakref.ref(handle), len(self.events) - 1,
-                     detail))
-            except TypeError:
-                pass          # some handles aren't weakref-able
+        return len(self.events) - 1
 
     def _mem_tick(self):
         """Roadmap #6: sample tracemalloc during the run. Cheap
         (current, peak) totals every stride events build the growth
         curve; a full snapshot every snap-stride events attributes
-        bytes to the modules that hold them (the high-water
-        distribution is kept — where the memory was when it peaked).
-        Bounded: the stride doubles as samples accumulate so a huge
-        run stays a few thousand points, not one per event."""
+        bytes to the modules that hold them (the distribution of the
+        LARGEST snapshot is kept — where memory lived when the most
+        was held; see _absorb_perfile). Bounded: the stride doubles as
+        samples accumulate so a huge run stays a few thousand points."""
         if not self.memory or not self.armed:
             return
         n = len(self.events)
@@ -1871,7 +1908,7 @@ class Tracer:
             self._mem_snap_last = n
             try:
                 snap = tracemalloc.take_snapshot()
-                self._absorb_perfile(snap, peak)
+                self._absorb_perfile(snap)
             except Exception:
                 pass
         self._mem_samples.append([n, cur, peak])
@@ -1884,14 +1921,18 @@ class Tracer:
             self._mem_capped = True
             self.memory = False   # stop sampling; peak already held
 
-    def _absorb_perfile(self, snap, peak):
+    def _absorb_perfile(self, snap):
         """Per-module bytes from a snapshot — in-scope files only, so
         the tracer's OWN event buffer (allocated in tracer.py, out of
-        scope) never pollutes the module palette. Kept only when this
-        snapshot is a new high-water mark: the map shows where memory
-        lived when the process held the most."""
-        if peak < self._mem_perfile_peak:
-            return
+        scope) never pollutes the module palette. Kept only when the
+        IN-SCOPE total exceeds every earlier snapshot's: the
+        distribution then reflects where YOUR code's memory peaked
+        among the samples, independent of the tracer buffer (which
+        grows to the end, so keying on total current would drag the
+        distribution toward the end state — and keying on the
+        monotonic PEAK, the original bug, let every snapshot incl. the
+        final post-free one overwrite). The exact peak may fall
+        between snapshots; this is the largest one we sampled."""
         dist = {}
         try:
             stats = snap.statistics("filename")
@@ -1903,8 +1944,9 @@ class Tracer:
             rel = self._rel(fn) if fn else None
             if rel is not None:
                 dist[rel] = dist.get(rel, 0) + st.size
-        if dist:
-            self._mem_perfile_peak = peak
+        in_scope = sum(dist.values())
+        if dist and in_scope > self._mem_perfile_cur:
+            self._mem_perfile_cur = in_scope
             self._mem_perfile = dist
 
     def resolve_io(self):
@@ -8303,12 +8345,15 @@ def main(argv):
         if io_undo is not None:
             io_undo()
         if mem_started:
-            # capture the final high-water distribution before stopping
+            # a final point + snapshot, competing FAIRLY on current
+            # bytes: it wins the per-module distribution only if the
+            # run genuinely held the most at the end (short runs, or
+            # growth to exit). It must NOT overwrite a bigger earlier
+            # snapshot with post-free end-state — the old bug.
             try:
-                tracer._absorb_perfile(tracemalloc.take_snapshot(),
-                                       tracer._mem_peak)
                 cur, peak = tracemalloc.get_traced_memory()
                 tracer._mem_peak = max(tracer._mem_peak, peak)
+                tracer._absorb_perfile(tracemalloc.take_snapshot())
                 tracer._mem_samples.append([len(tracer.events),
                                             cur, peak])
             except Exception:
@@ -8418,18 +8463,21 @@ def main(argv):
         peak = tracer._mem_peak
         perfile = dict(sorted(tracer._mem_perfile.items(),
                               key=lambda kv: -kv[1]))
+        snap_cur = tracer._mem_perfile_cur
         mem_report = {"peak": peak,
                       "samples": tracer._mem_samples,
                       "perFile": perfile,
-                      "perFilePeak": tracer._mem_perfile_peak,
+                      "perFileAt": snap_cur if snap_cur >= 0 else None,
                       "capped": tracer._mem_capped}
         print(f"memory (tracemalloc): peak {_hb(peak)} traced across "
               f"{len(tracer._mem_samples)} sample(s)"
               + ("; sampling capped — the curve coarsens past the cap"
                  if tracer._mem_capped else ""), flush=True)
         if perfile:
-            print("  where it lived at the high-water mark "
-                  "(Python-level, in-scope modules):", flush=True)
+            print(f"  where YOUR code's memory peaked among the "
+                  f"samples ({_hb(snap_cur)} in-scope; the exact peak "
+                  f"may fall between snapshots) — Python-level:",
+                  flush=True)
             for f, b in list(perfile.items())[:5]:
                 print(f"    {_hb(b):>10}  {f}", flush=True)
         print("  note: totals include the tracer's own event buffer; "

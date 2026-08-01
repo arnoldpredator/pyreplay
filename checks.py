@@ -4745,6 +4745,38 @@ def _():
                    name="mem6fn")
     expect(pf["memory"] and len(pf["memory"]["samples"]) >= 2,
            "the growth curve records at fn granularity too")
+    # REGRESSION GUARD (the bug study): the per-module distribution
+    # must reflect the HIGH-WATER moment, not the end state. A big
+    # allocation freed before exit peaked the run; if the distribution
+    # keyed on the monotonic PEAK (or the final post-free snapshot
+    # overwrote it), the module would read ~0 — the spike hidden
+    # exactly where it lived. It must be captured near the peak.
+    hw = fixture("mem6_hw.py", (
+        "def hold():\n"
+        "    big = [[i] * 100 for i in range(3000)]\n"
+        "    return sum(len(x) for x in big)\n"
+        "\n"
+        "def tiny():\n"
+        "    return [1, 2, 3]\n"
+        "\n"
+        "n = hold()\n"
+        "for _ in range(400):\n"
+        "    tiny()\n"
+        "print('n', n)\n"))
+    ph = run_trace(hw, "--memory", name="mem6hw")
+    mh = ph["memory"]
+    # the big list (~MB, in-scope) must be visible in its module, not
+    # hidden as a few hundred post-free end-state bytes
+    expect(mh["perFile"].get("mem6_hw.py", 0) > 500_000,
+           f"the peak allocation must appear in its module, not the "
+           f"post-free residue: {mh['perFile']}")
+    # perFileAt reports the IN-SCOPE bytes at the captured snapshot —
+    # it must equal that snapshot's in-scope total (the big list),
+    # decoupled from the tracer buffer that grows to the end
+    at = mh.get("perFileAt") or 0
+    expect(at >= mh["perFile"].get("mem6_hw.py", 0),
+           f"perFileAt is the in-scope total at capture: {at} vs "
+           f"{mh['perFile']}")
     # gates, each with its reason
     def gate(*flags):
         out = os.path.join(TMP, "mem6_gate.html")
@@ -4804,15 +4836,24 @@ def _():
     kinds = {}
     for e in io:
         kinds[e["io"]] = kinds.get(e["io"], 0) + 1
-    expect(kinds.get("file") == 3, f"3 file opens (2 cfg + scratch): "
-           f"{kinds}")
+    # the three EXPLICIT opens are present (the lane may also record
+    # os-level opens like subprocess pipes — broader coverage is the
+    # point, so assert the named files, not an exact count)
+    fdetails = [e["d"] for e in io if e["io"] == "file"]
+    for want in ("io5_cfg.json (w)", "io5_cfg.json (r)",
+                 "io5_scratch.txt (w)"):
+        expect(any(d.startswith(want.split(" (")[0]) for d in fdetails),
+               f"{want} must appear in the file lane: {fdetails}")
     expect(kinds.get("proc") == 1 and kinds.get("code") == 2,
            f"one subprocess + the direct exec's compile/exec: {kinds}")
     # transitive imports must NOT flood: json/subprocess pull in dozens
-    # of stdlib modules; only YOUR direct import line is signal
+    # of stdlib modules; only YOUR direct import line is signal, and
+    # bytecode-cache (.pyc) reads must never enter the lane
     expect(kinds.get("import", 0) <= 1,
            f"transitive stdlib imports must not flood the lane: "
            f"{kinds}")
+    expect(not any(".pyc" in d or "__pycache__" in d for d in fdetails),
+           f"import bytecode-cache reads must be excluded: {fdetails}")
     # every event attributes to the target — never to tracer.py, and
     # never to the import machinery
     expect(all(e["f"] == "io5.py" for e in io),
@@ -4831,7 +4872,7 @@ def _():
            and leaks[0]["fn"] == "leak",
            f"exactly the unclosed file is flagged, at its site: "
            f"{leaks}")
-    expect(p["io"]["leaks"] == 1 and p["io"]["total"] == 6,
+    expect(p["io"]["leaks"] == 1,
            f"payload io summary: {p['io']}")
     expect("UNCLOSED at exit" in r.stdout
            and "io5_scratch.txt" in r.stdout,
@@ -4841,10 +4882,33 @@ def _():
               and e["d"].endswith("(r)")]
     expect(closed and not closed[0].get("leak"),
            "a properly closed file is never flagged")
+    # REGRESSION GUARD (the bug study): opens via os.open, io.open and
+    # pathlib — NOT the plain builtins.open name — must all be caught;
+    # early builds saw only the global open() and missed these three
+    cov = fixture("io5_cov.py", (
+        "import os, io, pathlib\n"
+        "fd = os.open('io5_x.txt', os.O_CREAT | os.O_WRONLY)\n"
+        "os.close(fd)\n"
+        "with io.open('io5_y.txt', 'w') as fh:\n"
+        "    fh.write('y')\n"
+        "pathlib.Path('io5_z.txt').write_text('z')\n"
+        "with open('io5_w.txt', 'w') as fh:\n"
+        "    fh.write('w')\n"))
+    out = os.path.join(TMP, "io5_cov.html")
+    subprocess.run([PY, os.path.join(HERE, "tracer.py"), "--out", out,
+                    "--io", cov], capture_output=True, text=True,
+                   cwd=TMP, stdin=subprocess.DEVNULL, timeout=120)
+    pc = payload(out)
+    covfiles = {e["d"].split()[0] for e in pc["events"]
+                if e.get("e") == "io" and e["io"] == "file"}
+    for want in ("io5_x.txt", "io5_y.txt", "io5_z.txt", "io5_w.txt"):
+        expect(want in covfiles,
+               f"{want} (os.open/io.open/pathlib/builtins) must be "
+               f"caught — coverage is not builtins-only: {covfiles}")
     # audit hooks fire at fn granularity too (no line events needed)
     r2, p2 = run("--granularity", "fn")
     io2 = [e for e in p2["events"] if e.get("e") == "io"]
-    expect(len(io2) == 6 and p2["io"]["leaks"] == 1,
+    expect(len(io2) >= 6 and p2["io"]["leaks"] == 1,
            f"the lane works in fn mode (audit hooks are granularity-"
            f"independent): {len(io2)} events")
     # a clean program says so honestly, never invents activity

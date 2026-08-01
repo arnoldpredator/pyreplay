@@ -128,6 +128,16 @@ still owns the schedule: biased exploration, not replay). Under
 without" becomes an afternoon's sentence. Timings under chaos are not
 performance truth; --export-perfetto is refused.
 
+Concurrent fn traces also compute their CRITICAL PATH (#89): the
+longest dependency chain — through call nesting, #88 wake edges and
+same-thread task switches — that determined total wall time. Speeding
+up anything off it is wasted work. The viewer banner names it with
+gold scrubber pins to walk; --export-perfetto adds a dedicated
+"★ critical path" row plus a ★ on each critical slice. Gaps nobody
+was running in are UNTRACKED EXTERNAL WAITS (sleep, network, OS) —
+counted and attributed, never hidden. Ties are broken arbitrarily:
+this is A critical path, not THE unique one.
+
 Every run also records WHO WOKE WHOM (#88): thread started/joined and
 asyncio task created (create_task, ensure_future, gather and TaskGroup
 all funnel through it) land as first-class ⤳ wake events at the exact
@@ -2311,6 +2321,66 @@ def annotate_conditionals(events, sources):
         frame["prev"] = ev["l"]
 
 
+def _critical_path(events):
+    """#89: the chain that determined total wall time. Every µs of the
+    run is attributed to the INNERMOST slice open anywhere in the
+    process at that instant — under the GIL one thread computes at a
+    time, so this spine IS the computation's critical chain, crossing
+    lanes exactly where awaits, wakes and joins handed control over.
+    Instants where NOTHING traced was open are UNTRACKED EXTERNAL
+    WAITS (sleep, network, OS, untraced library code) — counted,
+    never hidden. Needs >= 2 lanes: a sequential run's critical path
+    is the whole run, a claim with no content. True multi-core DAG
+    analysis (parallel threads genuinely overlapping) is the stated
+    remainder."""
+    open_list = []   # [call_idx, lane, still_open] in call order
+    by_lane = {}     # lane -> stack of indexes into open_list
+    segs = []        # [t0, t1, call_idx] — the spine, merged
+    lanes_seen = set()
+    abs_t = 0
+    gaps = 0
+    for i, e in enumerate(events):
+        dt = e.get("ts", 0)
+        if dt:
+            top = None
+            for k in range(len(open_list) - 1, -1, -1):
+                if open_list[k][2]:
+                    top = open_list[k]
+                    break
+            if top is None:
+                gaps += dt
+            elif segs and segs[-1][2] == top[0] \
+                    and segs[-1][1] == abs_t:
+                segs[-1][1] = abs_t + dt
+            else:
+                segs.append([abs_t, abs_t + dt, top[0]])
+            abs_t += dt
+        k = e.get("e")
+        lane = (e.get("t", "main"), e.get("tk"))
+        if k == "call":
+            by_lane.setdefault(lane, []).append(len(open_list))
+            open_list.append([i, lane, True])
+            lanes_seen.add(lane)
+        elif k == "return":
+            st = by_lane.get(lane)
+            if st:
+                open_list[st.pop()][2] = False
+    if not segs or len(lanes_seen) < 2:
+        return None
+    evs, seen = [], set()
+    for _t0, _t1, ci in segs:
+        if ci not in seen:
+            seen.add(ci)
+            evs.append(ci)
+    return {"evs": evs,
+            "segs": segs,
+            "n": len(evs),
+            "lanes": len({(events[ci].get("t", "main"),
+                           events[ci].get("tk")) for ci in evs}),
+            "spanUs": abs_t,
+            "gapUs": gaps}
+
+
 def export_perfetto(events, script, path):
     """#15: Chrome Trace Event Format for Perfetto (ui.perfetto.dev) or
     chrome://tracing — B/E slice pairs from call/return events, absolute
@@ -2324,9 +2394,11 @@ def export_perfetto(events, script, path):
     tevs = [{"ph": "M", "name": "process_name", "pid": 1, "tid": 0,
              "args": {"name": "pyreplay: " + script}}]
     lanes = {}     # lane label -> tid
-    open_b = {}    # tid -> names of B slices not yet closed by an E
+    open_b = {}    # tid -> (name, call idx, start ts) of open B slices
     stray = 0      # returns whose call predates the trace: skipped
     hb_flows = []  # #88: wake edges, bound to slices in a second pass
+    crit = _critical_path(events)          # #89: gold in the export
+    critset = set(crit["evs"]) if crit else set()
     acc = 0
 
     def brief(enc):
@@ -2337,7 +2409,7 @@ def export_perfetto(events, script, path):
             return str(enc.get("v", ""))
         return f"<{enc.get('c') or enc.get('t')} · {enc.get('n', '?')} items>"
 
-    for ev in events:
+    for i, ev in enumerate(events):
         acc += ev.get("ts", 0)
         lane = ev.get("t", "main")
         if ev.get("tk"):
@@ -2354,14 +2426,17 @@ def export_perfetto(events, script, path):
                  "args": {k: brief(v) for k, v in ev.get("ch", {}).items()}}
             if (ev.get("g") or {}).get("s") == "r":
                 e["args"]["(resumed)"] = "suspended frame woke up here"
+            if i in critset:
+                e["args"]["(critical)"] = "★ on the critical path"
             tevs.append(e)
-            open_b.setdefault(tid, []).append(ev["fn"])
+            open_b.setdefault(tid, []).append((ev["fn"], i, acc))
         elif kind == "return":
             st = open_b.get(tid)
             if not st:
                 stray += 1
                 continue
-            e = {"ph": "E", "name": st.pop(), "ts": acc, "pid": 1,
+            bname, bci, b0 = st.pop()
+            e = {"ph": "E", "name": bname, "ts": acc, "pid": 1,
                  "tid": tid}
             if (ev.get("g") or {}).get("s") == "y":
                 e["args"] = {"(suspended)": "yield/await — resumes later",
@@ -2417,7 +2492,8 @@ def export_perfetto(events, script, path):
     for tid, st in open_b.items():
         while st:   # frames still live when the trace ended: close at
             unclosed += 1   # the final timestamp, and say so
-            tevs.append({"ph": "E", "name": st.pop(), "ts": acc, "pid": 1,
+            bname, bci, b0 = st.pop()
+            tevs.append({"ph": "E", "name": bname, "ts": acc, "pid": 1,
                          "tid": tid,
                          "args": {"(unclosed)": "frame still live when "
                                                 "the trace ended"}})
@@ -2462,6 +2538,19 @@ def export_perfetto(events, script, path):
             tevs.append({"ph": "f", "id": fid, "name": "wake",
                          "cat": "wake", "bp": "e", "ts": dst["ts"],
                          "pid": 1, "tid": dst_tid})
+    if crit:
+        # #89: the critical path as its OWN row — the run's spine read
+        # left to right, segment-exact; gaps in the row are the
+        # untracked external waits. Critical slices also wear ★ in args.
+        KTID = 9999
+        tevs.append({"ph": "M", "name": "thread_name", "pid": 1,
+                     "tid": KTID, "args": {"name": "★ critical path"}})
+        for t0, t1, ci in crit["segs"]:
+            nm = events[ci].get("fn", "?")
+            tevs.append({"ph": "B", "name": nm, "cat": "critical",
+                         "ts": t0, "pid": 1, "tid": KTID})
+            tevs.append({"ph": "E", "name": nm, "cat": "critical",
+                         "ts": t1, "pid": 1, "tid": KTID})
     with open(path, "w", encoding="utf-8") as f:
         json.dump({"traceEvents": tevs,
                    "otherData": {"tool": "pyreplay", "script": script}}, f)
@@ -4005,6 +4094,8 @@ def main(argv):
     extra = {"capsule": capsule,
              "ring": ring_info,
              "chaos": tracer.chaos.report() if tracer.chaos else None,
+             "critical": _critical_path(tracer.events)
+             if granularity == "fn" else None,
              "invariants": [{"src": s,
                              "n": tracer.inv_counts.get(s, 0),
                              "first": tracer.inv_first.get(s),

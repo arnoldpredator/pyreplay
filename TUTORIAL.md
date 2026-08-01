@@ -450,6 +450,17 @@ reopens on resume, so suspension shows as a real gap in the row.
 Honesty rule as always: line traces carry no timestamps, so
 `--export-perfetto` refuses to run without `--granularity fn`.
 
+**The critical path (★).** A concurrent fn trace names the chain that
+determined its wall time: every microsecond is attributed to the
+innermost slice open anywhere in the process — under the GIL, that
+spine *is* the computation's critical path, crossing lanes exactly
+where awaits and joins handed control over. The banner gives the
+verdict ("16 slices across 4 lanes determined the 62.3 ms run —
+28.5 ms of it untracked external waits"), gold scrubber pins walk it,
+and the Perfetto export gains a dedicated ★ row with the spine read
+left to right. Speeding up anything off the path is wasted work — and
+instants where nothing traced ran are counted as waits, never hidden.
+
 **Who woke whom (the ⤳ arrows).** Every trace records the wake edges
 as first-class events: thread started/joined, asyncio task created
 (`create_task`, `ensure_future`, `gather` and `TaskGroup` all funnel

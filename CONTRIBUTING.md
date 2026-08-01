@@ -7,7 +7,7 @@ can pick an item and implement it. Features are numbered **#63 onward**, continu
 in FEATURES.md. Fifteen roadmap items have shipped since the list was
 written (63, 64, 65, 70, 77, 79, 80, 98, 101 v1, 103, 104 Tier 1,
 106, 109, 118, 120 v1) — their rows below are struck through;
-**41 remain unbuilt** (plus the stated remainders of 75/88/101/104/119/120).
+**40 remain unbuilt** (plus the stated remainders of 75/88/89/101/104/119/120).
 
 ## Start here — how to contribute
 
@@ -95,7 +95,7 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
 | 86 | Ternary/short-circuit verdicts via BRANCH events | L | ★★ |
 | 87 | Memory heat on the map (tracemalloc) | M | ★★ |
 | 88 | ~~Who-woke-whom arrows across tasks/threads~~ **shipped (v1; queue correlation remains)** | — | ★★★ |
-| 89 | Critical path through a concurrent run | M | ★★ |
+| 89 | ~~Critical path through a concurrent run~~ **shipped (v1; multi-core DAG remains)** | — | ★★ |
 | 90 | Lock-wait attribution | L | ★★ |
 | 91 | Multiprocessing children traced into lanes | XL | ★★★ |
 | 92 | Live streaming replayer (--serve) | L | ★★ |
@@ -521,6 +521,7 @@ software.
   process.
 
 ### 89. Critical-path highlight
+**v1 shipped 2026-08-01** — now catalog entry #89 in [FEATURES.md](FEATURES.md): the GIL-true spine (innermost-active attribution) with gold pins, banner verdict, untracked-wait accounting and a dedicated ★ row in the Perfetto export. What remains: true multi-core DAG analysis for genuinely overlapping threads.
 - **What:** for an fn-granularity concurrent trace: compute the
   longest dependency chain (through awaits, joins and #88 edges) that
   determined total wall time; paint it gold in lanes and Perfetto

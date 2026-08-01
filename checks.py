@@ -2608,6 +2608,48 @@ def _():
            "absent, never fiction")
 
 
+@check("critical path: the spine crosses lanes; sequential abstains (#89)")
+def _():
+    p = run_trace(os.path.join(HERE, "example_tasks.py"),
+                  "--granularity", "fn", name="cp_tasks")
+    c = p.get("critical")
+    expect(c is not None, "a concurrent fn trace must carry its path")
+    expect(c["lanes"] >= 3,
+           f"the asyncio spine must cross task lanes: {c['lanes']}")
+    expect(all(p["events"][i]["e"] == "call" for i in c["evs"]),
+           "spine entries must be call events")
+    expect(c["gapUs"] > 0,
+           "asyncio.sleep must surface as untracked external waits")
+    segs = c["segs"]
+    expect(all(a[1] <= b[0] for a, b in zip(segs, segs[1:]))
+           and all(s[0] < s[1] for s in segs),
+           "spine segments must be ordered and non-overlapping")
+    q = run_trace(os.path.join(HERE, "example_race.py"),
+                  "--granularity", "fn", name="cp_race")
+    expect(q["critical"] and q["critical"]["lanes"] >= 2,
+           "thread workers must appear on the race's spine")
+    s = run_trace(os.path.join(HERE, "example_sort.py"),
+                  "--granularity", "fn", name="cp_sort")
+    expect(s.get("critical") is None,
+           "a single-lane run has no critical path to claim")
+    out = os.path.join(TMP, "cp89.json")
+    subprocess.run([PY, os.path.join(HERE, "tracer.py"),
+                    "--granularity", "fn", "--export-perfetto", out,
+                    "--out", os.path.join(TMP, "cp89.html"),
+                    os.path.join(HERE, "example_tasks.py")],
+                   capture_output=True, text=True, cwd=TMP,
+                   stdin=subprocess.DEVNULL, timeout=120)
+    with open(out, encoding="utf-8") as fh:
+        te = json.load(fh)["traceEvents"]
+    kt = [e for e in te if e.get("tid") == 9999]
+    expect(any(e["ph"] == "M" and "critical" in e["args"]["name"]
+               for e in kt), "the ★ critical path row must exist")
+    bs = sum(1 for e in kt if e["ph"] == "B")
+    es = sum(1 for e in kt if e["ph"] == "E")
+    expect(bs > 0 and bs == es,
+           f"★ row segments must be balanced B/E pairs: {bs}/{es}")
+
+
 # ---------------------------------------------------------------- runner
 
 def main():

@@ -655,6 +655,26 @@ if (DATA.ring && DATA.ring.dropped > 0) {
     "mid-run.";
   b.appendChild(rn);
 }
+/* #89: the critical path — the chain that determined wall time */
+if (DATA.critical) {
+  const b = $("banner");
+  if (!b.style.display || b.style.display === "none") {
+    b.className = "info";
+    b.style.display = "block";
+  }
+  const c = DATA.critical;
+  const s = document.createElement("span");
+  s.textContent = " ★ critical path: " + c.n + " slice(s) across " +
+    c.lanes + " lane(s) determined the " +
+    (c.spanUs < 1e6 ? (c.spanUs / 1000).toFixed(1) + " ms"
+                    : (c.spanUs / 1e6).toFixed(2) + " s") + " run" +
+    (c.gapUs > 0
+      ? " — " + (c.gapUs / 1000).toFixed(1) + " ms of it untracked " +
+        "external waits (sleep/network/OS), attributed to the gap's edges"
+      : "") +
+    ". Gold pins walk it; speeding up anything else is wasted work.";
+  b.appendChild(s);
+}
 /* #73: every invariant reports its verdict — violated with a jump,
    held everywhere evaluable, or never evaluable (the typo case) */
 if (DATA.invariants) {
@@ -2893,6 +2913,26 @@ $("scrub").max = Math.max(0, events.length - 1);
     m.title = sp.id + " — " + sp.o + " (events " + (sp.s + 1) + "–" +
       (sp.t + 1) + ")";
     m.onclick = () => { stop(); goto(sp.s); };
+    box.appendChild(m);
+  });
+  const footer = document.querySelector("footer");
+  footer.insertBefore(box, footer.firstChild);
+})();
+/* #89: gold pins — the critical path, walkable on the scrubber */
+(function () {
+  if (!DATA.critical || !DATA.critical.evs.length) return;
+  const box = document.createElement("div");
+  box.id = "cpmarks";
+  box.style.cssText = "position:relative;height:7px;margin:0 7px 2px;";
+  const total = Math.max(1, events.length - 1);
+  DATA.critical.evs.forEach(j => {
+    const m = document.createElement("span");
+    m.style.cssText = "position:absolute;top:0;width:3px;height:7px;" +
+      "background:#ffd479;border-radius:1px;cursor:pointer;left:" +
+      (j / total * 100) + "%";
+    m.title = "★ critical path — " + (events[j].fn || "?") +
+      " (event " + (j + 1) + ")";
+    m.onclick = () => { stop(); goto(j); };
     box.appendChild(m);
   });
   const footer = document.querySelector("footer");

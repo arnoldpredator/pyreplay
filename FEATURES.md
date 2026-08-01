@@ -1265,6 +1265,38 @@ dead or invented panel; every cap and truncation is announced.
 
   [![Feature 88 — happens-before](screenshots/88-wake.png)](screenshots/88-wake.png)
 
+### 89. The critical path — what actually determined wall time (v1)
+- **Measured:** every microsecond of a concurrent fn trace is
+  attributed to the INNERMOST slice open anywhere in the process at
+  that instant. Under the GIL one thread computes at a time, so this
+  spine IS the computation's critical chain — it crosses lanes
+  exactly where awaits, wakes (#88) and joins handed control over.
+  Instants where nothing traced was open are **untracked external
+  waits** (sleep, network, OS, untraced libraries) — counted, never
+  hidden. Sequential runs abstain: one lane's critical path is the
+  whole run, a claim with no content. (True multi-core DAG analysis
+  for genuinely overlapping threads is the stated remainder.)
+- **Displayed:** a banner verdict — "★ critical path: 16 slices
+  across 4 lanes determined the 62.3 ms run — 28.5 ms of it untracked
+  external waits" — with **gold pins** on the scrubber walking the
+  spine. The Perfetto export gains a dedicated **★ critical path**
+  row (the spine read left to right, segment-exact, gaps = the waits)
+  and a ★ in the args of every critical slice.
+- **Why:** "we are 40% async" is trivia; *these five awaits are your
+  runtime, everything else overlaps for free* is an optimization
+  order. Speeding up anything off the path is wasted work — now the
+  path is drawn.
+- **Use case:** `example_tasks.py`: the spine reads module → Task-1 →
+  producer → make_item → consumer → producer → … — the actual
+  hand-off chain — and the 28.5 ms of `asyncio.sleep` shows up as
+  attributed waits, not invisible time.
+- **Command:** automatic in every fn trace with ≥ 2 lanes;
+  `--granularity fn --export-perfetto out.json` for the drawn row.
+- **Screenshot** — the banner naming the path and the waits, gold
+  pins below.
+
+  [![Feature 89 — critical path](screenshots/89-critical.png)](screenshots/89-critical.png)
+
 ---
 
 ## H. The static map — structure without executing anything
@@ -1712,7 +1744,7 @@ dead or invented panel; every cap and truncation is announced.
 ## J. Infrastructure (no screenshots needed)
 
 ### 61. `checks.py` — the regression suite
-67 data-level checks (no browser): the tracer re-runs the permanent
+68 data-level checks (no browser): the tracer re-runs the permanent
 example suite and the mapper its fixtures, the embedded JSON is
 extracted from each generated HTML (chunked or not), and the honesty
 invariants are asserted in plain Python — windowed-change correctness,

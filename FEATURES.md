@@ -20,7 +20,8 @@ small; clone them if you want to reproduce those shots:
 [nengo](https://github.com/nengo/nengo),
 [brian2](https://github.com/brian-team/brian2),
 [pymdp](https://github.com/infer-actively/pymdp). Features 61–62 are
-infrastructure and carry no shot.
+infrastructure and carry no shot; the 2026-08 additions (63, 64, 79,
+80, 106) await their shots from the next manual pass.
 
 The two tools, one contract:
 
@@ -414,6 +415,27 @@ dead or invented panel; every cap and truncation is announced.
 
 ---
 
+### 106. Deep links — a URL that opens a moment
+- **Measured:** nothing new — the viewer state (event index, open
+  variable, view choice, graph overlay) is serialized into the URL
+  fragment on every navigation (debounced `replaceState`; history and
+  the back button stay clean).
+- **Displayed:** the address bar follows the replay:
+  `trace_x.html#ev=8412&var=dist&view=graph&ov=seen`. Pasting such a
+  link into a fresh page — or editing the hash of an open one — lands
+  exactly there: event, life strip open, view set, overlay tinted.
+- **Why:** debugging is collaborative; a screenshot shows a moment, a
+  deep link IS the moment. A trace file plus a fragment is a pointer
+  into an execution.
+- **Use case:** reviewing a BFS with a friend: send the trace plus
+  `#ev=81&var=adj&view=graph&ov=dist` — they open it mid-frontier,
+  graph view on, distance tint applied, zero clicks.
+- **Command:** any trace; navigate, then copy the address. Out-of-range
+  events clamp; unknown variables/views degrade to cells — no dead
+  panel. Every feature below that names a moment composes with this.
+- **Screenshot** — pending the next manual pass; live in any trace:
+  append `#ev=20&var=<name>` to the address.
+
 ## D. Replayer — variables & data structures
 
 ### 21. Semantic rendering by type
@@ -592,6 +614,36 @@ dead or invented panel; every cap and truncation is announced.
 
 ---
 
+### 80. The oscilloscope — strip-charts & phase portraits
+- **Measured:** nothing new — the per-frame change index already holds
+  every value a numeric variable took; the chart is a pure projection
+  of it (numpy-style float subclasses recognized by class-name suffix).
+- **Displayed:** a `chart` entry in the view dropdown of any numeric
+  scalar: value vs event-axis drawn as the STEP function a variable
+  really is (it holds its value between changes). Change points are
+  clickable (jump to the moment); NaN/±Inf get edge ticks, never fake
+  positions; non-numeric changes break the line as counted gaps; crash
+  (red) and trip (amber ☢) moments tick the top edge, time-aligned;
+  the cursor splits past (solid) from future (dim). `log` scale is
+  offered honestly — refused with a note unless every value > 0.
+  Choosing a partner variable ("vs …") turns the panel into a PHASE
+  PORTRAIT: the x-vs-y trajectory, opacity fading into the past, the
+  bright dot where the replay stands.
+- **Why:** the life strip shows WHEN a value changed; the chart shows
+  HOW it evolved — drift, plateaus, oscillation, blow-up. A phase
+  portrait shows a RELATIONSHIP: convergence spirals, limit cycles,
+  the moment two quantities decouple. The physicist's instrument
+  panel, aimed at code.
+- **Use case:** `example_prefix.py`: `running` charts as a staircase;
+  "vs i" turns accumulation into a clean diagonal. On
+  `example_nan.py`, the chart of `total` shows the exact step where
+  finite becomes −∞ becomes NaN.
+- **Command:** `python3 tracer.py example_prefix.py` → variable
+  `running` → view `chart`; the partner select makes the portrait.
+  Composes with deep links: `#ev=30&var=running&view=chart`.
+- **Screenshot** — pending the next manual pass; live via the command
+  above.
+
 ## E. Replayer — control flow & truth
 
 ### 30. Event panel — the line's own cast, before it acts
@@ -656,6 +708,35 @@ dead or invented panel; every cap and truncation is announced.
   [![Feature 32 — exceptions](screenshots/32-exceptions.png)](screenshots/32-exceptions.png)
 
 ---
+
+### 79. NaN/Inf tripwire — where the poison was born
+- **Measured:** with `--trip nan`, the encoder's own bounded output is
+  scanned for NaN/Inf leaves. An event records a trip when a
+  variable's poison KIND changes (clean→inf, clean→nan, and inf→nan —
+  an inf collapsing to nan IS a first NaN), when a recovered variable
+  relapses, and when a return value carries poison out of a frame
+  (visible even if the caller never assigns it). A sleeping generator
+  keeps its poison memory across yields — no false rebirth on resume.
+- **Displayed:** a banner naming the FIRST birth (click to jump),
+  amber ☢ pins over the scrubber for every birth, and a ☢ glyph on
+  exactly the rows whose displayed value carries the poison at that
+  event (an object trip lands on the poisoned attribute, not every
+  attribute).
+- **Why:** for numerical code the question is never "is there a NaN" —
+  the crash (if any) tells you — but WHERE IT WAS BORN, usually
+  thousands of operations upstream. The provenance panel then answers
+  "from what".
+- **Use case:** `example_nan.py` prints `mean signal: nan` and never
+  raises. The banner: first Inf born in `amplify()`'s return value at
+  event 18; the ☢ trail walks the spread through `detrend`'s mean into
+  every downstream value — the report was a lie four functions before
+  it was printed.
+- **Command:** `python3 tracer.py --trip nan example_nan.py`. Line
+  granularity only (values live in line events). Honesty: only what
+  encoded values visibly show is judged — beyond a cap or window is
+  unknown = unmarked; C-object internals (arrays) stay invisible.
+- **Screenshot** — pending the next manual pass; live via the command
+  above.
 
 ## F. Replayer — the interpreter's hidden machinery
 
@@ -1196,7 +1277,7 @@ change, always.
 
 ### 62. The teaching fleet
 `example_{sort,prefix,histogram,dp,graph,exceptions,control,machinery,
-mro,tasks}.py` — one small script per feature family, each with its
+mro,tasks,threads,watch,dunder,bigarray,heavy,nan,flaky}.py` — one small script per feature family, each with its
 pre-built `trace_*.html`; `tinyshop/` — a multi-file teaching project
 with a planted silent bug; `bubble_sort.py`, `graph.py`, real AtCoder
 code. TUTORIAL.md is the user guide; these are also the screenshot
@@ -1205,6 +1286,75 @@ material for this catalog.
   `python3 tracer.py tinyshop/main.py` for the teaching project.
 
 ---
+
+## K. The reliability lab — statistics over many runs
+
+One run is an anecdote; N runs are an experiment. This section treats
+program behavior as a distribution to be measured.
+
+### 63. The N-run harness (`--runs N`)
+- **Measured:** the target executed N times — each a fresh child
+  tracer fed IDENTICAL stdin bytes (the measurement protocol). Per
+  run: outcome, classified by exception type + crash site read from
+  the child's own payload; wall time (labeled tracer-inclusive —
+  comparable to each other, not to bare runtime); event count.
+- **Displayed:** `runs_<name>.html` — an outcome bar, a per-class
+  wall-time distribution (min/median/p95/max), a clickable per-run
+  strip in run order, stderr/stdout tails for the first run of each
+  failing class, and replay links into the kept traces. The terminal
+  shows the same table live, run by run.
+- **Why:** *sometimes-code* is the worst code: it passes your one run
+  and fails in the field. A run set converts a hidden flake into a
+  measured rate — with a replayable specimen of each behavior.
+- **Use case:** `example_flaky.py` depends on set iteration order by
+  accident. `--runs 20` → "13× clean · 7× RuntimeError at
+  example_flaky.py:31", one kept trace of each — open the failing one
+  and step to the crash.
+- **Command:** `python3 tracer.py --runs 20 example_flaky.py` — fn
+  granularity by default; ONE trace kept per outcome class (first
+  seen), the rest measured, classified, deleted. Exit 0 only if every
+  run was clean, so `git bisect run` consumes it directly; Ctrl-C
+  reports the runs completed so far.
+- **Screenshot** — pending the next manual pass; live via the command
+  above.
+
+### 64. The divergence finder (`--diverge A B`)
+- **Measured:** two traces' event streams, canonicalized — timestamps
+  and `0x…` memory addresses inside reprs stripped, exactly what
+  differs between any two healthy runs — then aligned by identical
+  prefix (v1). The first mismatch is found at two depths: STATE (the
+  same line runs on both sides, its values differ) and CONTROL (a
+  different line runs).
+- **Displayed:** a terminal report: how long the two runs agreed; the
+  state divergence with each differing variable named and both values
+  shown; the control divergence with both source lines; and deep
+  links (#106) that open BOTH traces at the divergence. Exit 0
+  identical · 1 diverged.
+- **Why:** "why did THIS run fail?" reduces to "where did it first
+  leave the good path?" — and state usually diverges before control:
+  the cause, then the symptom.
+- **Use case:** after `--runs` on `example_flaky.py`, diverge the kept
+  clean trace against the kept failing one:
+
+  ```
+  pyreplay diverge: …run1.html (6 events) vs …run5.html (8 events)
+    identical for the first 1 event.
+    STATE diverges first, at event 2 (the same line runs on both
+    sides — its values differ):
+      …run1.html: call example_flaky.py:15 in close_batch
+      …run5.html: call example_flaky.py:15 in close_batch
+        tasks:  {ship, audit, bill}  vs  {audit, ship, bill}
+    control flow follows at event 5:
+      …run1.html: return example_flaky.py:27 in finalize
+      …run5.html: exc example_flaky.py:26 in finalize [RuntimeError]
+  ```
+
+  The set-iteration accident — the actual cause — named at the call
+  boundary, three events before the crash it produces.
+- **Command:** `python3 tracer.py --diverge runs_x_run1.html
+  runs_x_run5.html`. Refuses mismatched granularities; a run that is a
+  strict prefix of the other diverges at its end. (Report is text —
+  no screenshot needed.)
 
 ## Appendix A — the manual test plan
 

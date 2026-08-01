@@ -38,6 +38,12 @@ Two tools that share one JSON event-log format:
 ```bash
 python3 tracer.py your_script.py      # -> trace_your_script.html
 python3 mapper.py path/to/project     # -> map_project.html
+
+python3 tracer.py --runs 20 flaky.py            # run it 20x: outcome stats,
+                                                #    one kept trace per behavior
+python3 tracer.py --diverge good.html bad.html  # first event where two runs
+                                                #    part ways (cause, then symptom)
+python3 tracer.py --trip nan sim.py             # where the first NaN was BORN
 ```
 
 Open the HTML in any browser. No server, no build step, no dependencies.
@@ -91,7 +97,7 @@ green suite is the contract that keeps contributions honest.
 
 Bug reports, edge cases, more example programs, and **other languages** are
 all very welcome. **[CONTRIBUTING.md](CONTRIBUTING.md) is the place to start** — one file
-with the roadmap of what to build (64 unbuilt features plus a "good first"
+with the roadmap of what to build (59 unbuilt features plus a "good first"
 list), the ground rules, and the event-log schema a new-language backend emits.
 
 ## License

@@ -3,8 +3,10 @@
 Everything already built is in FEATURES.md (the 62-feature catalog).
 This file is the other half — **every feature we know we want and have
 not built yet** — and how to contribute one. It's written so a stranger
-can pick an item and implement it. Features are numbered **#63 onward**, continuing the catalog of the
-62 shipped features in FEATURES.md (#01–#62).
+can pick an item and implement it. Features are numbered **#63 onward**, continuing the shipped catalog
+in FEATURES.md. Five roadmap items (63, 64, 79, 80, 106) have shipped
+since the list was written — their rows below say so and point at the
+catalog; **59 remain unbuilt**.
 
 ## Start here — how to contribute
 
@@ -66,8 +68,8 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
 
 | # | Feature | Effort | Payoff |
 |---|---------|--------|--------|
-| 63 | Run it N times; count outcomes, catch flakes | M | ★★★ |
-| 64 | First event where two runs diverge | L | ★★★ |
+| 63 | ~~Run it N times; count outcomes, catch flakes~~ **shipped** | — | ★★★ |
+| 64 | ~~First event where two runs diverge~~ **shipped (v1)** | — | ★★★ |
 | 65 | Color lines by failing-run correlation (SBFL) | S | ★★★ |
 | 66 | Auto-shrink a failing input (ddmin) | M | ★★ |
 | 67 | Random-input entry with seed capture | M | ★★ |
@@ -82,8 +84,8 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
 | 76 | Forward taint from an input | L | ★★ |
 | 77 | "Why didn't this line run?" | M | ★★★ |
 | 78 | Prove a loop is stuck (state recurrence) | M | ★★ |
-| 79 | Catch the first NaN/Inf at birth | S | ★★★ |
-| 80 | Strip-charts + phase portraits of variables | M | ★★★ |
+| 79 | ~~Catch the first NaN/Inf at birth~~ **shipped** | — | ★★★ |
+| 80 | ~~Strip-charts + phase portraits of variables~~ **shipped** | — | ★★★ |
 | 81 | Object-reference graph at an event | L | ★★ |
 | 82 | Per-variable type histograms; None alarms | M | ★★ |
 | 83 | Array shape/dtype timeline | M | ★★★ |
@@ -109,7 +111,7 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
 | 103 | Black-box flight recorder (ring buffer) | M | ★★★ |
 | 104 | Reproducibility capsule (stdin/env/seeds) | S–XL | ★★★ |
 | 105 | Schema spec + import/export bridges | M | ★★ |
-| 106 | Deep links: a URL that opens a moment | S | ★★★ |
+| 106 | ~~Deep links: a URL that opens a moment~~ **shipped** | — | ★★★ |
 | 107 | Notes pinned to events; exportable | M | ★★ |
 | 108 | Recorded walkthroughs (executable lessons) | M | ★★ |
 | 109 | Query bar over all events | M | ★★★ |
@@ -141,45 +143,10 @@ distribution to be measured — the physicist's instinct applied to
 software.
 
 ### 63. The N-run harness
-- **What:** `tracer.py --runs 50 script.py` — execute the target N
-  times (fn granularity by default), record per-run outcome (exit,
-  exception type+site, wall time, event count) plus one representative
-  trace per distinct outcome class.
-- **Why:** *sometimes-code* is the worst code: it passes your one run
-  and fails in the field. A 50-run table — "47 clean, 3 KeyError at
-  cart.py:41" — converts a hidden flake into a measured rate before
-  you hunt it.
-- **How:** subprocess loop around the existing runner; outcomes
-  aggregated into a JSON summary + a small HTML report (bar of
-  outcomes, timing distribution: min/median/p95/max per run and per
-  function from fn timestamps). Keep one full trace per outcome class
-  (first passing, first of each failure) — not 50 traces. Honesty: the
-  report states N, the granularity, and that timings are
-  tracer-inclusive.
-- **Effort:** M. The hard part is choosing what to keep (disk) and
-  presenting distributions honestly.
-- **Prior art:** every stress-test harness ever; pytest-flakefinder;
-  the physicist's repeated-measurement instinct.
+**Shipped 2026-08-01** — now catalog entry #63 in [FEATURES.md](FEATURES.md), with the full measured/displayed/why/use-case record.
 
 ### 64. The divergence finder (recovers "trace-vs-trace diffing")
-- **What:** given two traces of the same code (pass vs fail, before vs
-  after an edit), find the **first event where they diverge** and show
-  both timelines side by side from that point.
-- **Why:** the whole question "why did THIS run fail?" reduces to
-  "where did it first leave the good path?" — the single most valuable
-  automated answer a trace tool can give.
-- **How:** canonicalize each event to a token (file, line, frame-path,
-  event kind — ids and timestamps excluded; fingerprints with
-  object-ids normalized); align the two token streams (Myers diff /
-  longest-common-subsequence, anchored at call boundaries so the
-  alignment survives loop-count differences); report the first
-  mismatch and the last common ancestor event. Renderer: dual view
-  (see #110) opening at the divergence. Nondeterminism (dict of
-  addresses, timing) is why canonicalization is the real work.
-- **Effort:** L. Alignment robustness is the hard part; start with
-  "identical prefix" (cheap, covers most real cases) and grow.
-- **Prior art:** `git bisect` philosophy applied inside one run;
-  Pernosco's multi-run analysis; McKeeman's differential testing.
+**Shipped 2026-08-01 (v1: identical-prefix alignment)** — now catalog entry #64 in [FEATURES.md](FEATURES.md), with the full measured/displayed/why/use-case record.
 
 ### 65. Spectrum-based fault localization (SBFL)
 - **What:** with the #63 harness's passing and failing runs, score
@@ -428,43 +395,10 @@ software.
   previous state must repeat forever.
 
 ### 79. NaN/Inf tripwire (first-origin of numerical poison)
-- **What:** `--trip nan` — the fingerprint encoder tests floats as it
-  sees them; the FIRST NaN/Inf in the run raises a first-class TRIP
-  event with the provenance link to the operands that produced it;
-  every later spread is marked quietly.
-- **Why:** for scientific code the question is never "is there a NaN"
-  (the crash tells you) but "**where was it born**" — usually
-  thousands of operations earlier. This is the single highest-value
-  scientific-Python feature on this list relative to cost.
-- **How:** an `isnan/isinf` check inside the existing encoder
-  (bounded, only on floats already being fingerprinted); works with
-  triggers ("start recording AT the first NaN" = `--start-trip nan` —
-  the pre-trigger cheap watch loop does the testing). Generalize:
-  `--trip "negative"` for domain tripwires via #73's machinery.
-- **Effort:** S.
-- **Prior art:** numpy's errstate/seterr (raises where it happens, not
-  where it *came from* — provenance is our edge); debuggers' hardware
-  watchpoints, in spirit.
-
----
-
-## Section 3 — New instruments (measure what is invisible)
+**Shipped 2026-08-01** — now catalog entry #79 in [FEATURES.md](FEATURES.md), with the full measured/displayed/why/use-case record.
 
 ### 80. The variable oscilloscope (strip-charts + phase portraits)
-- **What:** any numeric variable (or #72 watch) gets a `chart` view:
-  value vs event-axis as a strip-chart with change points, crash and
-  trip markers aligned; pick TWO variables → a **phase portrait**
-  (x vs y trajectory).
-- **Why:** the life strip shows *when* a value changed; the chart
-  shows *how it evolved* — drift, oscillation, plateaus, blow-up. A
-  phase portrait makes relationships visible: convergence spirals,
-  limit cycles (a loop stuck orbiting), the moment two quantities
-  decouple. This is the physicist's instrument panel aimed at code.
-- **How:** renderer-only — the change index already holds the series;
-  a small canvas plotter (no libraries), log-scale toggle, honest gaps
-  where the value was non-numeric. Effort M.
-- **Prior art:** oscilloscopes and strip-chart recorders; dynamical
-  systems' phase-space analysis; no mainstream debugger has this.
+**Shipped 2026-08-01** — now catalog entry #80 in [FEATURES.md](FEATURES.md), with the full measured/displayed/why/use-case record.
 
 ### 81. Heap topology view (the pointer graph)
 - **What:** at the current event, draw the object-reference graph
@@ -909,18 +843,7 @@ software.
 ## Section 7 — The replayer as a medium
 
 ### 106. Deep links — a URL that opens a moment
-- **What:** the full viewer state (event index, file tab, selected
-  variable, view choices, overlay) serialized into the URL fragment;
-  paste `trace_x.html#ev=8412&var=dist&view=graph` into an issue and
-  the reader lands exactly there.
-- **Why:** debugging is collaborative; today you paste screenshots.
-  A trace file + a fragment is a *pointer into an execution* — the
-  cheapest feature on this list with the largest social payoff.
-- **How:** location.hash read on load / written on navigation
-  (debounced); zero schema changes.
-- **Effort:** S.
-- **Prior art:** every good web app; Perfetto's permalink (theirs
-  needs a server — ours is a file).
+**Shipped 2026-08-01** — now catalog entry #106 in [FEATURES.md](FEATURES.md), with the full measured/displayed/why/use-case record.
 
 ### 107. Annotations — notes pinned to events
 - **What:** press `N` at any event: attach a note ("HERE total goes
@@ -1314,21 +1237,26 @@ standalone gate lacks.
 
 ## If you only build five
 
-1. **#63 + #64** — the reliability lab and the divergence finder: the
-   remembered idea, and the tool it makes possible.
-2. **#98** — per-test chapters (it unlocks #65's ranked suspects for
-   free).
-3. **#101** — chunked keyframes: every ambitious feature above hits
-   the 2M wall without it.
-4. **#106** — deep links: one day of work, changes how traces are
-   shared forever.
-5. **#80** — the oscilloscope: the demo that shows people what kind
-   of tool this is.
+(The original five: 63+64, 98, 101, 106, 80 — four of them shipped on
+2026-08-01, so this list moved on.)
+
+1. **#98** — per-test chapters: a suite trace becomes navigable, and
+   failing test × the #63 harness unlocks #65's ranked suspect lines.
+2. **#101** — chunked keyframes: every ambitious feature above hits
+   the 2M-event wall without it.
+3. **#109** — the query bar: a trace is a database; searching it should
+   be a query, not an hour of scrubbing.
+4. **#118** — the console & logging lane: every codebase already emits
+   this signal; tie each line to the exact moment (and state) that
+   produced it.
+5. **#91** — Whyline queries ("why didn't this line run?"): absence
+   made debuggable — repeatedly shown to halve debugging time, and
+   virtually absent from real tools.
 
 ## Good first features (S-effort, self-contained)
 
-#65 (after 63) · #70 · #72 · #73 · #79 · #85-static · #96 · #99 ·
-#104-Tier1 · #106 · #112 · #113 · #115 · #122 · #124.
+#65 (now unblocked — #63 shipped) · #70 · #72 · #73 · #85-static ·
+#96 · #99 · #104-Tier1 · #112 · #113 · #115 · #122 · #124.
 
 ---
 

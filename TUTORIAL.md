@@ -419,6 +419,50 @@ reopens on resume, so suspension shows as a real gap in the row.
 Honesty rule as always: line traces carry no timestamps, so
 `--export-perfetto` refuses to run without `--granularity fn`.
 
+## 4d. The reliability lab & the instruments (2026-08)
+
+**Run it N times (`--runs`).** One run is an anecdote. `python3
+tracer.py --runs 20 flaky.py` executes the target 20 times (fn
+granularity by default, identical stdin each run), classifies every
+outcome by exception type + crash site, and writes `runs_flaky.html`:
+an outcome bar, wall-time distributions per class (min/median/p95/max —
+labeled tracer-inclusive), and ONE kept, replayable trace per distinct
+behavior. Exit code 0 only when every run is clean, so it drops
+straight into `git bisect run`. Ctrl-C reports what completed.
+
+**Find where two runs part ways (`--diverge`).** `python3 tracer.py
+--diverge good.html bad.html` canonicalizes both event streams
+(timestamps and memory addresses stripped) and reports the first
+mismatch at two depths: STATE — the same line runs but its values
+differ (usually the cause; the differing variables are named with both
+values) — and CONTROL — a different line runs (the symptom). It prints
+deep links that open both traces at the divergence. The natural
+pipeline: `--runs`, then diverge a kept clean trace against a kept
+failing one.
+
+**Catch the first NaN at birth (`--trip nan`).** For numerical code
+the crash site is thousands of operations downstream of the mistake.
+`python3 tracer.py --trip nan sim.py` marks the event where each
+variable's poison is BORN (clean→inf, clean→nan, inf→nan; recoveries
+re-arm; returns carry poison out of frames): a banner names the first
+birth, amber ☢ pins mark the scrubber, the poisoned row wears ☢ at
+exactly its transition. Only what encoded values visibly show is
+judged — beyond a cap or window is unknown, unmarked.
+
+**The oscilloscope (chart view).** Any numeric variable's dropdown now
+offers `chart`: its whole life as the step function it really is —
+clickable change points, NaN/±Inf as edge ticks, non-numeric gaps
+counted, crash/trip moments tick-aligned, honest log scale (refused
+unless every value > 0). Pick a partner variable ("vs …") for a phase
+portrait: the x-vs-y trajectory fading into the past. `example_prefix.py`'s
+`running` vs `i` is the two-second demo.
+
+**Deep links.** The address bar now follows the replay:
+`trace_x.html#ev=8412&var=dist&view=graph&ov=seen`. Copy it into an
+issue and the reader lands on that event with that view open. Works on
+a fresh load and on an already-open trace (edit the hash). Every
+moment any tool above names is therefore shareable.
+
 ## 5. Recipes
 
 ```bash

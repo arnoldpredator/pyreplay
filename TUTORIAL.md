@@ -867,6 +867,14 @@ their original node — no phantom calls), and the 4000-node render cap
 announces itself. Works at both granularities — on an fn-level trace
 of a real codebase it is the whole run's shape in one panel.
 
+**Shapes and dtypes.** Arrays are C-opaque to the tracer — but their
+`.shape` and `.dtype` are read at every Python boundary and ride the
+encodings: teal ⤢ chips on every numpy/torch/pandas value, and when a
+name's own metadata transitions, the badge tells the story —
+SHAPE-CHANGE (3, 4) → (4, 3) at the exact event of the silent
+transpose, DTYPE-CHANGE float64 → float32 at the astype. Broadcasting
+bugs live exactly there, and now they look like something.
+
 **The explain bundle.** Park the cursor on the interesting moment
 and press **⧉ explain**: ±25 events become a plain-text file — source
 lines, every changed value, verdicts, provenance arrows, the rerun

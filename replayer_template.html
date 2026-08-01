@@ -165,6 +165,9 @@
   .tmark:hover { background: #ffe0a3; }
   .gly.trip { color: #e5c07b; }
   .gly.shadow { color: #e5c07b; }
+  .gly.shape { color: #56b6c2; }
+  .shmeta { color: #56b6c2; font-size: 11px; }
+  .shmeta.vchanged { color: var(--changed-text); font-weight: 700; }
   .tripnote { cursor: pointer; text-decoration: underline;
     text-underline-offset: 2px; }
   #chaplabel { margin-left: 8px; color: var(--dim); }
@@ -1609,8 +1612,21 @@ function renderValue(enc, old) {
     const ch = old !== undefined && sig(old) !== sig(enc) ? " vchanged" : "";
     const cls = enc.t === "s" ? " str" : "";
     const text = enc.t === "s" ? JSON.stringify(enc.v) : String(enc.v);
+    let meta = "";
+    if (enc.sh || enc.dt) {   // #83: the array's boundary metadata
+      const shCh = old !== undefined && old.sh !== undefined
+        && old.sh !== enc.sh;
+      const dtCh = old !== undefined && old.dt !== undefined
+        && old.dt !== enc.dt;
+      meta = ' <span class="shmeta' + (shCh || dtCh ? " vchanged" : "")
+        + '" title="shape/dtype read at the Python boundary — the ' +
+        'array\'s internals stay C-opaque">' +
+        (enc.sh ? "⤢ " + escapeHtml(enc.sh) : "") +
+        (enc.dt ? (enc.sh ? " · " : "") + escapeHtml(enc.dt) : "") +
+        "</span>";
+    }
     return '<span class="pv' + cls + ch + '"' + titleAttr(enc) + ">" +
-      escapeHtml(text) + "</span>";
+      escapeHtml(text) + "</span>" + meta;
   }
   if (CONT.has(enc.t) && enc.n === 0) {
     const ch = old !== undefined && sig(old) !== sig(enc) ? " vchanged" : "";
@@ -5140,6 +5156,19 @@ function render() {
         gly += '<span class="gly def" title="⚠ this argument IS the ' +
           'function’s shared mutable default — it persists ' +
           'across calls">⚠def</span>';
+      // #83: the classic silent transpose — shape/dtype transitions
+      // are first-class changes and wear their own badge
+      if (r.enc && r.old && (r.enc.sh || r.old.sh)
+          && r.old.sh !== r.enc.sh)
+        gly += '<span class="gly shape" title="SHAPE-CHANGE ' +
+          esc2(r.old.sh || "(none)") + " → " + esc2(r.enc.sh ||
+          "(none)") + " — a reshape/transpose/broadcast happened " +
+          'here; internals stay C-opaque (#83)">⤢</span>';
+      else if (r.enc && r.old && (r.enc.dt || r.old.dt)
+               && r.old.dt !== r.enc.dt)
+        gly += '<span class="gly shape" title="DTYPE-CHANGE ' +
+          esc2(r.old.dt || "?") + " → " + esc2(r.enc.dt || "?") +
+          ' — precision or kind changed at this event (#83)">⤢</span>';
       // #122: name masking — this frame holds a name that also means
       // something outside it; the outer one is unreachable from here
       const shRec = shadowRec(ev.f, ev.l);
@@ -5366,6 +5395,8 @@ function textVal(enc) {
       "dict[" + (enc.n || 0) + "]";
   if (enc.t === "o" || enc.t === "obj") {
     let base = "<" + (enc.c || "object") + ">";
+    if (enc.sh) base += " shape " + enc.sh;
+    if (enc.dt) base += " dtype " + enc.dt;
     if (enc.v && Array.isArray(enc.v))
       base += " {" + enc.v.slice(0, 4).map(p =>
         p[0] + "=" + textVal(p[1])).join(", ") + "}";

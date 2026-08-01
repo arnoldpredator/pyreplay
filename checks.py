@@ -2900,6 +2900,76 @@ def _():
         expect(probe in tpl, f"seq contract missing: {probe}")
 
 
+@check("shape timeline: probes, np-module trap, the transpose (#83)")
+def _():
+    sys.path.insert(0, HERE)
+    import importlib
+    import tracer as _tr
+    importlib.reload(_tr)
+
+    class Arr:
+        shape = (3, 4)
+        dtype = "float64"
+
+    class Mod:                       # the np-module trap
+        dtype = type
+    meta = _tr._shape_meta(Arr())
+    expect(meta == {"sh": "(3, 4)", "dt": "float64"},
+           f"tuple shape + dtype recorded Python-style: {meta}")
+    expect(_tr._shape_meta(Mod()) == {},
+           "a lone .dtype (module/class attribute) records NOTHING")
+
+    class Vec:
+        shape = (4,)
+    expect(_tr._shape_meta(Vec()) == {"sh": "(4,)"},
+           "one-element shapes keep the honest trailing comma")
+
+    class Scalar:
+        shape = ()
+    expect(_tr._shape_meta(Scalar()) == {},
+           "0-d shapes record nothing — scalars are not arrays here")
+
+    venv_py = os.path.join(HERE, ".venv", "bin", "python")
+    has_numpy = os.path.exists(venv_py) and subprocess.run(
+        [venv_py, "-c", "import numpy"], capture_output=True,
+        stdin=subprocess.DEVNULL, timeout=60).returncode == 0
+    if has_numpy:
+        src = fixture("sh83.py", (
+            "import numpy as np\n"
+            "m = np.arange(12.0).reshape(3, 4)\n"
+            "m = m.T\n"
+            "s = m.astype(np.float32)\n"))
+        out = os.path.join(TMP, "sh83.html")
+        subprocess.run(
+            [venv_py, os.path.join(HERE, "tracer.py"), "--out", out,
+             src], capture_output=True, text=True, cwd=TMP,
+            stdin=subprocess.DEVNULL, timeout=120)
+        p = payload(out)
+        hist = []
+        for e in p["events"]:
+            for nm, enc in (e.get("ch") or {}).items():
+                if isinstance(enc, dict) and enc.get("sh"):
+                    hist.append((nm, enc["sh"], enc.get("dt")))
+        expect(("m", "(3, 4)", "float64") in hist
+               and ("m", "(4, 3)", "float64") in hist,
+               f"the same-name transpose must be two recorded "
+               f"encodings: {hist}")
+        expect(("s", "(4, 3)", "float32") in hist,
+               f"astype records the dtype drop: {hist}")
+        np_encs = [enc for e in p["events"]
+                   for nm, enc in (e.get("ch") or {}).items()
+                   if nm == "np" and isinstance(enc, dict)]
+        expect(all("dt" not in enc for enc in np_encs),
+               "the numpy MODULE must carry no dtype")
+
+    with open(os.path.join(HERE, "replayer_template.html"),
+              encoding="utf-8") as fh:
+        tpl = fh.read()
+    for probe in ("shmeta", "SHAPE-CHANGE", "DTYPE-CHANGE",
+                  "internals stay C-opaque"):
+        expect(probe in tpl, f"shape surface missing: {probe}")
+
+
 @check("explain bundle: format contract, caps, honesty lines (#115)")
 def _():
     with open(os.path.join(HERE, "replayer_template.html"),

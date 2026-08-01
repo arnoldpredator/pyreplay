@@ -941,6 +941,36 @@ dead or invented panel; every cap and truncation is announced.
 
   [![Feature 26 — object transparency](screenshots/26-object-transparency.png)](screenshots/26-object-transparency.png)
 
+### 83. The shape/dtype timeline — arrays at the Python boundary
+- **Measured:** for objects exposing array metadata (numpy, torch,
+  pandas), the encoder reads `.shape` and `.dtype` under guarded
+  probes even though the internals stay C-opaque: integer-tuple
+  shapes recorded Python-style (`(4,)` keeps its honest comma),
+  torch.Size-like strings accepted, 0-d shapes excluded, and dtype
+  only WITH a shape — a lone `.dtype` is a module or class
+  attribute, not an array (the np-module trap). The metadata lives
+  inside the encoding, so every transition is a first-class change.
+- **Displayed:** a teal **⤢ (3, 4) · float64** chip on every array
+  value, amber when it just changed; and when a name's own metadata
+  transitions, the ⤢ badge with the full story: *SHAPE-CHANGE
+  (3, 4) → (4, 3) — a reshape/transpose/broadcast happened here* or
+  *DTYPE-CHANGE float64 → float32*. Life navigation and the explain
+  bundle carry the same truth.
+- **Why:** the tracer honestly cannot see inside C extensions — but
+  shapes at Python boundaries are exactly where broadcasting bugs
+  are visible. For scientific users this is the microscope's
+  missing objective.
+- **Use case:** `flipped = centered.T` — the classic silent
+  transpose — reads ⤢ (4, 3) where its source read (3, 4); the
+  `astype(np.float32)` precision drop wears the badge on the very
+  event it happened.
+- **Command:** any line trace of numpy/torch/pandas code — the
+  chips appear wherever metadata exists.
+- **Screenshot** — the demo at the same-name transpose: `m` wearing
+  both the rebound arrow and the ⤢ badge, chips on every array:
+
+  [![Feature 83 — shape timeline](screenshots/83-shape-timeline.png)](screenshots/83-shape-timeline.png)
+
 ### 27. Large containers — honest windows
 - **Measured:** the first 30 elements are encoded, plus a "+K"
   remainder; when a change lands beyond the head, the encoding windows

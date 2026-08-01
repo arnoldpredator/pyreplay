@@ -316,6 +316,37 @@ def _instance_attrs(value):
     return out or None
 
 
+def _shape_meta(value):
+    """#83: array metadata at the Python boundary. The tracer honestly
+    cannot see inside C extensions — but shape/dtype are readable
+    without touching the data, and broadcasting bugs are visible
+    exactly there. Guarded probes; anything odd records nothing."""
+    meta = {}
+    try:
+        sh = getattr(value, "shape", None)
+        if isinstance(sh, tuple) and 0 < len(sh) <= 8 \
+                and all(isinstance(d, int) for d in sh):
+            meta["sh"] = repr(sh)          # Python-style: (4,) not (4)
+        elif sh is not None:
+            s2 = str(sh)
+            if 2 < len(s2) <= 48 and s2[0] in "([t":   # torch.Size([...])
+                meta["sh"] = s2
+    except Exception:
+        pass
+    if "sh" in meta:
+        # dtype only WITH a shape: a lone .dtype is usually a module
+        # or class attribute, not an array (the np-module trap)
+        try:
+            dt = getattr(value, "dtype", None)
+            if dt is not None:
+                s2 = str(dt)
+                if 0 < len(s2) <= 32:
+                    meta["dt"] = s2
+        except Exception:
+            pass
+    return meta
+
+
 def encode(value, depth=MAX_DEPTH, _objs=None):
     """Structured, size-capped encoding of any Python value.
 
@@ -380,8 +411,13 @@ def encode(value, depth=MAX_DEPTH, _objs=None):
                 pairs = []
                 for k, v in attrs[:MAX_ITEMS]:
                     pairs.append([k, encode(v, depth, objs)])
-                return {"t": "obj", "c": cls, "n": len(attrs), "v": pairs}
-        return {"t": "o", "c": cls, "v": safe_repr(value)}
+                enc = {"t": "obj", "c": cls, "n": len(attrs),
+                       "v": pairs}
+                enc.update(_shape_meta(value))   # #83: pandas-style
+                return enc
+        enc = {"t": "o", "c": cls, "v": safe_repr(value)}
+        enc.update(_shape_meta(value))           # #83: numpy/torch
+        return enc
     except Exception:
         return {"t": "o", "v": f"<unreadable {type(value).__name__}>"}
 

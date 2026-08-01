@@ -173,6 +173,36 @@
   #qbar button { background: var(--panel); color: var(--text);
     border: 1px solid var(--border); border-radius: 4px;
     cursor: pointer; padding: 1px 7px; }
+  .ln .no { cursor: pointer; }
+  .ln.dead .no { opacity: 0.35; text-decoration: line-through; }
+  #whyline { font-size: 11px; }
+  #whyline .wl { border-left: 2px solid var(--warn, #e5c07b);
+    padding: 3px 8px; margin: 4px 0; background: #1d1f28; }
+  #whyline .wl b { color: var(--warn, #e5c07b); }
+  #whyline .wlj { cursor: pointer; text-decoration: underline;
+    text-underline-offset: 2px; color: var(--accent); margin-left: 4px; }
+  #console { max-height: 170px; overflow-y: auto; font-size: 11px; }
+  #constat { color: var(--dim); font-weight: 400; font-size: 11px; }
+  .clog { padding: 0 4px; cursor: pointer; white-space: pre-wrap;
+    word-break: break-all; color: var(--dim); border-left: 2px solid
+    transparent; }
+  .clog.err { color: #c98a8a; }
+  .clog.lvl-warn { color: var(--warn, #e5c07b); }
+  .clog.lvl-error { color: var(--err); }
+  .clog.past { color: var(--text); }
+  .clog.past.err { color: #e09a9a; }
+  .clog.cur { border-left-color: var(--accent); background: #1d2230; }
+  .clog:hover { background: #232839; }
+  .badge.log { background: #2a3040; color: #9fb4d8; }
+  #repro { border-top: 1px solid var(--border); padding: 6px 10px;
+    font-size: 11px; color: var(--dim); }
+  #repro summary { cursor: pointer; color: var(--text); }
+  #repro code { display: block; background: #171a22; border: 1px solid
+    var(--border); border-radius: 4px; padding: 4px 8px; margin: 6px 0;
+    word-break: break-all; user-select: all; }
+  #repro button { background: var(--panel); color: var(--text);
+    border: 1px solid var(--border); border-radius: 4px;
+    cursor: pointer; padding: 1px 7px; margin: 2px 6px 2px 0; }
   #qmarks { position: relative; height: 7px; margin: 0 7px 2px; }
   .qmark {
     position: absolute; top: 0; width: 4px; height: 7px;
@@ -408,12 +438,21 @@
       <div id="retval"></div>
       <div id="mro"></div>
       <div id="cond"></div>
+      <div id="whyline"></div>
     </section>
     <section style="flex:1">
       <h2>Variables <span style="color:var(--changed-text)">(changed)</span>
         <button id="btn-collapse" title="Show only the variables changing at this event (C)">collapse</button></h2>
       <div id="vars"></div>
     </section>
+    <section id="consec" style="display:none">
+      <h2>Console <span id="constat"></span></h2>
+      <div id="console"></div>
+    </section>
+    <details id="repro">
+      <summary>Reproduce</summary>
+      <div id="capsule"></div>
+    </details>
   </div>
 </main>
 <footer>
@@ -439,6 +478,13 @@
 const $ = id => document.getElementById(id);
 
 /* Any uncaught error becomes a visible banner instead of dead buttons. */
+window.addEventListener("unhandledrejection", ev => {
+  const b = document.getElementById("banner");
+  b.style.display = "block";
+  b.textContent = "Viewer error during load: " +
+    (ev.reason && ev.reason.message || ev.reason) +
+    " — please report this message.";
+});
 window.onerror = function (msg, src, lineno) {
   const b = $("banner");
   b.style.display = "block";
@@ -512,6 +558,48 @@ $("script-name").textContent = "· " + DATA.script + " · " +
   events.length + " events" +
   (DATA.granularity === "fn" ? " · fn granularity" : "") +
   (DATA.chunked ? " · " + DATA.chunked.chunks + " gzip chunks" : "");
+/* #104: the reproducibility capsule — the trace carries what would let
+   anyone make this run happen again; shown, copyable, downloadable */
+if (DATA.capsule) {
+  const c = DATA.capsule;
+  const box = $("capsule");
+  const esc = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;");
+  let h = "<code>" + esc(c.cmd) +
+    (c.stdin ? " &lt; stdin.bin" : "") + "</code>" +
+    "<div>" + esc(c.when) + " · in " + esc(c.cwd) + "</div>" +
+    "<div>python " + esc(c.python) + " · " + esc(c.platform) + "</div>" +
+    "<div>PYTHONHASHSEED " + esc(c.hashseed) +
+    (c.hashseed === "random"
+      ? " — set/dict iteration order may differ on rerun " +
+        "(--runs measures it; a fixed seed pins it)" : "") + "</div>";
+  for (const k in (c.env || {}))
+    h += "<div>" + esc(k) + "=" + esc(c.env[k]) + "</div>";
+  h += "<div>env beyond these keys deliberately not captured.</div>";
+  if (c.stdin && c.stdinTrunc)
+    h += "<div>⚠ stdin copy truncated to 64 KB — the run consumed " +
+      "more; rerun needs the original.</div>";
+  box.innerHTML = h;
+  const cp = document.createElement("button");
+  cp.textContent = "copy command";
+  cp.onclick = () => {
+    if (navigator.clipboard) navigator.clipboard.writeText(c.cmd);
+  };
+  box.appendChild(cp);
+  if (c.stdin) {
+    const dl = document.createElement("button");
+    dl.textContent = "download stdin.bin";
+    dl.onclick = () => {
+      const bytes = Uint8Array.from(atob(c.stdin),
+                                    ch => ch.charCodeAt(0));
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([bytes]));
+      a.download = "stdin.bin";
+      a.click();
+      URL.revokeObjectURL(a.href);
+    };
+    box.appendChild(dl);
+  }
+}
 if (DATA.error || DATA.truncated) {
   const b = $("banner");
   b.style.display = "block";
@@ -561,6 +649,57 @@ if (DATA.trip) {
   }
   b.appendChild(note);
 }
+/* #118 the console lane: every stdout/stderr line the run wrote,
+   tied to its moment. Built once; render() only moves the cursor. */
+const logIdx = [];
+events.forEach((e, i) => { if (e.e === "log") logIdx.push(i); });
+let logPos = -1;   // index into logIdx of the last line at/before idx
+if (logIdx.length) {
+  const sec = $("consec");
+  sec.style.display = "";
+  $("constat").textContent = logIdx.length + " line" +
+    (logIdx.length === 1 ? "" : "s") +
+    (DATA.logCapped ? " — recording CAPPED; later output not here" : "");
+  const box = $("console");
+  logIdx.forEach(i => {
+    const e = events[i];
+    const d = document.createElement("div");
+    let cls = "clog " + (e.s === "err" ? "err" : "out");
+    if (/\b(ERROR|CRITICAL|FATAL|Traceback)\b/.test(e.txt))
+      cls += " lvl-error";
+    else if (/\bWARN(ING)?\b/i.test(e.txt)) cls += " lvl-warn";
+    d.className = cls;
+    d.textContent = e.txt || " ";
+    d.title = (e.s === "err" ? "stderr" : "stdout") +
+      (e.f ? " — written at " + e.f + ":" + e.l + " in " + e.fn : "") +
+      " (event " + (i + 1) + ", click to jump)";
+    d.onclick = () => { stop(); goto(i); };
+    box.appendChild(d);
+  });
+}
+function renderConsole() {
+  if (!logIdx.length) return;
+  let lo = 0, hi = logIdx.length - 1, p = -1;
+  while (lo <= hi) {   // last log line at or before the cursor
+    const mid = (lo + hi) >> 1;
+    if (logIdx[mid] <= idx) { p = mid; lo = mid + 1; } else hi = mid - 1;
+  }
+  if (p === logPos) return;
+  const rows = $("console").children;
+  const a = Math.min(logPos < 0 ? 0 : logPos, p < 0 ? 0 : p);
+  const b = Math.max(logPos, p);
+  for (let k = a; k <= b && k < rows.length; k++) {
+    if (k < 0) continue;
+    rows[k].classList.toggle("past", k <= p);
+    rows[k].classList.remove("cur");
+  }
+  if (p >= 0) {
+    rows[p].classList.add("cur");
+    rows[p].scrollIntoView({ block: "nearest" });
+  }
+  logPos = p;
+}
+
 /* #98 per-test chapters: spans from the chap events, an index from
    event -> owning test, a banner summary, and (when the suite had both
    outcomes) the #65 suspects as clickable jumps. */
@@ -644,6 +783,107 @@ for (const [rel, text] of Object.entries(DATA.sources)) {
   $("tabs").appendChild(tab);
   panes[rel].tab = tab;
 }
+
+/* #77 whyline: click a line NUMBER. An executed line jumps to its
+   first execution; a never-run line gets its causal chain — which
+   guard decided against it, how often that guard ran, how it voted —
+   walked upward one controller at a time. Line granularity only
+   (at fn granularity most lines are legitimately unrecorded). */
+const execAt = Object.create(null);   // "file|line" -> [event indices]
+events.forEach((e, i) => {
+  if (e.f && e.l) {
+    const k = e.f + "|" + e.l;
+    (execAt[k] || (execAt[k] = [])).push(i);
+  }
+});
+if (DATA.granularity === "line") {
+  for (const rel in panes) {
+    const g = (DATA.guards || {})[rel] || {};
+    const src = DATA.sources[rel].split("\n");
+    panes[rel].lineEls.forEach((el, i) => {
+      const code = (src[i] || "").trim();
+      // bare headers (else:/try:/finally:) never emit events even
+      // when their bodies run — a strike-through there would lie
+      if (code && !code.startsWith("#")
+          && !/^(else|try|finally)\s*:/.test(code)
+          && !execAt[rel + "|" + (i + 1)])
+        el.classList.add("dead");
+    });
+  }
+}
+const KINDW = { then: "the guard chose against this branch",
+  els: "", "else": "the guard was TRUE every time, so the else " +
+  "branch never ran", loop: "the loop body never ran",
+  loopelse: "the loop never finished cleanly", except: "this handler " +
+  "never caught anything", case: "this case never matched",
+  def: "the function was never called" };
+function whyline(rel, line) {
+  const box = $("whyline");
+  const esc = escapeHtml;
+  const hits = execAt[rel + "|" + line];
+  if (hits) {                       // it ran: jump to the first time
+    stop(); goto(hits[0]);
+    box.innerHTML = "";
+    return;
+  }
+  if (DATA.granularity !== "line") {
+    box.innerHTML = '<div class="wl">whyline needs a line-level ' +
+      "trace (fn granularity records call boundaries only)</div>";
+    return;
+  }
+  const g = (DATA.guards || {})[rel] || {};
+  let h = '<div class="wl"><b>' + esc(rel) + ":" + line +
+    " never ran.</b></div>";
+  let cur = line, depth = 0;
+  while (depth++ < 12) {
+    const ctl = g[cur];
+    if (!ctl) {
+      h += '<div class="wl">…and nothing above it controls that ' +
+        "line: the run ended (or crashed) before reaching it, or " +
+        "this module was never imported that far.</div>";
+      break;
+    }
+    const gl = ctl[0], kind = ctl[1];
+    const arr = execAt[rel + "|" + gl] || [];
+    const gsrc = (DATA.sources[rel].split("\n")[gl - 1] || "").trim();
+    if (arr.length) {
+      let t_ = 0, f_ = 0;
+      arr.forEach(i => {
+        const c = events[i].cond;
+        if (c && "r" in c) { if (c.r) t_++; else f_++; }
+      });
+      h += '<div class="wl">because the controller at <b>line ' + gl +
+        "</b> (" + esc(gsrc.slice(0, 60)) + ") ran <b>" + arr.length +
+        "×</b>" + (t_ + f_ ? " — " + t_ + "× true, " + f_ + "× false"
+                           : "") +
+        " and " + (KINDW[kind] || "never took this path") + "." +
+        '<span class="wlj" data-goto="' + arr[0] +
+        '">first arrival</span>' +
+        (arr.length > 1 ? '<span class="wlj" data-goto="' +
+          arr[arr.length - 1] + '">last</span>' : "") + "</div>";
+      break;
+    }
+    h += '<div class="wl">because its controller at <b>line ' + gl +
+      "</b> (" + esc(gsrc.slice(0, 60)) + ", " + esc(kind) +
+      ") never ran either…</div>";
+    cur = gl;
+  }
+  box.innerHTML = h;
+}
+$("code").addEventListener("click", e => {
+  const t_ = e.target;
+  if (t_.classList && t_.classList.contains("no")) {
+    const ln = t_.closest(".ln");
+    whyline(activeFile, panes[activeFile].lineEls.indexOf(ln) + 1);
+  }
+});
+$("whyline").addEventListener("click", e => {
+  if (e.target.classList && e.target.classList.contains("wlj")) {
+    stop();
+    goto(parseInt(e.target.dataset.goto, 10));
+  }
+});
+
 
 let activeFile = null;
 function activateFile(rel) {
@@ -1830,7 +2070,10 @@ function render() {
 
   const badge = $("badge");
   const GK = { g: "generator", c: "coroutine", a: "async generator" };
-  if (ev.e === "chap") {
+  if (ev.e === "log") {
+    badge.className = "badge log";
+    badge.textContent = "CONSOLE " + (ev.s === "err" ? "stderr" : "stdout");
+  } else if (ev.e === "chap") {
     const OS = { passed: "✓ passed", failed: "✗ FAILED",
                  skipped: "− skipped" };
     badge.className = "badge " +
@@ -2250,6 +2493,7 @@ function render() {
     $("vars").innerHTML = '<div class="empty">(no frame)</div>';
   }
 
+  renderConsole();
   $("counter").textContent = (idx + 1) + " / " + events.length;
   $("scrub").value = idx;
   updateHash();
@@ -2588,7 +2832,8 @@ function parseQuery(q) {
     if ((m = tok.match(/^type:(\w+)$/i))) {
       const k = { exception: "exc", exc: "exc", line: "line",
                   call: "call", return: "return", ret: "return",
-                  chap: "chap", test: "chap", yield: "yield",
+                  chap: "chap", test: "chap", log: "log",
+                  console: "log", yield: "yield",
                   resume: "resume" }[m[1].toLowerCase()];
       if (!k) { bad.push(tok); return; }
       if (k === "yield")

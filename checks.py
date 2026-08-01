@@ -1144,6 +1144,113 @@ deco(1); deco(2)
            f"decorator must record the FIRST call only: {wd}")
 
 
+@check("capsule: rerun recipe embedded, stdin consumed lazily (#104)")
+def _():
+    fx = fixture("fx_caps.py", (
+        "import sys\n"
+        "first = input()\n"
+        "rest = sys.stdin.read()\n"
+        "print('got', first, len(rest))\n"))
+    out = os.path.join(TMP, "t_caps.html")
+    r = subprocess.run([PY, os.path.join(HERE, "tracer.py"),
+                        "--out", out, fx],
+                       capture_output=True, text=True, cwd=TMP,
+                       input="alpha\nbeta tail", timeout=120)
+    expect(os.path.exists(out), f"capsule trace missing: {r.stderr}")
+    c = payload(out)["capsule"]
+    expect(c and c["cwd"] and c["python"] and c["platform"]
+           and "tracer.py" in c["cmd"] and "fx_caps.py" in c["cmd"],
+           f"capsule incomplete: {c}")
+    got = base64.b64decode(c["stdin"] or b"")
+    expect(got == b"alpha\nbeta tail" and c["stdinTrunc"] is False,
+           f"capsule must hold exactly the consumed stdin: {got!r}")
+    expect("hashseed" in c and "env" in c,
+           "capsule must state hashseed and the curated env keys")
+    # a run that never touches a non-EOF stdin must NOT block: closed
+    # empty stdin here, plus the lazy tee means no read happens at all
+    fx2 = fixture("fx_caps2.py", "x = 1\n")
+    out2 = os.path.join(TMP, "t_caps2.html")
+    r2 = subprocess.run([PY, os.path.join(HERE, "tracer.py"),
+                         "--out", out2, fx2],
+                        capture_output=True, text=True, cwd=TMP,
+                        stdin=subprocess.DEVNULL, timeout=60)
+    c2 = payload(out2)["capsule"]
+    expect(c2["stdin"] is None,
+           "no consumption must mean no stdin in the capsule")
+
+
+@check("console lane: output lines become attributed events (#118)")
+def _():
+    fx = fixture("fx_lane.py", (
+        "import sys\n"
+        "def talk(n):\n"
+        "    print('hello', n)\n"
+        "    print('to stderr', file=sys.stderr)\n"
+        "import logging\n"
+        "logging.warning('via logging')\n"
+        "talk(7)\n"
+        "sys.stdout.write('unterminated')\n"))
+    p = run_trace(fx, name="fx_lane")
+    logs = [e for e in p["events"] if e.get("e") == "log"]
+    expect([(e["s"], e["txt"]) for e in logs] == [
+        ("err", "WARNING:root:via logging"),
+        ("out", "hello 7"),
+        ("err", "to stderr"),
+        ("out", "unterminated")],
+        f"console lane wrong: {[(e.get('s'), e.get('txt')) for e in logs]}")
+    hello = logs[1]
+    expect(hello["f"] == "fx_lane.py" and hello["l"] == 3
+           and hello["fn"] == "talk",
+           f"attribution wrong: {hello}")
+    expect(p.get("logCapped") is None, "cap flag must be absent here")
+    # fragmented print() writes joined into ONE line event
+    expect(sum(1 for e in logs if "hello" in e["txt"]) == 1,
+           "fragmented print writes must join into one line")
+    p2 = run_trace(fx, "--no-console", name="fx_lane_off")
+    expect(not any(e.get("e") == "log" for e in p2["events"]),
+           "--no-console must record no console events")
+    # fn granularity still carries the lane (the tee is independent)
+    p3 = run_trace(fx, "--granularity", "fn", name="fx_lane_fn")
+    expect(any(e.get("e") == "log" for e in p3["events"]),
+           "the lane must work at fn granularity too")
+
+
+@check("whyline: guard map chains innermost-first (#77)")
+def _():
+    fx = fixture("fx_why.py", (
+        "def f(x):\n"
+        "    if x > 100:\n"
+        "        return 'big'\n"
+        "    return 'small'\n"
+        "for i in range(3):\n"
+        "    if i == 99:\n"
+        "        print('never')\n"
+        "try:\n"
+        "    pass\n"
+        "except ValueError:\n"
+        "    print('caught')\n"
+        "f(1)\n"))
+    p = run_trace(fx, name="fx_why")
+    g = p["guards"]["fx_why.py"]
+    expect(g["3"] == [2, "then"] and g["4"] == [1, "def"],
+           f"if/def guards wrong: {g.get('3')} {g.get('4')}")
+    expect(g["7"] == [6, "then"] and g["6"] == [5, "loop"],
+           f"nested loop/if guards wrong: {g.get('7')} {g.get('6')}")
+    expect(g["11"] == [10, "except"],
+           f"except guard wrong: {g.get('11')}")
+    expect(g["2"] == [1, "def"],
+           f"innermost-first violated at the if header: {g.get('2')}")
+    # fn granularity: no guards (whyline needs line events, stated)
+    p2 = run_trace(fx, "--granularity", "fn", name="fx_why_fn")
+    expect(p2["guards"] == {}, "guards must be line-granularity only")
+    # renderer wiring
+    with open(os.path.join(TMP, "fx_why.html"), encoding="utf-8") as fh:
+        html = fh.read()
+    for needle in ("function whyline", "never ran", "renderConsole",
+                   "unhandledrejection"):
+        expect(needle in html, f"wiring missing: {needle!r}")
+
+
 @check("chunked: gzip chunks round-trip, auto past 100k, honesty (#101)")
 def _():
     # deterministic fixture (no functions/objects -> no 0x addresses):

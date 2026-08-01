@@ -81,6 +81,21 @@ run from the start. --chunked forces it on, --no-chunked off; a
 missing chunk is announced loudly, in the file and in the viewer.
 Needs DecompressionStream (Chrome 80+ / Firefox 113+ / Safari 16.4+).
 
+Every run records its CONSOLE LANE: each stdout/stderr line the target
+writes becomes an event tied to the frame that wrote it — a console
+panel in the replayer follows the replay, click a line to land on its
+moment (--no-console disables; caps announced; writes below the Python
+layer bypass the tee, stated). Every trace also embeds its
+REPRODUCIBILITY CAPSULE: the exact rerun command, cwd, python/platform,
+PYTHONHASHSEED (with the random-order warning), curated env keys only,
+and the stdin bytes the run actually CONSUMED (captured lazily — a
+pipe that never closes cannot hang the start), downloadable from the
+viewer's Reproduce box. And WHYLINE: click the line number of a line
+that never ran — the viewer answers with the causal chain ("the guard
+at line G ran 12x, 0x true — this branch was never chosen"), walked
+upward one controller at a time; executed lines jump to their first
+execution.
+
 -m pytest runs get PER-TEST CHAPTERS: a tiny plugin is auto-injected
 (-p _pyreplay_pytest_plugin) and every test becomes a named span —
 colored bands over the scrubber (green passed / red failed), the
@@ -111,14 +126,18 @@ itself are never traced, so you can point it at the entry point of any codebase.
 """
 import ast
 import base64
+import datetime
 import dis
 import fnmatch
 import gzip
+import io
 import json
 import os
+import platform
 import re
 import reprlib
 import runpy
+import shlex
 import subprocess
 import sys
 import threading
@@ -605,6 +624,160 @@ def _mro_info(frame):
     return info
 
 
+LOG_CAP = 20_000   # console lines recorded per run; cap announced
+
+# the REAL streams — the tracer's own runtime prints (heartbeat,
+# trigger-hit) go here so they are never recorded as target output
+_RAW = {"out": sys.stdout, "err": sys.stderr}
+
+
+class _ConsoleTee:
+    """#118: forwards every write to the real stream and hands COMPLETE
+    lines to the tracer (fragmented print() writes joined). The target
+    sees the stream API it expects; recording can never break its IO.
+    Stated limits: binary writes through .buffer bypass the lane, as
+    does anything written below the Python layer (C extensions)."""
+
+    def __init__(self, real, tr, tag):
+        self._real = real
+        self._tr = tr
+        self._tag = tag
+        self._buf = ""
+
+    def write(self, s):
+        n = self._real.write(s)
+        try:
+            self._buf += str(s)
+            while "\n" in self._buf:
+                line, self._buf = self._buf.split("\n", 1)
+                self._tr.record_log(self._tag, line)
+        except Exception:
+            pass
+        return n
+
+    def writelines(self, lines):
+        for s in lines:
+            self.write(s)
+
+    def flush(self):
+        return self._real.flush()
+
+    def tail(self):
+        """An unterminated final line still counts — flush it."""
+        if self._buf:
+            try:
+                self._tr.record_log(self._tag, self._buf)
+            except Exception:
+                pass
+            self._buf = ""
+
+    def __getattr__(self, name):   # encoding, isatty, fileno, buffer…
+        return getattr(self._real, name)
+
+
+class _StdinBufTee:
+    """Binary layer of the stdin tee: sys.stdin.buffer reads recorded."""
+
+    def __init__(self, real, sink):
+        self._real = real
+        self._sink = sink
+
+    def _rec(self, b):
+        if b:
+            self._sink.feed(b)
+        return b
+
+    def read(self, *a):
+        return self._rec(self._real.read(*a))
+
+    def read1(self, *a):
+        return self._rec(self._real.read1(*a))
+
+    def readline(self, *a):
+        return self._rec(self._real.readline(*a))
+
+    def readlines(self, *a):
+        ls = self._real.readlines(*a)
+        for b in ls:
+            self._rec(b)
+        return ls
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        b = self._real.readline()
+        if not b:
+            raise StopIteration
+        return self._rec(b)
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
+class _StdinSink:
+    """Capped recorder of consumed stdin for the capsule (#104)."""
+
+    def __init__(self, cap=65536):
+        self.data = bytearray()
+        self.total = 0
+        self._cap = cap
+
+    def feed(self, b):
+        self.total += len(b)
+        room = self._cap - len(self.data)
+        if room > 0:
+            self.data.extend(b[:room])
+
+
+class _StdinTee:
+    """#104: LAZY stdin capture — reads flow through on demand (no
+    pre-buffering: a pipe that never closes can't hang the start),
+    and the capsule keeps a copy of exactly what the run consumed —
+    which is exactly what a rerun needs. input() and iteration go
+    through readline; binary consumers get the wrapped .buffer."""
+
+    def __init__(self, real, sink):
+        self._real = real
+        self._sink = sink
+        rb = getattr(real, "buffer", None)
+        if rb is not None:
+            self.buffer = _StdinBufTee(rb, sink)
+
+    def _rec(self, s):
+        if s:
+            try:
+                enc = getattr(self._real, "encoding", None) or "utf-8"
+                self._sink.feed(s.encode(enc, "replace"))
+            except Exception:
+                pass
+        return s
+
+    def read(self, *a):
+        return self._rec(self._real.read(*a))
+
+    def readline(self, *a):
+        return self._rec(self._real.readline(*a))
+
+    def readlines(self, *a):
+        ls = self._real.readlines(*a)
+        for s in ls:
+            self._rec(s)
+        return ls
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        s = self._real.readline()
+        if not s:
+            raise StopIteration
+        return self._rec(s)
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
 def _poison_kind(enc):
     """Scan an ENCODED value for visible NaN/Inf leaves ("nan" beats
     "inf" when both appear). Working on the encoding — not the live
@@ -659,6 +832,8 @@ class Tracer:
         self.granularity = granularity  # "line" | "fn"
         self.trip = trip                # "nan" -> mark NaN/Inf births
         self._poisoned = {}   # id(frame) -> {var names currently NaN/Inf}
+        self._log_count = 0
+        self.log_capped = False
         self._hits = 0
         self._last_ts = time.perf_counter_ns() // 1000
         self._gen_ids = {}    # id(frame) -> generator instance number
@@ -773,6 +948,45 @@ class Tracer:
         tname = self._thread_label()
         if tname != "MainThread":
             ev["t"] = tname
+        self.events.append(ev)
+
+    def record_log(self, stream, text):
+        """#118: one console LINE as a first-class event (e="log"),
+        tied to the nearest in-scope frame up from the write. Levels
+        are whatever the text says — the lane records, it never
+        interprets. Cap announced via the banner."""
+        if not self.armed or self.truncated \
+                or len(self.events) >= self.max_events:
+            return
+        if self._log_count >= LOG_CAP:
+            self.log_capped = True
+            return
+        self._log_count += 1
+        if len(text) > 500:
+            text = text[:500] + "…[line truncated]"
+        ev = {"e": "log", "s": stream, "txt": text, "ch": {},
+              "fn": "<io>"}
+        f = sys._getframe(2)          # skip record_log + Tee.write
+        depth = 0
+        while f is not None and depth < 40:
+            rel = self._rel(f.f_code.co_filename)
+            if rel is not None:
+                ev["f"] = rel
+                ev["l"] = f.f_lineno
+                ev["fn"] = f.f_code.co_name
+                break
+            f = f.f_back
+            depth += 1
+        if self.granularity == "fn":
+            now = time.perf_counter_ns() // 1000
+            ev["ts"] = max(0, now - self._last_ts)
+            self._last_ts = now
+        tname = self._thread_label()
+        if tname != "MainThread":
+            ev["t"] = tname
+        tk = self._task_name()
+        if tk is not None:
+            ev["tk"] = tk
         self.events.append(ev)
 
     def _gen_mark(self, frame, event, yielding=None):
@@ -1005,7 +1219,7 @@ class Tracer:
             self._record(f, "call", None,
                          tk=tkname if id(f) in task_frames else None)
         print(f"pyreplay: trigger hit (occurrence #{self._hits}), "
-              f"recording started", flush=True)
+              f"recording started", file=_RAW["out"], flush=True)
 
     def _record(self, frame, event, arg, tk="auto"):
         if len(self.events) >= self.max_events:
@@ -1539,6 +1753,61 @@ def _branch_result(info, line):
     return False
 
 
+def build_guards(text, rel):
+    """#77 whyline: for every line, the INNERMOST control structure
+    that decides whether it runs — {"line": [controller_line, kind]}
+    with kind in then/else/loop/loopelse/except/case/def. The chain
+    ("why didn't this run?") emerges by walking the map upward.
+    Parent extents are stamped first, bodies re-stamped on recursion,
+    so the innermost controller wins by construction."""
+    try:
+        tree = ast.parse(text, filename=rel)
+    except SyntaxError:
+        return {}
+    guards = {}
+
+    def stamp(node, ctl):
+        ln = getattr(node, "lineno", None)
+        if ln is None or ctl is None:
+            return
+        end = getattr(node, "end_lineno", None) or ln
+        for k in range(ln, end + 1):
+            guards[k] = ctl
+
+    def visit(stmts, ctl):
+        for node in stmts:
+            stamp(node, ctl)
+            if isinstance(node, ast.If):
+                visit(node.body, [node.lineno, "then"])
+                visit(node.orelse, [node.lineno, "else"])
+            elif isinstance(node, ast.While):
+                visit(node.body, [node.lineno, "loop"])
+                visit(node.orelse, [node.lineno, "loopelse"])
+            elif isinstance(node, (ast.For, ast.AsyncFor)):
+                visit(node.body, [node.lineno, "loop"])
+                visit(node.orelse, [node.lineno, "loopelse"])
+            elif isinstance(node, (ast.Try,
+                                   getattr(ast, "TryStar", ast.Try))):
+                visit(node.body, ctl)
+                for h in node.handlers:
+                    visit(h.body, [h.lineno, "except"])
+                visit(node.orelse, ctl)
+                visit(node.finalbody, ctl)
+            elif isinstance(node, (ast.FunctionDef,
+                                   ast.AsyncFunctionDef)):
+                visit(node.body, [node.lineno, "def"])
+            elif isinstance(node, ast.ClassDef):
+                visit(node.body, ctl)
+            elif isinstance(node, (ast.With, ast.AsyncWith)):
+                visit(node.body, ctl)
+            elif hasattr(ast, "Match") and isinstance(node, ast.Match):
+                for case_ in node.cases:
+                    visit(case_.body, [node.lineno, "case"])
+
+    visit(tree.body, None)
+    return {str(k): v for k, v in guards.items()}
+
+
 def annotate_conditionals(events, sources):
     """Post-processing: walk the event stream with per-thread frame
     stacks; each event on an if/while line becomes 'pending' and is
@@ -1668,7 +1937,22 @@ def export_perfetto(events, script, path):
                          "args": {"msg": x.get("m", ""),
                                   "soft": bool(x.get("soft")),
                                   "where": f"{ev['f']}:{ev['l']}"}})
-        else:
+        elif kind == "log":
+            # #118: console lines land on the timeline as instants —
+            # in Perfetto too, the output meets its moment
+            tevs.append({"ph": "i", "s": "t",
+                         "name": ("stderr: " if ev.get("s") == "err"
+                                  else "stdout: ") + ev.get("txt", ""),
+                         "cat": "console", "ts": acc, "pid": 1,
+                         "tid": tid})
+        elif kind == "chap":
+            # #98: test boundaries as instants (a B/E span would fight
+            # the call slices for nesting on the same row)
+            mark = ("TEST ▶ " if ev.get("k") == "s"
+                    else f"TEST {ev.get('o', 'end')} — ")
+            tevs.append({"ph": "i", "s": "t", "name": mark + ev.get("id", ""),
+                         "cat": "test", "ts": acc, "pid": 1, "tid": tid})
+        elif kind == "line":
             # a line event means a line-granularity stream: it carries
             # no time, and exporting it would be fiction — refuse here
             # too, not only at the CLI
@@ -1893,6 +2177,9 @@ def _write_trace(tr, out, granularity, entry_label, error,
         "dataflow": {rel: build_dataflow(text, rel)
                      for rel, text in tr.sources.items()}
                     if granularity == "line" else {},
+        "guards": {rel: build_guards(text, rel)
+                   for rel, text in tr.sources.items()}
+                  if granularity == "line" else {},
         "events": tr.events,
         "truncated": tr.truncated,
         "error": error,
@@ -2062,7 +2349,25 @@ class watch:
                 out = f"trace_watch_{n}.html"
                 n += 1
         out = os.path.abspath(out)
-        _write_trace(self._tr, out, self.granularity, self._label, error)
+        capsule = {   # #104: the in-process bracket's capsule — the
+            # HOST command is the reproduction recipe here
+            "cmd": " ".join(shlex.quote(a) for a in
+                            [os.path.basename(sys.executable)]
+                            + sys.argv),
+            "argv": sys.argv[:],
+            "cwd": os.getcwd(),
+            "python": sys.version.split()[0],
+            "platform": platform.platform(),
+            "hashseed": os.environ.get("PYTHONHASHSEED") or "random",
+            "env": {k: os.environ[k] for k in
+                    ("VIRTUAL_ENV", "PYTHONPATH")
+                    if k in os.environ},
+            "when": datetime.datetime.now().isoformat(
+                timespec="seconds"),
+            "stdin": None, "stdinTrunc": False,
+        }
+        _write_trace(self._tr, out, self.granularity, self._label, error,
+                     extra={"capsule": capsule})
         self.out = out
         self._tr = None
         return False                    # never swallow the block's raise
@@ -2560,6 +2865,7 @@ def main(argv):
     trip = None
     runs_n = None
     chunked_opt = None   # #101: None = auto by size
+    console = True       # #118: console lane on by default
     _chap_plug = None   # #98: the imported pytest chapter plugin
     while argv and (argv[0].startswith("--") or argv[0] == "-m"):
         if argv[0] == "-m" and len(argv) >= 2:
@@ -2607,6 +2913,9 @@ def main(argv):
                 print("error: --trip expects 'nan' (NaN/Inf tripwire)")
                 return 2
             trip, argv = argv[1], argv[2:]
+        elif argv[0] == "--no-console":
+            console = False
+            argv = argv[1:]
         elif argv[0] == "--chunked":
             chunked_opt = True
             argv = argv[1:]
@@ -2755,6 +3064,35 @@ def main(argv):
     if perfetto:
         perfetto = os.path.abspath(perfetto)
 
+    # #104 Tier-1: the reproducibility capsule — everything that lets
+    # anyone (future-you included) make this run happen again. Piped
+    # stdin is buffered ONCE and replayed to the target, so the capsule
+    # can carry a copy (first 64 KB; truncation stated); interactive
+    # stdin is not captured. Env: only the curated keys — never a full
+    # dump (secrets live in env).
+    capsule = {
+        "cmd": "python3 tracer.py " + " ".join(
+            shlex.quote(a) for a in orig_argv),
+        "argv": orig_argv,
+        "cwd": os.getcwd(),
+        "python": sys.version.split()[0],
+        "platform": platform.platform(),
+        "hashseed": os.environ.get("PYTHONHASHSEED") or "random",
+        "env": {k: os.environ[k] for k in
+                ("VIRTUAL_ENV", "PYTHONPATH", "PYREPLAY_HEARTBEAT")
+                if k in os.environ},
+        "when": datetime.datetime.now().isoformat(timespec="seconds"),
+        "stdin": None, "stdinTrunc": False,
+    }
+    prev_stdin = None
+    stdin_sink = None
+    if not sys.stdin.isatty():
+        # lazy tee: never pre-read (a pipe that never closes must not
+        # hang the start); the capsule gets what the run CONSUMED
+        stdin_sink = _StdinSink()
+        prev_stdin = sys.stdin
+        sys.stdin = _StdinTee(prev_stdin, stdin_sink)
+
     tracer = Tracer(root, max_events, start_at, start_when, start_count,
                     include, exclude, granularity, trip=trip)
     old_argv, old_path = sys.argv, sys.path[:]
@@ -2828,7 +3166,7 @@ def main(argv):
                       f"{int(time.time() - hb_t0)}s, "
                       f"{len(tracer.events):,} events recorded "
                       f"(Ctrl-C stops and keeps the partial)",
-                      file=sys.stderr, flush=True)
+                      file=_RAW["err"], flush=True)
         threading.Thread(target=_beat, daemon=True).start()
 
     error = None
@@ -2841,6 +3179,14 @@ def main(argv):
         sys.settrace(tracer)
     if _chap_plug is not None:
         _chap_plug._ACTIVE_TRACER = tracer   # #98 handoff
+    tees = None
+    if console:
+        # #118: the console lane — every stdout/stderr LINE the target
+        # writes becomes an event tied to its emitting frame. Output
+        # still reaches the real terminal; --no-console disables.
+        sys.stdout = _ConsoleTee(sys.stdout, tracer, "out")
+        sys.stderr = _ConsoleTee(sys.stderr, tracer, "err")
+        tees = (sys.stdout, sys.stderr)
     try:
         # run_path/run_module execute the entry as __main__, so a script's
         # own `if __name__ == "__main__":` block — or a module like pytest —
@@ -2867,6 +3213,13 @@ def main(argv):
             threading.settrace(None)
         sys.argv = old_argv
         sys.path[:] = old_path
+        if prev_stdin is not None:
+            sys.stdin = prev_stdin
+        if tees is not None:
+            tees[0].tail()
+            tees[1].tail()
+            sys.stdout = tees[0]._real
+            sys.stderr = tees[1]._real
 
     trigger_desc = None
     if start_at or start_when:
@@ -2881,10 +3234,15 @@ def main(argv):
 
     # #98: chapters recorded by the pytest plugin -> summary + the
     # per-test SBFL join, embedded in the trace and echoed to stdout
-    extra = None
+    if stdin_sink is not None and stdin_sink.total:
+        capsule["stdin"] = base64.b64encode(
+            bytes(stdin_sink.data)).decode("ascii")
+        capsule["stdinTrunc"] = stdin_sink.total > len(stdin_sink.data)
+    extra = {"capsule": capsule,
+             "logCapped": tracer.log_capped or None}
     tsum, tsusp = _chapter_suspicion(tracer.events, granularity)
     if tsum:
-        extra = {"tests": tsum, "testSuspicion": tsusp}
+        extra.update({"tests": tsum, "testSuspicion": tsusp})
         line = (f"tests: {tsum['tests']} — {tsum['passed']} passed"
                 + (f", {tsum['failed']} failed" if tsum["failed"] else "")
                 + (f", {tsum['other']} errored" if tsum["other"] else "")

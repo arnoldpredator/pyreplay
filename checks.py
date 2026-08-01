@@ -3598,6 +3598,66 @@ def _():
         expect(probe in tpl, f"walls contract missing: {probe}")
 
 
+@check("forensics: shadow-patched diverge, equivalents, bridge (#125)")
+def _():
+    sys.path.insert(0, HERE)
+    import tracer as _tr
+    sys.path.pop(0)
+    # the applier: unique context match; ambiguity refused, never guessed
+    f1 = fixture("ap125.py", "def a():\n    x = 1\n    return x\n")
+    ok = _tr._apply_unified_diff(f1,
+        "--- ap125.py\n+++ ap125.py\n@@ -1,3 +1,3 @@\n"
+        " def a():\n-    x = 1\n+    x = 2\n     return x\n")
+    with open(f1) as fh:
+        expect(ok and "x = 2" in fh.read(),
+               "a clean function-relative diff must apply by context")
+    f2 = fixture("ap125b.py", "x = 1\ny = 0\nx = 1\n")
+    expect(_tr._apply_unified_diff(f2,
+        "--- b\n+++ b\n@@ -1,1 +1,1 @@\n-x = 1\n+x = 9\n") is False,
+        "an AMBIGUOUS context (two matches) is refused, never guessed")
+    # no mutants/ here: the mode refuses with the recipe
+    r = subprocess.run([PY, os.path.join(HERE, "tracer.py"),
+                        "--forensics"], capture_output=True, text=True,
+                       cwd=TMP, stdin=subprocess.DEVNULL, timeout=60)
+    expect(r.returncode == 2 and "mutmut run" in r.stdout,
+           "without mutants/ the bridge points at mutmut, not itself")
+    # end-to-end (only where mutmut exists — the project venv)
+    venv_py = os.path.join(HERE, ".venv", "bin", "python")
+    have = os.path.exists(venv_py) and subprocess.run(
+        [venv_py, "-c", "import mutmut"], capture_output=True,
+        stdin=subprocess.DEVNULL).returncode == 0
+    if not have:
+        print("        note: mutmut not importable here — bridge "
+              "checked at applier level only", end="")
+        return
+    proj = os.path.join(TMP, "mut125")
+    os.makedirs(os.path.join(proj, "tests"), exist_ok=True)
+    with open(os.path.join(proj, "calc.py"), "w") as fh:
+        fh.write("def rate(n):\n    base = 1\n    return base\n")
+    with open(os.path.join(proj, "tests", "test_calc.py"), "w") as fh:
+        fh.write("from calc import rate\n\n\n"
+                 "def test_rate():\n    assert rate(5) >= 1\n")
+    with open(os.path.join(proj, "setup.cfg"), "w") as fh:
+        fh.write("[mutmut]\npaths_to_mutate=calc.py\n")
+    r = subprocess.run([venv_py, "-m", "mutmut", "run"],
+                       capture_output=True, text=True, cwd=proj,
+                       stdin=subprocess.DEVNULL, timeout=600)
+    r2 = subprocess.run([venv_py, os.path.join(HERE, "tracer.py"),
+                         "--forensics"], capture_output=True,
+                        text=True, cwd=proj,
+                        stdin=subprocess.DEVNULL, timeout=900)
+    expect("STATE diverges" in r2.stdout
+           and "base:  1  vs  2" in r2.stdout,
+           f"the un-asserted value must be NAMED: {r2.stdout[-400:]}")
+    expect("assertion you forgot to write" in r2.stdout,
+           "the verdict names the missing assertion")
+    expect("divergence(s) located" in r2.stdout,
+           "the summary counts divergences")
+    kept = [f for f in os.listdir(proj)
+            if f.startswith("forensics_") and f.endswith(".html")]
+    expect(len(kept) >= 2, f"both traces are kept as evidence: {kept}")
+
+
 # ---------------------------------------------------------------- runner
 
 def main():

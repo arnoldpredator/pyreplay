@@ -609,6 +609,18 @@ be nondeterminism (the report says to pin PYTHONHASHSEED or measure
 with --runs first), and held trials are an observation, never a
 proof. Conservation laws as tests — no oracle required.
 
+**Mutation-survivor forensics (`--forensics`).** Run `mutmut run` in
+your project, then point the tracer at the survivors — the mutants no
+test killed. For each one, the bridge reads mutmut's own artifacts
+(survivor list, nearest covering test, the diff), applies the diff to
+a patched shadow copy, traces the test twice at line level, and hands
+the pair to the divergence finder. The verdict writes itself: "STATE
+diverges at event 17: base: 1 vs 2 … every assertion still passed —
+the divergence above is the assertion you forgot to write." Identical
+traces get the other honest answer: possibly an equivalent mutant,
+never an invented difference. Needs mutmut importable in the python
+you run the tracer with (`.venv/bin/python tracer.py --forensics`).
+
 **The nontermination detector.** Poincaré's rule, applied: a closed
 system that returns to a previous state must repeat forever. Every
 line trace fingerprints the frame at each loop head; an exact repeat

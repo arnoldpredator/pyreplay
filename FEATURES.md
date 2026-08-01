@@ -2490,6 +2490,44 @@ program behavior as a distribution to be measured.
 
   [![Feature 66 — shrinking](screenshots/66-shrink.png)](screenshots/66-shrink.png)
 
+### 125. Mutation-survivor forensics — why did this mutant live?
+- **Measured:** the bridge uses **mutmut as-is** (never rebuilt): the
+  survivor list from `mutmut results`, the nearest covering test
+  from mutmut's own coverage mapping (`mutants/mutmut-stats.json`),
+  the mutation diff from `mutmut show`. Then the forensics: the diff
+  is applied to a **patched shadow copy** of the project (strict
+  unique-context match — ambiguity refused, never guessed) and the
+  nearest test is traced TWICE at line level — original vs mutant —
+  on structurally identical files, so #64's alignment lands exactly
+  on the behavioral difference.
+- **Displayed:** per survivor: the diff, the nearest test, and the
+  divergence report — "STATE diverges at event 17: `base: 1 vs 2`"
+  with deep links into both kept traces — closed by the verdict:
+  *the traces DIVERGE and every assertion still passed — the
+  divergence above is the assertion you forgot to write.* When the
+  traces are identical: *no behavioral divergence found on this
+  test; possibly an equivalent mutant — never invented, either way.*
+- **Why:** in a no-reading regime the mutation score is the only
+  direct measurement of the test suite itself, and survivors are
+  exactly where the suite is blind. Killing one used to mean reading
+  the diff and guessing; a traced divergence turns it into a
+  mechanical fix.
+- **Use case:** `base = 1 → base = 2` survives because the test only
+  asserts `rate(5) >= 1`. The forensics names the un-asserted value
+  at its exact event. And `x < lo → x <= lo` survives test inputs
+  that take the same branch either way — traced identical, honestly
+  labeled possibly-equivalent.
+- **Command:** run `mutmut run` in your project, then
+  `.venv/bin/python tracer.py --forensics [SURVIVOR_ID …]` from the
+  same directory (no ids = first 5 survivors, announced). Honesty:
+  needs mutmut importable (the error says so); unmapped tests and
+  unappliable diffs are SKIPPED with their reasons, never faked.
+- **Screenshot** — two survivors: one diverging (`base: 1 vs 2`, the
+  missing assertion named), one traced-identical
+  (possibly-equivalent, said plainly).
+
+  [![Feature 125 — forensics](screenshots/125-forensics.png)](screenshots/125-forensics.png)
+
 ## Appendix A — the manual test plan
 
 Agreed flow: work through the catalog top to bottom, ticking each

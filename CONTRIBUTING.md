@@ -7,7 +7,7 @@ can pick an item and implement it. Features are numbered **#63 onward**, continu
 in FEATURES.md. Fifteen roadmap items have shipped since the list was
 written (63, 64, 65, 70, 77, 79, 80, 98, 101 v1, 103, 104 Tier 1,
 106, 109, 118, 120 v1) — their rows below are struck through;
-**34 remain unbuilt** (plus the stated remainders of 66/74/75/85/88/89/101/104/119/120/126/127/128/132/134).
+**33 remain unbuilt** (plus the stated remainders of 66/74/75/85/88/89/101/104/119/120/126/127/128/132/134).
 
 ## Start here — how to contribute
 
@@ -131,7 +131,7 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
 | 122 | Shadowing & collision audit | S | ★★ |
 | 123 | Float-hygiene probes | S–M | ★★ |
 | 124 | Event-loop starvation detector | S | ★★ |
-| 125 | Mutation-survivor forensics | M | ★★★ |
+| 125 | ~~Mutation-survivor forensics (mutmut bridge)~~ **shipped** | M | ★★★ |
 | 126 | ~~Metamorphic relations harness~~ **shipped (shrinking awaits #66)** | S–M | ★★ |
 | 127 | ~~Scaling bench: measured growth exponents~~ **shipped (minimal gen protocol; full #67 remains)** | M | ★★★ |
 | 128 | ~~Prediction gate: commit a claim, get scored~~ **shipped (tour stops await #108)** | M | ★★★ |
@@ -1104,6 +1104,7 @@ standalone gate lacks.
 
 ### 125. Mutation-survivor forensics
 *(belongs with Section 1 — the reliability lab)*
+**Shipped 2026-08-01** — now catalog entry #125 in [FEATURES.md](FEATURES.md): `--forensics` mode — survivors/tests/diffs read from mutmut as-is, diff applied to a patched shadow copy by unique-context match, nearest test traced twice at line level, #64 divergence report + the missing-assertion verdict; identical traces say possibly-equivalent, skips carry reasons. What remains: the unconsumed-values refinement (post-divergence alignment) and cosmic-ray.
 - **What:** mutation testing's chore is the *surviving* mutant — a
   planted bug no test killed. Bridge to mutmut/cosmic-ray (used
   as-is): for each survivor, run the nearest test twice at fn/line

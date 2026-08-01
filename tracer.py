@@ -3996,6 +3996,162 @@ def _build_fsm(events, expr, declared):
             "edges": edge_list, "obs": obs, "viol": n_viol}
 
 
+# ---- #125: mutation-survivor forensics ----------------------------------
+# Mutation testing's chore is the SURVIVING mutant — a planted bug no
+# test killed. The bridge uses mutmut AS-IS (never rebuilt): it reads
+# the survivor list (`mutmut results`), the nearest tests
+# (mutants/mutmut-stats.json, mutmut's own coverage mapping) and the
+# mutation diff (`mutmut show ID`). The two traced runs happen on a
+# PATCHED SHADOW COPY of the project — real files, real line numbers,
+# identical structure except the mutation — so #64's alignment lands
+# exactly on the behavioral difference, and identical traces can
+# honestly mean "possibly an equivalent mutant" instead of trampoline
+# noise. Stated plainly in the report.
+
+def _apply_unified_diff(path, diff_text):
+    """Apply mutmut's function-scoped diff by UNIQUE context match —
+    its hunk numbers are function-relative, so positions are useless;
+    the old block (context + removals) must appear exactly once in
+    the file, or the caller refuses the survivor honestly."""
+    with open(path, encoding="utf-8") as fh:
+        lines = [ln.rstrip("\n") for ln in fh.read().splitlines()]
+    old_block, new_block = [], []
+    for raw in diff_text.splitlines():
+        if raw.startswith(("---", "+++", "@@", "#")) or not raw:
+            continue
+        if raw.startswith("-"):
+            old_block.append(raw[1:])
+        elif raw.startswith("+"):
+            new_block.append(raw[1:])
+        else:
+            old_block.append(raw[1:])
+            new_block.append(raw[1:])
+    if not old_block:
+        return False
+    hits = [i for i in range(len(lines) - len(old_block) + 1)
+            if lines[i:i + len(old_block)] == old_block]
+    if len(hits) != 1:
+        return False        # absent or ambiguous: never guess
+    i = hits[0]
+    lines[i:i + len(old_block)] = new_block
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines) + "\n")
+    return True
+
+
+def _forensics_harness(ids):
+    import importlib.util
+    import shutil
+    import tempfile
+    root = os.getcwd()
+    mut_dir = os.path.join(root, "mutants")
+    stats_path = os.path.join(mut_dir, "mutmut-stats.json")
+    if not os.path.isdir(mut_dir) or not os.path.exists(stats_path):
+        print("error: no mutants/ here — run `mutmut run` first (the "
+              "bridge reads mutmut's own artifacts; it never mutates "
+              "code itself)")
+        return 2
+    if importlib.util.find_spec("mutmut") is None:
+        print("error: mutmut is not importable in THIS python — run "
+              "the tracer with the interpreter that has it "
+              "(e.g. .venv/bin/python tracer.py --forensics)"
+              + _venv_hint())
+        return 2
+    with open(stats_path, encoding="utf-8") as fh:
+        stats = json.load(fh)
+    tests_by_fn = stats.get("tests_by_mangled_function_name", {})
+    if not ids:
+        r = subprocess.run([sys.executable, "-m", "mutmut", "results"],
+                           capture_output=True, text=True, cwd=root,
+                           stdin=subprocess.DEVNULL, timeout=120)
+        ids = [ln.split(":")[0].strip()
+               for ln in r.stdout.splitlines()
+               if ln.strip().endswith(": survived")]
+        if not ids:
+            print("no survivors — every mutant was killed. The suite "
+                  "held; nothing to explain.")
+            return 0
+        if len(ids) > 5:
+            print(f"pyreplay forensics: {len(ids)} survivors — "
+                  f"examining the first 5 (name specific ids for "
+                  f"the rest)", flush=True)
+            ids = ids[:5]
+    n_div = n_eq = n_skip = 0
+    for sid in ids:
+        mangled = sid.rsplit("__mutmut_", 1)[0]
+        tests = tests_by_fn.get(mangled, [])
+        print(f"\n⛏ survivor {sid}", flush=True)
+        r = subprocess.run([sys.executable, "-m", "mutmut", "show",
+                            sid], capture_output=True, text=True,
+                           cwd=root, stdin=subprocess.DEVNULL,
+                           timeout=120)
+        diff = "\n".join(ln for ln in r.stdout.splitlines()
+                          if not ln.startswith("#"))
+        for ln in diff.splitlines():
+            print("    " + ln)
+        m = re.search(r"^--- (\S+)", diff, re.M)
+        if not m or not tests:
+            reason = ("mutmut recorded no covering test for it"
+                      if not tests else "no diff header")
+            print(f"  SKIPPED: {reason} — run the suite by hand and "
+                  f"--diverge the traces yourself")
+            n_skip += 1
+            continue
+        target_rel = m.group(1)
+        test_id = tests[0]
+        print(f"  nearest test (mutmut's own mapping): {test_id}"
+              + (f"  (+{len(tests) - 1} more)"
+                 if len(tests) > 1 else ""))
+        shadow = tempfile.mkdtemp(prefix="pyreplay-forensics-")
+        shutil.copytree(root, shadow, dirs_exist_ok=True,
+                        ignore=shutil.ignore_patterns(
+                            "mutants", ".git", "__pycache__",
+                            "trace_*.html", "forensics_*.html",
+                            ".venv", "*.egg-info"))
+        safe = sid.replace(".", "_")
+        p_orig = os.path.join(root, f"forensics_{safe}_orig.html")
+        p_mut = os.path.join(root, f"forensics_{safe}_mut.html")
+
+        def run(outp):
+            cmd = [sys.executable, SELF, "--granularity", "line",
+                   "--root", shadow, "--out", outp,
+                   "-m", "pytest", test_id, "-q"]
+            subprocess.run(cmd, capture_output=True, cwd=shadow,
+                           stdin=subprocess.DEVNULL, timeout=600)
+            return os.path.exists(outp)
+        ok = run(p_orig)
+        if not _apply_unified_diff(os.path.join(shadow, target_rel),
+                                   diff):
+            print("  SKIPPED: mutmut's diff did not apply cleanly to "
+                  "a shadow copy — trace the trampoline by hand "
+                  "(MUTANT_UNDER_TEST=" + sid + ")")
+            n_skip += 1
+            shutil.rmtree(shadow, ignore_errors=True)
+            continue
+        ok = run(p_mut) and ok
+        shutil.rmtree(shadow, ignore_errors=True)
+        if not ok:
+            print("  SKIPPED: a traced run produced no artifact")
+            n_skip += 1
+            continue
+        rc = _diverge(p_orig, p_mut)
+        if rc == 1:
+            n_div += 1
+            print("  ⚖ the traces DIVERGE and every assertion still "
+                  "passed — the divergence above is the assertion "
+                  "you forgot to write.")
+        else:
+            n_eq += 1
+            print("  no behavioral divergence found on this test; "
+                  "possibly an equivalent mutant — or the difference "
+                  "only shows under a test mutmut didn't map. Never "
+                  "invented, either way.")
+    print(f"\nforensics: {n_div} divergence(s) located · {n_eq} "
+          f"possibly-equivalent · {n_skip} skipped. Traced on a "
+          f"patched shadow copy — real files, real line numbers.")
+    return 0 if (n_div or n_eq) else 1
+
+
 # ---- #78: the nontermination detector (state recurrence) ----------------
 # Poincaré's framing: a closed system that returns to a previous state
 # must repeat forever. At every loop-head event the frame's recorded
@@ -5592,6 +5748,10 @@ def main(argv):
             print("usage: tracer.py --diverge A.html B.html")
             return 2
         return _diverge(argv[1], argv[2])
+    if argv[:1] == ["--forensics"]:
+        # #125, a mode: explain mutmut's survivors — runs from the
+        # project root where `mutmut run` was executed
+        return _forensics_harness(argv[1:])
     if argv[:1] == ["--mine"]:
         # #74, a mode: mine invariants across EXISTING traces — offline,
         # nothing runs. Support multiplies across the files you give it.

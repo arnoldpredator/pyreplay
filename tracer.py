@@ -100,6 +100,16 @@ never evaluable ANYWHERE warns at the end (a typo must never look like
 data). Expressions run INSIDE your process — keep them pure. Line
 granularity only; scope the per-line cost with --include.
 
+--invariant EXPR (repeatable) is the contract you don't edit into the
+code: checked at every line event where its names are in scope, and
+every TRANSITION into falsehood becomes an amber VIOLATION event — the
+run continues. Recovery re-arms (the tripwire pattern), so a contract
+that stays broken records one entry, not a flood. The event carries
+the values of the expression's names; the banner and terminal report
+each invariant's verdict — violated N× with a jump, held everywhere it
+was evaluable, or never evaluable (a typo must never look like a
+clean contract). Line granularity only.
+
 --black-box turns the tracer into a flight recorder: a ring buffer of
 the LAST --max-events events (fn granularity by default), rotation
 counted and announced in the banner; `kill -USR1 <pid>` dumps the
@@ -1020,6 +1030,11 @@ class Tracer:
         self.chaos = None        # #68: _Chaos instance when fuzzing
         self.watches = []        # #72: [(src, code)] observables
         self.watch_hits = {}     # #72: src -> successful evals
+        self.invariants = []     # #73: [(src, code, names)] contracts
+        self._inv_state = {}     # (frame id, src) -> held last time?
+        self.inv_counts = {}     # src -> violations recorded
+        self.inv_first = {}      # src -> event index of first violation
+        self.inv_evals = {}      # src -> successful evaluations
         self.check_hit = False
         self.check_hits = 0
         self.check_evals = 0     # successful evaluations (typo honesty)
@@ -1703,6 +1718,46 @@ class Tracer:
         if tk is not None:
             ev["tk"] = tk
         self.events.append(ev)
+        if self.invariants and event == "line":
+            self._check_invariants(frame, ev)
+
+    def _check_invariants(self, frame, line_ev):
+        """#73: contracts checked at every line event. A VIOLATION is
+        the TRANSITION into falsehood — recovery re-arms, the #79 trip
+        pattern — recorded as its own soft event carrying the values
+        of the expression's names. Unevaluable here = the frame
+        doesn't define the names = out of scope, never a violation."""
+        for src, code, names in self.invariants:
+            key = (id(frame), src)
+            try:
+                ok = bool(eval(code, frame.f_globals, frame.f_locals))
+            except Exception:
+                self._inv_state.pop(key, None)
+                continue
+            self.inv_evals[src] = self.inv_evals.get(src, 0) + 1
+            if ok:
+                self._inv_state[key] = True
+                continue
+            if self._inv_state.get(key) is False:
+                continue          # still down — one event per entry
+            self._inv_state[key] = False
+            vals = {}
+            for n in names:
+                if n in frame.f_locals:
+                    vals[n] = encode(frame.f_locals[n], 1)
+                elif n in frame.f_globals:
+                    vals[n] = encode(frame.f_globals[n], 1)
+            vev = {"e": "viol", "inv": src, "f": line_ev["f"],
+                   "l": line_ev["l"], "fn": line_ev["fn"], "ch": {},
+                   "vals": vals}
+            if "t" in line_ev:
+                vev["t"] = line_ev["t"]
+            if "tk" in line_ev:
+                vev["tk"] = line_ev["tk"]
+            self.inv_counts[src] = self.inv_counts.get(src, 0) + 1
+            if src not in self.inv_first:
+                self.inv_first[src] = len(self.events)
+            self.events.append(vev)
 
 
 MON = getattr(sys, "monitoring", None)   # PEP 669, Python 3.12+
@@ -3416,6 +3471,7 @@ def main(argv):
     black_box = False    # #103: ring-buffer flight recorder
     chaos_seed = None    # #68: schedule-fuzzing seed
     watch_list = []      # #72: [(src, code)] watch expressions
+    inv_list = []        # #73: [(src, code, names)] invariants
     check = None         # #70: compiled --check expression
     check_src = None
     chunked_opt = None   # #101: None = auto by size
@@ -3467,6 +3523,18 @@ def main(argv):
                 print("error: --trip expects 'nan' (NaN/Inf tripwire)")
                 return 2
             trip, argv = argv[1], argv[2:]
+        elif argv[0] == "--invariant" and len(argv) >= 2:
+            try:
+                inv_code = compile(argv[1], "<invariant>", "eval")
+                inv_names = sorted({n.id for n in ast.walk(
+                    ast.parse(argv[1], mode="eval"))
+                    if isinstance(n, ast.Name)})[:8]
+            except SyntaxError as exc:
+                print(f"error: --invariant is not a valid expression: "
+                      f"{exc}")
+                return 2
+            inv_list.append((argv[1], inv_code, inv_names))
+            argv = argv[2:]
         elif argv[0] == "--watch" and len(argv) >= 2:
             try:
                 watch_list.append((argv[1],
@@ -3565,6 +3633,10 @@ def main(argv):
         return 2
     if watch_list and granularity == "fn":
         print("error: --watch evaluates per LINE event — drop "
+              "--granularity fn (and scope the cost with --include)")
+        return 2
+    if inv_list and granularity == "fn":
+        print("error: --invariant is checked per LINE event — drop "
               "--granularity fn (and scope the cost with --include)")
         return 2
     if runs_n and perfetto:
@@ -3694,6 +3766,11 @@ def main(argv):
               "evaluated at every line event of every traced frame — "
               "they run INSIDE your process (keep them pure); scope "
               "the cost with --include", flush=True)
+    if inv_list:
+        tracer.invariants = inv_list
+        print(f"pyreplay: {len(inv_list)} invariant(s) checked at "
+              "every line event where their names are in scope — "
+              "violations become events, the run continues", flush=True)
     old_switch = None
     if chaos_seed is not None:
         tracer.chaos = _Chaos(chaos_seed)
@@ -3912,10 +3989,27 @@ def main(argv):
             print(f"pyreplay: watch [{wsrc}] was never evaluable "
                   f"anywhere — probably a typo (it recorded nothing; "
                   f"a wrong name must never look like data)", flush=True)
+    for isrc, _c, _n in inv_list:
+        nviol = tracer.inv_counts.get(isrc, 0)
+        if not tracer.inv_evals.get(isrc):
+            print(f"pyreplay: invariant [{isrc}] was never evaluable "
+                  f"anywhere — probably a typo (it was checked "
+                  f"nowhere)", flush=True)
+        elif nviol:
+            print(f"invariant [{isrc}]: VIOLATED {nviol}x — first at "
+                  f"event {tracer.inv_first[isrc] + 1}", flush=True)
+        else:
+            print(f"invariant [{isrc}]: held everywhere it was "
+                  f"evaluable", flush=True)
     bounds = _boundaries(tracer.events)
     extra = {"capsule": capsule,
              "ring": ring_info,
              "chaos": tracer.chaos.report() if tracer.chaos else None,
+             "invariants": [{"src": s,
+                             "n": tracer.inv_counts.get(s, 0),
+                             "first": tracer.inv_first.get(s),
+                             "evals": tracer.inv_evals.get(s, 0)}
+                            for s, _c, _n in inv_list] or None,
              "boundaries": bounds or None,
              "logCapped": tracer.log_capped or None}
     tsum, tsusp = _chapter_suspicion(tracer.events, granularity)

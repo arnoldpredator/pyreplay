@@ -655,6 +655,31 @@ if (DATA.ring && DATA.ring.dropped > 0) {
     "mid-run.";
   b.appendChild(rn);
 }
+/* #73: every invariant reports its verdict — violated with a jump,
+   held everywhere evaluable, or never evaluable (the typo case) */
+if (DATA.invariants) {
+  const b = $("banner");
+  if (!b.style.display || b.style.display === "none") {
+    b.className = "info";
+    b.style.display = "block";
+  }
+  DATA.invariants.forEach(iv => {
+    const s = document.createElement("span");
+    if (!iv.evals) {
+      s.textContent = " ⚖ invariant [" + iv.src + "] was never " +
+        "evaluable anywhere — probably a typo.";
+    } else if (iv.n) {
+      s.className = "tripnote";
+      s.textContent = " ⚖ invariant [" + iv.src + "] VIOLATED " + iv.n +
+        "× — first at event " + (iv.first + 1) + ". Click to jump.";
+      s.onclick = () => { stop(); goto(iv.first); };
+    } else {
+      s.textContent = " ⚖ invariant [" + iv.src + "] held everywhere " +
+        "it was evaluable.";
+    }
+    b.appendChild(s);
+  });
+}
 /* #68 chaos: a perturbed run must say so, loudly (constitution rule 4) */
 if (DATA.chaos) {
   const b = $("banner");
@@ -2058,9 +2083,9 @@ function computeStacks(idx) {
   }
   for (let i = start; i <= idx; i++) {
     const ev = events[i];
-    if (ev.e === "chap" || ev.e === "hb") {  // boundaries and wakes are
-      maybeKeyframe(i, idx, stacks, curT);   // not frames, but state
-      continue;                              // is still snapshot-worthy
+    if (ev.e === "chap" || ev.e === "hb" || ev.e === "viol") {
+      maybeKeyframe(i, idx, stacks, curT);   // boundaries, wakes and
+      continue;                              // verdicts are not frames
     }
     const t = laneOf(ev);
     curT = t;
@@ -2146,7 +2171,15 @@ function render() {
   const GK = { g: "generator", c: "coroutine", a: "async generator" };
   /* #88: the wake panel — who woke whom, jumpable to the other end */
   const wk = $("wake");
-  if (ev.e === "hb") {
+  if (ev.e === "viol") {
+    // #73: the broken contract, with the values that broke it
+    const vals = Object.entries(ev.vals || {}).map(([k, v]) =>
+      k + " = " + (v && v.v !== undefined
+        ? v.v : "<" + ((v && (v.c || v.t)) || "?") + ">"));
+    wk.innerHTML = "⚖ " + esc2(ev.inv) + " is FALSE here" +
+      (vals.length ? " · " + esc2(vals.join(" · ")) : "");
+    wk.style.display = "block";
+  } else if (ev.e === "hb") {
     const srcLane = (ev.t || "main") + (ev.tk ? " · " + ev.tk : "");
     const laneHit = e =>
       (e.e !== "hb") && ((e.tk === ev.dst) ||
@@ -2175,7 +2208,10 @@ function render() {
   } else {
     wk.style.display = "none";
   }
-  if (ev.e === "hb") {
+  if (ev.e === "viol") {
+    badge.className = "badge excsoft";
+    badge.textContent = "⚖ INVARIANT VIOLATED";
+  } else if (ev.e === "hb") {
     badge.className = "badge hb";
     const HB = { create: "WAKE — task created",
                  tstart: "WAKE — thread started",
@@ -2862,14 +2898,27 @@ $("scrub").max = Math.max(0, events.length - 1);
   const footer = document.querySelector("footer");
   footer.insertBefore(box, footer.firstChild);
 })();
-/* trip markers: every NaN/Inf birth, amber; the first one glows */
+/* trip markers: every NaN/Inf birth, amber; the first one glows.
+   #73 invariant violations share the strip (and open it). */
 (function () {
-  if (!DATA.trip) return;
+  if (!DATA.trip && !DATA.invariants) return;
   const box = document.createElement("div");
   box.id = "tripmarks";
   const total = Math.max(1, events.length - 1);
   let first = true;
   events.forEach((e, i) => {
+    // #73: invariant violations share the amber strip — both marks
+    // mean "a stated rule about values broke right here"
+    if (e.e === "viol") {
+      const m = document.createElement("span");
+      m.className = "tmark";
+      m.style.left = (i / total * 100) + "%";
+      m.title = "⚖ invariant [" + e.inv + "] violated — " + e.f + ":" +
+        e.l + " (event " + (i + 1) + ")";
+      m.onclick = () => { stop(); goto(i); };
+      box.appendChild(m);
+      return;
+    }
     if (!e.trip) return;
     const m = document.createElement("span");
     m.className = "tmark" + (first ? " tfirst" : "");
@@ -2986,7 +3035,8 @@ function parseQuery(q) {
       const k = { exception: "exc", exc: "exc", line: "line",
                   call: "call", return: "return", ret: "return",
                   chap: "chap", test: "chap", log: "log",
-                  console: "log", hb: "hb", wake: "hb", yield: "yield",
+                  console: "log", hb: "hb", wake: "hb", viol: "viol",
+                  invariant: "viol", yield: "yield",
                   resume: "resume" }[m[1].toLowerCase()];
       if (!k) { bad.push(tok); return; }
       if (k === "yield")

@@ -570,6 +570,16 @@ mid-frame records "(not evaluable here)"; one that never evaluates
 anywhere warns at the end. They run inside your process — keep them
 pure, and scope the per-line cost with `--include`.
 
+**Continuous invariants (`--invariant`).** The contract you don't
+edit into the code: `--invariant "balance >= 0"` is checked at every
+line event where its names are in scope, and each *entry* into
+falsehood becomes an amber ⚖ event carrying the offending values —
+the run continues, recovery re-arms, a stay-broken contract records
+once. The banner gives every invariant its verdict: violated N× with
+a jump, held everywhere it was evaluable, or never evaluable (the
+typo case). Compose with `--check` and `git bisect` finds the commit
+that first broke the contract.
+
 **The backward slice (✂).** The provenance row's "← from a, b" is one
 hop; the **✂ slice** button beside it iterates to closure — every
 recorded event that contributed to the clicked value, drawn as green

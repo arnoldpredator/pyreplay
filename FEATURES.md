@@ -937,6 +937,36 @@ dead or invented panel; every cap and truncation is announced.
 
 ---
 
+### 73. Continuous invariants (`--invariant`)
+- **Measured:** `--invariant "balance >= 0"` (repeatable) — the
+  contract is checked at every line event where its names are in
+  scope, and every TRANSITION into falsehood is recorded as its own
+  soft VIOLATION event carrying the values of the expression's
+  names. Recovery re-arms (the tripwire pattern), so a contract that
+  stays broken records one entry, not a flood; unevaluable = out of
+  scope = unknown, never a violation; never evaluable anywhere warns
+  at the end. The run always continues.
+- **Displayed:** an amber **⚖ INVARIANT VIOLATED** badge with the
+  broken expression and its offending values in the event panel;
+  amber pins on the tripwire strip (click to jump); a banner verdict
+  per invariant — "VIOLATED 2× — first at event 9 (click)", "held
+  everywhere it was evaluable", or the typo warning; `type:viol` in
+  the query grammar; the same verdicts in the terminal.
+- **Why:** assertions you don't have to edit into the code, checked
+  everywhere at once, with the full machine state replayable at each
+  violation — Design by Contract without touching the target.
+- **Use case:** `--invariant "balance >= 0"` on a transfer loop: two
+  amber pins — balance hit −3, recovered, hit −5 — each one click
+  from the exact state that broke it, while `balance <= 100` reports
+  "held everywhere".
+- **Command:** `python3 tracer.py --invariant "balance >= 0"
+  script.py` — line granularity only. Composes with `--check`
+  (bisect the commit that first violates a contract).
+- **Screenshot** — the first violation: amber badge, the contract
+  with its value, all three verdicts in the banner, two pins.
+
+  [![Feature 73 — invariants](screenshots/73-invariant.png)](screenshots/73-invariant.png)
+
 ### 77. The whyline — "why didn't this line run?"
 - **Measured:** a static AST pass stamps every line with its innermost
   controlling construct (then/else/loop/loop-else/except/case/def —
@@ -1657,7 +1687,7 @@ dead or invented panel; every cap and truncation is announced.
 ## J. Infrastructure (no screenshots needed)
 
 ### 61. `checks.py` — the regression suite
-65 data-level checks (no browser): the tracer re-runs the permanent
+66 data-level checks (no browser): the tracer re-runs the permanent
 example suite and the mapper its fixtures, the embedded JSON is
 extracted from each generated HTML (chunked or not), and the honesty
 invariants are asserted in plain Python — windowed-change correctness,

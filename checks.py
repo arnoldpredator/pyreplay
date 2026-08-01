@@ -2530,6 +2530,48 @@ def _():
     expect(r2.returncode == 2, "watch under fn granularity must refuse")
 
 
+@check("invariant: entry-transitions only, values captured, verdicts (#73)")
+def _():
+    fx = fixture("fx_inv.py", (
+        "balance = 10\n"
+        "steps = [-4, -9, 5, -7, 2]\n"
+        "for d in steps:\n"
+        "    balance += d\n"
+        "print(balance)\n"))
+    out = os.path.join(TMP, "fx_inv.html")
+    r = subprocess.run([PY, os.path.join(HERE, "tracer.py"), "--out", out,
+                        "--invariant", "balance >= 0",
+                        "--invariant", "balance <= 100",
+                        "--invariant", "quux > 0", fx],
+                       capture_output=True, text=True, cwd=TMP,
+                       stdin=subprocess.DEVNULL, timeout=120)
+    p = payload(out)
+    viols = [e for e in p["events"] if e.get("e") == "viol"]
+    expect(len(viols) == 2,
+           f"two ENTRIES into violation (stay-broken is silent, "
+           f"recovery re-arms), got {len(viols)}")
+    expect([v["vals"]["balance"]["v"] for v in viols] == ["-3", "-5"],
+           f"violations must carry the offending values: {viols}")
+    expect(all(v["inv"] == "balance >= 0" for v in viols),
+           "only the broken contract records")
+    meta = {m["src"]: m for m in p["invariants"]}
+    expect(meta["balance >= 0"]["n"] == 2
+           and meta["balance <= 100"]["n"] == 0
+           and meta["balance <= 100"]["evals"] > 0
+           and meta["quux > 0"]["evals"] == 0,
+           f"per-invariant verdicts wrong: {meta}")
+    expect("VIOLATED 2x" in r.stdout and "held everywhere" in r.stdout
+           and "never evaluable" in r.stdout,
+           f"terminal must state all three verdicts ({r.stdout})")
+    r2 = subprocess.run([PY, os.path.join(HERE, "tracer.py"),
+                         "--invariant", "x > 0", "--granularity", "fn",
+                         "--out", os.path.join(TMP, "ifn.html"), fx],
+                        capture_output=True, text=True, cwd=TMP,
+                        stdin=subprocess.DEVNULL, timeout=60)
+    expect(r2.returncode == 2,
+           "invariant under fn granularity must refuse")
+
+
 # ---------------------------------------------------------------- runner
 
 def main():

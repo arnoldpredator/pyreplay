@@ -1050,6 +1050,25 @@ The bundled `example_fuzz.py` carries its own `gen`: twenty runs, 7×
 "books negative", and the composed shrink cuts the failing ledger to
 its 2-line core.
 
+**The differential oracle (`--oracle REF.py`).** When the right
+answer is expensive to state, a slow correct program states it —
+the AtCoder stress-test workflow, automated. `python3 tracer.py
+--oracle brute.py --fuzz gen.py --runs 30 fast.py` runs both
+implementations on the same seeded inputs (or pipe one input, one
+trial) and compares stdouts judge-style: trailing whitespace and
+trailing blank lines ignored, both read from the recorded console
+lane. A mismatch prints both outputs, keeps the input and BOTH
+traces, and composes the `--shrink --oracle` command — shrinking
+under the disagreement oracle: ddmin keeps cutting while the two
+still disagree, then microscopes BOTH sides on the minimal case at
+line level. Crashes are verdicts: same exception type on both sides
+counts as agreement at a domain edge (and says so); a crashed
+reference is named loudly, because a broken spec can't certify
+anything. The verdict never picks a side — a mismatch is a bug in
+ONE of them. The four `strategy_*.py` RSQ solutions in this repo are
+the born demo: the brute force certifies the Fenwick tree in one
+command, and a planted off-by-one is caught 3/3.
+
 **Input shrinking (`--shrink`).** A huge input that crashes is a
 chore; the tiny core that still crashes is a diagnosis. Pipe the
 input and `--shrink` runs Zeller's ddmin over it — lines by default,

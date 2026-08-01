@@ -4605,6 +4605,107 @@ def _():
            "the sweep-protocol signature is named, not just refused")
 
 
+@check("oracle: differential verdicts, kept pair, shrink wiring "
+       "(roadmap #3)")
+def _():
+    ref = fixture("or3_ref.py", (
+        "import sys\n"
+        "print(sum(int(l) for l in sys.stdin if l.strip()))\n"))
+    ref2 = fixture("or3_ref2.py", (
+        "import sys\n"
+        "t = 0\n"
+        "for l in sys.stdin:\n"
+        "    if l.strip():\n"
+        "        t += int(l)\n"
+        "print(t)\n"))
+    buggy = fixture("or3_buggy.py", (
+        "import sys\n"
+        "print(sum(abs(int(l)) for l in sys.stdin if l.strip()))\n"))
+    gen = fixture("or3_gen.py", (
+        "def gen(rng):\n"
+        "    return ''.join(f'{rng.randint(-9, 30)}\\n'\n"
+        "                   for _ in range(5))\n"))
+
+    def orc(*args, stdin_text=None):
+        kw = ({"input": stdin_text} if stdin_text is not None
+              else {"stdin": subprocess.DEVNULL})
+        return subprocess.run([PY, os.path.join(HERE, "tracer.py"),
+                               *args], capture_output=True, text=True,
+                              cwd=TMP, timeout=600, **kw)
+    # two correct implementations agree across generated trials,
+    # and agreement keeps NOTHING on disk
+    r = orc("--oracle", ref, "--fuzz", gen, "--runs", "3", ref2)
+    expect(r.returncode == 0 and r.stdout.count(": agreed") == 3
+           and "never a proof" in r.stdout,
+           f"loop-sum vs genexp-sum must agree 3x: {r.stdout[-300:]}")
+    expect(not [f for f in os.listdir(TMP)
+                if f.startswith("oracle_or3_ref2")],
+           "agreed trials must leave no kept files behind")
+    # judge normalization: trailing whitespace is not a disagreement
+    ws = fixture("or3_ws.py", "print('7  ')\nprint()\n")
+    ws2 = fixture("or3_ws2.py", "print('7')\n")
+    r = orc("--oracle", ws2, ws, stdin_text="")
+    expect(r.returncode == 0, "trailing whitespace must not mismatch")
+    # the planted bug: mismatch, both outputs shown, pair + input kept
+    r = orc("--oracle", ref, buggy, stdin_text="5\n-7\n9\n")
+    expect(r.returncode == 1 and "MISMATCH" in r.stdout
+           and "'7'" in r.stdout and "'21'" in r.stdout,
+           f"abs-bug must mismatch with both outputs shown: "
+           f"{r.stdout[-300:]}")
+    for suf in ("target.html", "ref.html", "input.txt"):
+        expect(os.path.exists(os.path.join(
+            TMP, f"oracle_or3_buggy_t1_{suf}")),
+            f"the mismatch must keep its {suf}")
+    expect("bug in ONE of them" in r.stdout,
+           "the verdict must not pick a side")
+    expect("--shrink --oracle" in r.stdout,
+           "a mismatch composes the shrink command, never runs it")
+    # the composed command WORKS: ddmin under the disagreement oracle
+    r2 = orc("--shrink", "--oracle", ref, buggy,
+             stdin_text="5\n3\n-7\n9\n2\n11\n")
+    expect(r2.returncode == 0 and "disagree" in r2.stdout,
+           f"shrink under the oracle: {r2.stdout[-300:]}")
+    with open(os.path.join(TMP, "shrunk_or3_buggy.txt")) as fh:
+        expect(fh.read().strip() == "-7",
+               "the disagreement core is the single negative line")
+    expect(os.path.exists(os.path.join(
+        TMP, "trace_shrunk_or3_buggy_ref.html")),
+        "the REFERENCE gets its own line-level trace of the minimal "
+        "case")
+    expect("--oracle" in [ln for ln in r2.stdout.splitlines()
+                          if "rerun:" in ln][0],
+           "the rerun line carries the oracle")
+    # crash asymmetry: named sides, and same-type crash = domain edge
+    crash = fixture("or3_crash.py", (
+        "import sys\n"
+        "d = sys.stdin.read().split()\n"
+        "assert int(d[0]) >= 0\n"
+        "print(d[0])\n"))
+    ok = fixture("or3_ok.py", (
+        "import sys\n"
+        "print(sys.stdin.read().split()[0])\n"))
+    r = orc("--oracle", ok, crash, stdin_text="-5\n")
+    expect(r.returncode == 1 and "target crashed" in r.stdout,
+           "target-only crash is a mismatch with the side named")
+    r = orc("--oracle", crash, ok, stdin_text="-5\n")
+    expect(r.returncode == 1 and "REFERENCE crashed" in r.stdout
+           and "cannot answer" in r.stdout,
+           "a crashed reference is named loudly — the spec is broken")
+    r = orc("--oracle", crash, crash, stdin_text="-5\n")
+    expect(r.returncode == 0 and "domain edge" in r.stdout,
+           "both crashing the SAME way is agreement at a domain edge")
+    # gates
+    b = orc("--oracle", ref, "--runs", "5", ref2)
+    expect(b.returncode == 2 and "nondeterminism" in b.stdout,
+           "--runs without --fuzz refused with the reason")
+    b = orc("--oracle", ref, "--check", "error", ref2)
+    expect(b.returncode == 2 and "two oracles" in b.stdout,
+           "--oracle with --check refused: two oracles")
+    b = orc("--oracle", ref, "--no-console", ref2)
+    expect(b.returncode == 2 and "console lane" in b.stdout,
+           "--no-console starves the output channel — refused")
+
+
 @check("nonterm: proven cycle vs downgraded recurrence (#78)")
 def _():
     src = fixture("nt78.py", (

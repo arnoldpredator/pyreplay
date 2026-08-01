@@ -3063,7 +3063,51 @@ Statistics over many runs: rates instead of anecdotes, divergences instead of gu
 
   [![Feature 117 — the fuzz entry](screenshots/r1-fuzz-runs.png)](screenshots/r1-fuzz-runs.png)
 
-### 118. Metamorphic relations — the symmetry is the oracle (`--relation`)
+### 118. The differential oracle — the brute force is the specification (`--oracle REF.py`)
+- **Measured:** differential testing, the AtCoder workflow automated:
+  the target and a reference implementation run on the SAME input —
+  piped stdin for one trial, or `--fuzz GEN.py --runs N` for N
+  seeded trials — and their stdouts are compared judge-style
+  (per-line trailing whitespace and trailing blank lines ignored),
+  both read from the recorded **console lane**, the faithful
+  channel. Crashes are verdicts too: the same exception type on both
+  sides is agreement at a domain edge (noted, outputs not compared);
+  a target-only crash is a mismatch; a crashed REFERENCE is named
+  loudly — the spec cannot answer.
+- **Displayed:** the terminal verdict per trial. A mismatch prints
+  both outputs, keeps the input and BOTH traces, and composes the
+  ready-to-paste `--shrink --oracle` command — input shrinking
+  gained the disagreement oracle: ddmin minimizes WHILE the two
+  implementations still disagree, then leaves line-level traces of
+  BOTH sides on the minimal case. `--diverge` is deliberately NOT
+  composed: it aligns two runs of the same code, and these are two
+  different programs — the minimized input is the explanation here.
+  Exit 0 iff every trial agreed (git-bisect-ready).
+- **Why:** when the right answer is expensive to state, a slow
+  correct program states it. `strategy_1_brute_force.py …
+  strategy_4_segment_tree.py` sit in this repo because the
+  competitive-programming workflow IS differential testing done by
+  hand; this closes the loop. The verdict never picks a side — a
+  mismatch is a bug in ONE of them, and the traces don't say which.
+- **Use case:** a prefix-sums RSQ with an off-by-one (`pre[r] -
+  pre[l]`) against the brute force: 3/3 seeded trials mismatch, each
+  keeping its pair + input; the composed shrink hands back the
+  smallest disagreeing ledger. The same command with the Fenwick
+  tree: 5/5 agreed — "an observation, never a proof (and the
+  reference itself is unproven)."
+- **Command:** `python3 tracer.py --oracle strategy_1_brute_force.py
+  --fuzz gen.py --runs 30 strategy_3_fenwick_tree.py` (or pipe one
+  input with no `--fuzz`). Gates with reasons: `--check` is a second
+  oracle (pick one); `--runs` without `--fuzz` would measure
+  nondeterminism, not the implementations; `--black-box` rings can
+  rotate the console lane out; `-m` module targets are not bound.
+- **Screenshot** — the planted off-by-one caught 3/3 with kept pairs
+  and the composed shrink line; below it, the Fenwick tree certified
+  5/5 against the same reference.
+
+  [![Feature 118 — the differential oracle](screenshots/r3-oracle.png)](screenshots/r3-oracle.png)
+
+### 119. Metamorphic relations — the symmetry is the oracle (`--relation`)
 - **Measured:** the oracle problem's cheapest instrument: the right
   answer may be unknown, but its symmetries are not.
   `--relation "TRANSFORM => RELATION"` declares an input transform
@@ -3105,9 +3149,9 @@ Statistics over many runs: rates instead of anecdotes, divergences instead of gu
   per trial, kept pairs, composed diverge commands, and the diverge
   output below pointing at the exact print that broke the symmetry.
 
-  [![Feature 118 — metamorphic relations](screenshots/126-relations.png)](screenshots/126-relations.png)
+  [![Feature 119 — metamorphic relations](screenshots/126-relations.png)](screenshots/126-relations.png)
 
-### 119. Mutation-survivor forensics — why did this mutant live?
+### 120. Mutation-survivor forensics — why did this mutant live?
 - **Measured:** the bridge uses **mutmut as-is** (never rebuilt): the
   survivor list from `mutmut results`, the nearest covering test
   from mutmut's own coverage mapping (`mutants/mutmut-stats.json`),
@@ -3143,9 +3187,9 @@ Statistics over many runs: rates instead of anecdotes, divergences instead of gu
   missing assertion named), one traced-identical
   (possibly-equivalent, said plainly).
 
-  [![Feature 119 — forensics](screenshots/125-forensics.png)](screenshots/125-forensics.png)
+  [![Feature 120 — forensics](screenshots/125-forensics.png)](screenshots/125-forensics.png)
 
-### 120. The scaling bench — `--sweep`, the doubling experiment as a command
+### 121. The scaling bench — `--sweep`, the doubling experiment as a command
 - **Measured:** the target is run once per rung of a value ladder
   (`--sweep "n=1000,2000,4000,8000"`, or `alpha=3.0..5.0:5` for a
   knob), each child a fresh tracer run whose stdin comes from the
@@ -3187,13 +3231,13 @@ Statistics over many runs: rates instead of anecdotes, divergences instead of gu
   time chart honestly wobbling (startup noise at tiny n), ratios
   marching to 4.
 
-  [![Feature 120 — scaling bench](screenshots/127-scaling-bench.png)](screenshots/127-scaling-bench.png)
+  [![Feature 121 — scaling bench](screenshots/127-scaling-bench.png)](screenshots/127-scaling-bench.png)
 
 ## Part 15 — Infrastructure
 
 What keeps all of the above honest.
 
-### 121. `checks.py` — the regression suite
+### 122. `checks.py` — the regression suite
 68 data-level checks (no browser): the tracer re-runs the permanent
 example suite and the mapper its fixtures, the embedded JSON is
 extracted from each generated HTML (chunked or not), and the honesty
@@ -3215,7 +3259,7 @@ after every change, always.
 - **Command:** `python3 checks.py` — prints the green table, exits
   non-zero on any red.
 
-### 122. The teaching fleet
+### 123. The teaching fleet
 `example_{sort,prefix,histogram,dp,graph,exceptions,control,machinery,
 mro,tasks,threads,watch,dunder,bigarray,heavy,nan,flaky,race}.py` — one small script per feature family, each with its
 pre-built `trace_*.html`; `tinyshop/` — a multi-file teaching project

@@ -3,7 +3,7 @@
 Everything already built lives in **FEATURES.md** (the catalog, 122
 entries, ordered the way you use the tool) and **TUTORIAL.md** (the
 guide, same order). This file is the other half: **the features not
-built yet** — numbered 1–17 below, 16 still open (a shipped one keeps
+built yet** — numbered 1–17 below, 15 still open (a shipped one keeps
 its number, struck through, so references stay stable) — and how to
 contribute one. It's written so a stranger can pick an item and
 implement it.
@@ -12,7 +12,7 @@ implement it.
 
 New here and want to help? Three steps:
 
-1. **Pick something.** The **Index** below lists the 16 open
+1. **Pick something.** The **Index** below lists the 15 open
    features. Bug reports, edge cases, and more `example_*.py`
    programs are just as welcome. Adding **another language** is the
    biggest prize — see "Support another language" and the event-log
@@ -59,7 +59,7 @@ design lenses, not quotes:
 - **The Torvalds lens — bisect it, diff it, no magic.** Every bug is
   a difference between a world that works and one that doesn't;
   build the tools that find the first divergence. → catalog
-  #112/#114, and #3 here.
+  #112/#114, and #3 here (shipped: catalog #118).
 - **The Stroustrup lens — types, invariants, resources.** What holds
   always? What type flows here? Who owns this resource and who
   closed it? → catalog #65/#66/#67, and #5 here.
@@ -74,7 +74,7 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
 |---|---------|--------|--------|
 | ~~1~~ | ~~Random-input entry with seed capture~~ — **shipped**: catalog #117 (`--fuzz`) | M | ★★ |
 | 2 | Inject exceptions/latency on purpose | L | ★★ |
-| 3 | Compare implementations on the same inputs | M | ★★ |
+| ~~3~~ | ~~Compare implementations on the same inputs~~ — **shipped**: catalog #118 (`--oracle`) | M | ★★ |
 | 4 | Object-reference graph at an event | L | ★★ |
 | 5 | I/O lane via audit hooks; resource-leak pairing | M | ★★ |
 | 6 | Memory heat on the map (tracemalloc) | M | ★★ |
@@ -117,20 +117,16 @@ sketch remains unbuilt (the `gen(rng)` protocol carries it).
 - **Prior art:** Netflix chaos engineering, aerospace HALT testing —
   break it on the bench, not in the air.
 
-### 3. Differential testing against a reference implementation
-- **What:** `--oracle brute.py fast.py --fuzz GEN.py` — run two
-  implementations on the same inputs; on output mismatch, keep the
-  input, trace **both**, and open the divergence finder (catalog #112) on the
-  pair.
-- **Why:** the repo already contains
-  `strategy_1_brute_force.py … strategy_4_segment_tree.py` — the
-  AtCoder workflow IS differential testing done by hand. Automate the
-  loop: the brute force is the specification.
-- **How:** harness compares stdout (configurable normalizer); wire to
-  catalog #115 to shrink the disagreement input. No schema changes.
-- **Effort:** M.
-- **Prior art:** McKeeman, "Differential testing for software" (1998);
-  Csmith; competitive programmers' stress-test scripts everywhere.
+### 3. Differential testing — SHIPPED
+Now **catalog #118** (`--oracle REF.py`): both implementations on
+the same input (piped stdin, or `--fuzz` seeded trials), stdouts
+compared judge-style from the console lane; a mismatch keeps input
++ both traces and composes `--shrink --oracle` (ddmin under the
+disagreement oracle, both sides microscoped on the minimal case).
+One sketch line changed en route, honestly: `--diverge` is NOT
+composed on a mismatch — it aligns two runs of the SAME code, and
+these are two different programs; the minimized input is the
+explanation there.
 
 ---
 
@@ -290,7 +286,7 @@ sketch remains unbuilt (the `gen(rng)` protocol carries it).
 - **What:** open two traces side by side with linked cursors —
   aligned by the catalog #112 divergence map when available, by manual anchor
   pairs otherwise; divergence point marked in both scrubbers.
-- **Why:** before/after a fix, pass vs fail, brute vs fast (#3):
+- **Why:** before/after a fix, pass vs fail, brute vs fast (#3, shipped: catalog #118):
   humans diff by eye extremely well when the two films are locked in
   step.
 - **How:** two iframes + postMessage cursor protocol + an alignment
@@ -400,8 +396,8 @@ The learner's cut of the open seventeen:
 
 1. ~~**#1 property/fuzz entry**~~ — **shipped** (catalog #117): find
    the failing case while you sleep, keep the seed, shrink it.
-2. **#3 differential testing** — the brute force is the
-   specification; automate the AtCoder workflow end to end.
+2. ~~**#3 differential testing**~~ — **shipped** (catalog #118): the
+   brute force is the specification, the loop closed end to end.
 3. **#5 the I/O lane** — "what did this program touch?" answered
    from audit hooks, with unclosed resources named.
 4. **#6 memory heat** — time-heat says where it computed;

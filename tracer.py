@@ -16,6 +16,7 @@ overwritten. Use --out NAME.html to pick a name (that one DOES overwrite).
     python tracer.py --trip nan <script.py>            # NaN/Inf tripwire
     python tracer.py --runs 50 <script.py>             # N-run statistics
     python tracer.py --fuzz gen.py --runs 50 <script.py>  # input search
+    python tracer.py --oracle brute.py fast.py < in.txt   # differential
     python tracer.py --diverge good.html bad.html      # first divergence
     python tracer.py -m pytest tests/                  # trace a test suite
     python tracer.py --root brian2 -m pytest           # pytest scoped to --root
@@ -84,6 +85,21 @@ gets a line-level microscope trace and a ready-to-paste --shrink
 command. Composes with --check (a property, not just a crash, as the
 failure), --mine and --chaos-schedule (inputs × schedules explored
 together, both seeds recorded).
+
+--oracle REF.py is differential testing: the reference implementation
+IS the specification (the AtCoder workflow, automated). Target and
+reference run on the SAME input — piped stdin for one trial, or
+--fuzz GEN.py --runs N for N seeded trials — and their stdouts (read
+from the recorded console lane) are compared judge-style: per-line
+trailing whitespace and trailing blank lines ignored. A mismatch
+keeps the input and BOTH traces and composes the ready-to-paste
+`--shrink --oracle` command, which minimizes the input WHILE the two
+implementations still disagree and leaves line-level traces of both
+sides on the minimal case. Crashes are verdicts too: same exception
+type on both sides = agreement at a domain edge (noted); a crashed
+REFERENCE is named loudly — the spec cannot answer. Exit 0 iff every
+trial agreed (git-bisect-ready); agreement is an observation, never
+a proof.
 
 Past 100k events a trace auto-CHUNKS (#101): the events move out of
 the single JSON string into gzip+base64 chunks — files shrink 5-25x,
@@ -3974,6 +3990,50 @@ def _boundaries(events):
     return {k: v for k, v in out.items() if v["calls"]}
 
 
+def _load_fuzz_gen(path):
+    """Load and validate the roadmap-#1 generator protocol: gen(rng)
+    -> str|bytes stdin or [args…] argv. Returns (genfn, None) or
+    (None, the refusal message) — the gen(value, seed) sweep/relation
+    protocol is NAMED, not just rejected."""
+    ns = runpy.run_path(os.path.realpath(path))
+    genfn = ns.get("gen")
+    if not callable(genfn):
+        return None, ("error: --fuzz file must define gen(rng) -> "
+                      "str|bytes (the run's stdin) or [args…] (its "
+                      "argv) — rng is a random.Random seeded per run")
+    import inspect
+    try:
+        req = [p for p in
+               inspect.signature(genfn).parameters.values()
+               if p.default is p.empty and p.kind in
+               (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)]
+    except (TypeError, ValueError):
+        req = [None]
+    if len(req) != 1:
+        return None, ("error: --fuzz gen takes ONE argument, gen(rng) "
+                      "— gen(value, seed) is the --sweep/--relation "
+                      "protocol (a declared input, not a search)")
+    return genfn, None
+
+
+def _gen_input(genfn, seed):
+    """One generated trial: (stdin_bytes, argv_list, error). A broken
+    generator is a counted outcome, never a silent skip."""
+    try:
+        raw = genfn(random.Random(seed))
+    except Exception as exc:
+        return b"", [], f"gen() raised {type(exc).__name__}"
+    if isinstance(raw, str):
+        return raw.encode(), [], None
+    if isinstance(raw, (bytes, bytearray)):
+        return bytes(raw), [], None
+    if isinstance(raw, (list, tuple)) and all(
+            isinstance(a, (str, int, float)) for a in raw):
+        return b"", [str(a) for a in raw], None
+    return b"", [], (f"gen() returned {type(raw).__name__} "
+                     f"(need str|bytes stdin or [args…])")
+
+
 def _run_harness(orig_argv, n_runs, out, entry_label, granularity,
                  module, script, chaos_seed=None, mine=False,
                  fuzz_file=None, fuzz_seed=1234):
@@ -4035,25 +4095,9 @@ def _run_harness(orig_argv, n_runs, out, entry_label, granularity,
 
     genfn = None
     if fuzz_file:
-        ns = runpy.run_path(os.path.realpath(fuzz_file))
-        genfn = ns.get("gen")
-        if not callable(genfn):
-            print("error: --fuzz file must define gen(rng) -> "
-                  "str|bytes (the run's stdin) or [args…] (its argv) "
-                  "— rng is a random.Random seeded per run")
-            return 2
-        import inspect
-        try:
-            req = [p for p in
-                   inspect.signature(genfn).parameters.values()
-                   if p.default is p.empty and p.kind in
-                   (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)]
-        except (TypeError, ValueError):
-            req = [None]
-        if len(req) != 1:
-            print("error: --fuzz gen takes ONE argument, gen(rng) — "
-                  "gen(value, seed) is the --sweep/--relation "
-                  "protocol (a declared input, not a search)")
+        genfn, gerr = _load_fuzz_gen(fuzz_file)
+        if genfn is None:
+            print(gerr)
             return 2
 
     # the measurement protocol: every run gets the SAME stdin bytes.
@@ -4114,24 +4158,8 @@ def _run_harness(orig_argv, n_runs, out, entry_label, granularity,
             run_seed = fuzz_seed + i - 1 if genfn is not None else None
             run_stdin, run_args, gen_err = stdin_bytes, [], None
             if genfn is not None:
-                try:
-                    raw = genfn(random.Random(run_seed))
-                except Exception as exc:
-                    gen_err = f"gen() raised {type(exc).__name__}"
-                if gen_err is None:
-                    if isinstance(raw, str):
-                        run_stdin = raw.encode()
-                    elif isinstance(raw, (bytes, bytearray)):
-                        run_stdin = bytes(raw)
-                    elif isinstance(raw, (list, tuple)) and all(
-                            isinstance(a, (str, int, float))
-                            for a in raw):
-                        run_args = [str(a) for a in raw]
-                        run_stdin = b""
-                    else:
-                        gen_err = (f"gen() returned "
-                                   f"{type(raw).__name__} (need "
-                                   f"str|bytes stdin or [args…])")
+                run_stdin, run_args, gen_err = _gen_input(genfn,
+                                                          run_seed)
             if gen_err is not None:
                 # a broken generator is a run outcome, not a crash of
                 # the harness — counted, classed, never exit 0
@@ -5171,7 +5199,7 @@ def _ddmin(units, fails, cap):
 
 
 def _shrink_harness(orig_argv, model, cap, check_active, entry_label,
-                    granularity, module, script):
+                    granularity, module, script, oracle_file=None):
     stem = (module.replace(".", "_") if module is not None
             else os.path.splitext(os.path.basename(script))[0])
     valued = {"--out", "--root", "--export-perfetto", "--include",
@@ -5181,19 +5209,22 @@ def _shrink_harness(orig_argv, model, cap, check_active, entry_label,
               "--chaos-schedule", "--sweep", "--gen", "--predict",
               "--sweep-seed", "--fsm", "--fsm-declare", "--memo", "--starve-ms", "--probe-reduction",
               "--relation", "--relation-trials", "--relation-seed",
-              "--shrink-model", "--shrink-cap"}
-    strip = {"--shrink", "--shrink-model", "--shrink-cap", "--out"}
-    child_flags, i = [], 0
+              "--shrink-model", "--shrink-cap", "--fuzz",
+              "--fuzz-seed", "--oracle"}
+    strip = {"--shrink", "--shrink-model", "--shrink-cap", "--out",
+             "--oracle", "--fuzz", "--fuzz-seed"}
+    pre, tail, i = [], [], 0
     while i < len(orig_argv):
         tok = orig_argv[i]
         if tok == "-m" or not tok.startswith("--"):
-            child_flags.extend(orig_argv[i:])
+            tail = orig_argv[i:]
             break
         step = 2 if tok in valued and i + 1 < len(orig_argv) else 1
         if tok not in strip:
-            child_flags.extend(orig_argv[i:i + step])
+            pre.extend(orig_argv[i:i + step])
         i += step
-    child_flags = ["--granularity", granularity] + child_flags
+    pre = ["--granularity", granularity] + pre
+    child_flags = pre + tail
 
     data = b""
     if not sys.stdin.isatty():
@@ -5225,29 +5256,55 @@ def _shrink_harness(orig_argv, model, cap, check_active, entry_label,
         join = b"".join
 
     tmp_out = os.path.abspath(f".shrink_{stem}_probe.html")
+    tmp_ref = os.path.abspath(f".shrink_{stem}_probe_ref.html")
 
-    def run_probe(u):
+    def run_probe(u, script_tokens=None, out_path=None, want_out=False):
         payload_in = join(u)
         b = payload_in.encode() if isinstance(payload_in, str) \
             else payload_in
-        cmd = [sys.executable, SELF, "--out", tmp_out] + child_flags
+        toks = tail if script_tokens is None else script_tokens
+        opath = out_path or tmp_out
+        cmd = [sys.executable, SELF, "--out", opath] + pre + toks
         r = subprocess.run(cmd, input=b, capture_output=True)
-        err = None
-        if os.path.exists(tmp_out):
+        err, out_txt = None, ""
+        if os.path.exists(opath):
             try:
-                err = _extract_payload(tmp_out).get("error")
+                data = _extract_payload(opath)
+                err = data.get("error")
+                if want_out:
+                    out_txt = _console_text(data)
             except Exception:
                 err = "unreadable"
             finally:
                 try:
-                    os.remove(tmp_out)
+                    os.remove(opath)
                 except OSError:
                     pass
-        return r.returncode, err
+        return r.returncode, err, out_txt
 
-    rc0, err0 = run_probe(units)
-    if check_active:
+    if oracle_file is not None:
+        # roadmap #3 wiring: the differential disagreement IS the
+        # failure being minimized — any disagreement counts (the
+        # property under test is agreement itself)
+        ref = os.path.realpath(oracle_file)
+        ref_toks = [ref] + list(tail[1:])
+
+        def pair_disagrees(u):
+            _rc, err_t, out_t = run_probe(u, want_out=True)
+            _rc2, err_r, out_r = run_probe(u, ref_toks, tmp_ref,
+                                           want_out=True)
+            agree, _note = _oracle_verdict(out_t, err_t, out_r, err_r)
+            return not agree
+        oracle_desc = (f"the target and {os.path.basename(ref)} "
+                       f"disagree (judge-normalized stdout)")
+        if not pair_disagrees(units):
+            print("error: the two implementations AGREE on the full "
+                  "input — there is no disagreement to minimize")
+            return 2
+        fails = pair_disagrees
+    elif check_active:
         oracle_desc = "the --check expression hits (child exit 1)"
+        rc0, _e0, _o0 = run_probe(units)
         if rc0 != 1:
             print(f"error: the full input does not hit the check "
                   f"(child exit {rc0}) — the failure must reproduce "
@@ -5257,17 +5314,18 @@ def _shrink_harness(orig_argv, model, cap, check_active, entry_label,
         def fails(u):
             return run_probe(u)[0] == 1
     else:
+        _rc0, err0, _o0 = run_probe(units)
         if not err0:
             print("error: the full input does not crash the target — "
-                  "give --shrink an oracle (--check EXPR) or a "
-                  "crashing input")
+                  "give --shrink an oracle (--check EXPR or --oracle "
+                  "REF.py) or a crashing input")
             return 2
         kind0 = err0.split(":")[0].strip()
         oracle_desc = (f"the target crashes with {kind0} — the SAME "
                        f"failure, never a different one")
 
         def fails(u):
-            _rc, err = run_probe(u)
+            _rc, err, _out = run_probe(u)
             return bool(err) and err.split(":")[0].strip() == kind0
 
     n0 = len(units)
@@ -5294,7 +5352,20 @@ def _shrink_harness(orig_argv, model, cap, check_active, entry_label,
     print(f"  minimal input -> {os.path.basename(shrunk_path)}")
     print(f"  line-level trace of the minimal case -> "
           f"{os.path.basename(trace_path)}")
+    if oracle_file is not None:
+        # the disagreement has two sides — microscope BOTH on the
+        # minimal input, side by side in two tabs
+        ref_trace = os.path.abspath(f"trace_shrunk_{stem}_ref.html")
+        cmd = [sys.executable, SELF, "--out", ref_trace,
+               "--granularity", "line"] + pre[2:] \
+            + [os.path.realpath(oracle_file)] + list(tail[1:])
+        subprocess.run(cmd, input=out_bytes, capture_output=True)
+        if os.path.exists(ref_trace):
+            print(f"  line-level trace of the REFERENCE on it -> "
+                  f"{os.path.basename(ref_trace)}")
     print(f"  rerun: python3 {os.path.basename(SELF)} "
+          + ("--oracle " + shlex.quote(oracle_file) + " "
+             if oracle_file is not None else "")
           + " ".join(shlex.quote(t) for t in child_flags[2:])
           + f" < {os.path.basename(shrunk_path)}")
     return 0
@@ -5507,6 +5578,188 @@ def _relation_harness(orig_argv, relations, gen_file, trials, seed,
         return 1
     print(f"\nall relations held on every trial — an observation "
           f"over {trials} trial(s), never a proof.")
+    return 0
+
+
+# ---- roadmap #3: the differential-testing oracle ------------------------
+# The AtCoder workflow, automated: the brute force IS the
+# specification. --oracle REF.py runs the target and the reference on
+# the SAME input (piped stdin = one trial; --fuzz GEN.py = N seeded
+# trials via --runs N), reads both stdouts from the recorded console
+# lane (the faithful channel) and compares them judge-style (per-line
+# rstrip, trailing blank lines dropped). A mismatch keeps the input
+# and BOTH traces and composes the --shrink --oracle command that
+# minimizes the disagreement. --diverge is NOT composed on purpose:
+# it aligns two runs of the SAME code, and these are two different
+# programs — the minimized input is the explanation here.
+
+def _judge_norm(text):
+    lines = [ln.rstrip() for ln in (text or "").splitlines()]
+    while lines and not lines[-1]:
+        lines.pop()
+    return "\n".join(lines)
+
+
+def _console_text(data, stream="out"):
+    return "\n".join(ev.get("txt", "")
+                     for ev in (data or {}).get("events", [])
+                     if ev.get("e") == "log"
+                     and ev.get("s") == stream).strip()
+
+
+def _oracle_verdict(out_t, err_t, out_r, err_r):
+    """(agree, note). The reference is the spec — a crashed reference
+    cannot answer (mismatch, named loudly); both sides crashing with
+    the SAME exception type is agreement about a domain edge (noted,
+    outputs not compared)."""
+    if err_t is None and err_r is None:
+        return _judge_norm(out_t) == _judge_norm(out_r), ""
+    kt = (err_t or "").split(":")[0].strip()
+    kr = (err_r or "").split(":")[0].strip()
+    if err_t is not None and err_r is not None:
+        if kt == kr:
+            return True, (f"both crashed ({kt}) — agreement at a "
+                          f"domain edge; outputs not compared")
+        return False, (f"different crashes — target {kt} · "
+                       f"reference {kr}")
+    if err_t is not None:
+        return False, f"target crashed ({kt}); the reference answered"
+    return False, (f"the REFERENCE crashed ({kr}) — the spec cannot "
+                   f"answer; fix the reference or the generator")
+
+
+def _oracle_harness(orig_argv, oracle_file, fuzz_file, fuzz_seed,
+                    n_trials, entry_label, granularity, module,
+                    script):
+    if module is not None:
+        print("error: --oracle compares two SCRIPTS on the same "
+              "input — -m module targets are not bound")
+        return 2
+    genfn = None
+    if fuzz_file:
+        genfn, gerr = _load_fuzz_gen(fuzz_file)
+        if genfn is None:
+            print(gerr)
+            return 2
+    ref = os.path.realpath(oracle_file)
+    stem = os.path.splitext(os.path.basename(script))[0]
+    ref_label = os.path.basename(ref)
+
+    valued = {"--out", "--root", "--export-perfetto", "--include",
+              "--exclude", "--granularity", "--max-events",
+              "--start-at", "--start-count", "--start-when",
+              "--backend", "--trip", "--runs", "--check",
+              "--chaos-schedule", "--sweep", "--gen", "--predict",
+              "--sweep-seed", "--fsm", "--fsm-declare", "--memo",
+              "--starve-ms", "--probe-reduction", "--relation",
+              "--relation-trials", "--relation-seed", "--fuzz",
+              "--fuzz-seed", "--oracle"}
+    strip = {"--oracle", "--fuzz", "--fuzz-seed", "--runs", "--out",
+             "--granularity"}
+    pre, tail, i = [], [], 0
+    while i < len(orig_argv):
+        tok = orig_argv[i]
+        if tok == "-m" or not tok.startswith("--"):
+            tail = orig_argv[i:]          # target + its own argv
+            break
+        step = 2 if tok in valued and i + 1 < len(orig_argv) else 1
+        if tok not in strip:
+            pre.extend(orig_argv[i:i + step])
+        i += step
+    pre = ["--granularity", granularity] + pre
+
+    stdin_bytes = b""
+    if genfn is None:
+        if not sys.stdin.isatty():
+            try:
+                import select
+                ready, _, _ = select.select([sys.stdin], [], [], 0.5)
+            except Exception:
+                ready = [sys.stdin]
+            if ready:
+                print("pyreplay: reading stdin to EOF (both "
+                      "implementations run on it)…", flush=True)
+                try:
+                    stdin_bytes = sys.stdin.buffer.read()
+                except Exception:
+                    stdin_bytes = b""
+        n_trials = 1
+
+    print(f"pyreplay oracle: {entry_label} vs {ref_label} "
+          f"(the reference) · {n_trials} trial(s) · {granularity} "
+          f"granularity"
+          + (f" · gen {os.path.basename(fuzz_file)} seed base "
+             f"{fuzz_seed}" if genfn else " · input = the piped "
+             "stdin"), flush=True)
+
+    def run_child(script_path, stdin_b, out_path, extra):
+        cmd = [sys.executable, SELF, "--out", out_path] + pre \
+            + [script_path] + list(tail[1:]) + extra
+        subprocess.run(cmd, input=stdin_b, capture_output=True)
+        if not os.path.exists(out_path):
+            return "", "no trace written", None
+        try:
+            data = _extract_payload(out_path)
+        except Exception as exc:
+            return "", f"unreadable trace ({type(exc).__name__})", None
+        return _console_text(data), data.get("error"), data
+
+    n_bad = 0
+    first_bad = None
+    for t in range(1, n_trials + 1):
+        t_stdin, t_args = stdin_bytes, []
+        if genfn is not None:
+            t_stdin, t_args, gerr = _gen_input(genfn,
+                                               fuzz_seed + t - 1)
+            if gerr:
+                n_bad += 1
+                print(f"  trial {t}: {gerr} — counted as a mismatch",
+                      flush=True)
+                continue
+        base = os.path.abspath(f"oracle_{stem}_t{t}")
+        p_t, p_r = base + "_target.html", base + "_ref.html"
+        out_t, err_t, _ = run_child(tail[0], t_stdin, p_t, t_args)
+        out_r, err_r, _ = run_child(ref, t_stdin, p_r, t_args)
+        agree, note = _oracle_verdict(out_t, err_t, out_r, err_r)
+        if agree:
+            for pth in (p_t, p_r):
+                try:
+                    os.remove(pth)
+                except OSError:
+                    pass
+            print(f"  trial {t}: agreed"
+                  + (f" — {note}" if note else "")
+                  + (f" (seed {fuzz_seed + t - 1})" if genfn else ""),
+                  flush=True)
+            continue
+        n_bad += 1
+        in_file = base + "_input.txt"
+        with open(in_file, "wb") as fh:
+            fh.write(t_stdin if not t_args else
+                     shlex.join(t_args).encode())
+        print(f"  trial {t}: ⚖ MISMATCH"
+              + (f" — {note}" if note else "")
+              + (f" (seed {fuzz_seed + t - 1})" if genfn else ""),
+              flush=True)
+        print(f"    target: {out_t[:80]!r}")
+        print(f"    ref   : {out_r[:80]!r}")
+        print(f"    kept: {os.path.basename(p_t)} + "
+              f"{os.path.basename(p_r)} + "
+              f"{os.path.basename(in_file)}")
+        if first_bad is None and not t_args:
+            first_bad = in_file
+    if n_bad:
+        print(f"\n{n_bad} mismatch(es) in {n_trials} trial(s). The "
+              f"reference is the specification — a mismatch is a bug "
+              f"in ONE of them; the traces don't say which.")
+        if first_bad is not None:
+            print("  shrink it: python3 " + os.path.basename(SELF)
+                  + " --shrink --oracle " + shlex.quote(oracle_file)
+                  + " " + " ".join(shlex.quote(x) for x in tail)
+                  + " < " + os.path.basename(first_bad))
+        return 1
+    print(f"\nagreement over {n_trials} trial(s) — an observation, "
+          f"never a proof (and the reference itself is unproven).")
     return 0
 
 
@@ -6611,6 +6864,7 @@ def main(argv):
     sweep_seed = 1234
     fuzz_file = None     # roadmap #1: gen(rng) input search
     fuzz_seed = 1234
+    oracle_file = None   # roadmap #3: the reference implementation
     mine_flag = False    # #74: --runs N --mine (multi-run mining)
     fsm_expr = None      # #132: the ONE declared state name
     fsm_declared = None  # #132: declared transitions, or None
@@ -6758,6 +7012,11 @@ def main(argv):
                       "seed = same input sequence, forever)")
                 return 2
             argv = argv[2:]
+        elif argv[0] == "--oracle" and len(argv) >= 2:
+            if not os.path.isfile(argv[1]):
+                print(f"error: --oracle file not found: {argv[1]}")
+                return 2
+            oracle_file, argv = argv[1], argv[2:]
         elif argv[0] == "--mine":
             mine_flag = True
             argv = argv[1:]
@@ -6889,6 +7148,38 @@ def main(argv):
         print("pyreplay: --fuzz without --runs defaults to 20 runs "
               "(each gets its own seeded input) — pass --runs N to "
               "search wider", flush=True)
+    if oracle_file:
+        if sweep_spec or relations:
+            print("error: --oracle is its own experiment — run it "
+                  "without --sweep/--relation (they answer different "
+                  "questions)")
+            return 2
+        if runs_n and not fuzz_file:
+            print("error: --oracle with --runs but no --fuzz would "
+                  "compare the same input N times — that measures "
+                  "nondeterminism, not the implementations. Pipe one "
+                  "input (one trial) or add --fuzz GEN.py")
+            return 2
+        if check is not None:
+            print("error: --oracle and --check are two oracles — the "
+                  "reference already decides; pick one"
+                  + (" (for --shrink, either works alone)"
+                     if shrink_flag else ""))
+            return 2
+        if black_box:
+            print("error: --black-box rings can rotate early console "
+                  "lines out — --oracle compares the WHOLE recorded "
+                  "output channel")
+            return 2
+        if perfetto:
+            print("error: --oracle runs two different programs — one "
+                  "--export-perfetto timeline would be ambiguous. "
+                  "Export from a kept trace's rerun instead.")
+            return 2
+        if not console:
+            print("error: --oracle reads both outputs from the "
+                  "recorded console lane — drop --no-console")
+            return 2
     if granularity is None:
         # -m runs (a test suite, a module) default to fn: line-level over
         # a whole suite is the runaway-slowness trap — ~100x overhead on
@@ -6897,11 +7188,12 @@ def main(argv):
         # events, so triggers keep the line default even under -m.
         # --runs also defaults to fn: the harness pays every cost N times.
         if (module is not None or runs_n or black_box or sweep_spec
-                or relations or shrink_flag) \
+                or relations or shrink_flag or oracle_file) \
                 and not (start_at or start_when):
             granularity = "fn"
             if not doctor:
                 what = ("-m runs" if module is not None
+                        else "--oracle" if oracle_file
                         else "--fuzz" if fuzz_file
                         else "--runs" if runs_n
                         else "--sweep" if sweep_spec
@@ -7066,6 +7358,11 @@ def main(argv):
         return _doctor(module, script, root, entry_label,
                        found if module is not None else True)
 
+    if oracle_file and not shrink_flag:
+        return _oracle_harness(orig_argv, oracle_file, fuzz_file,
+                               fuzz_seed, runs_n or 1, entry_label,
+                               granularity, module, script)
+
     if runs_n:
         return _run_harness(orig_argv, runs_n, out, entry_label,
                             granularity, module, script, chaos_seed,
@@ -7080,7 +7377,8 @@ def main(argv):
     if shrink_flag:
         return _shrink_harness(orig_argv, shrink_model, shrink_cap,
                                check is not None, entry_label,
-                               granularity, module, script)
+                               granularity, module, script,
+                               oracle_file=oracle_file)
 
     if relations:
         return _relation_harness(

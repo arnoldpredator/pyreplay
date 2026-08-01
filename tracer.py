@@ -66,6 +66,30 @@ per class (min/median/p95/max, tracer-inclusive — comparable to each
 other, not to bare runtime) and links each class to its replayable
 trace. Exit code 0 only if every run was clean, so `git bisect run`
 can consume it directly. Ctrl-C reports the runs completed so far.
+With BOTH outcomes present the report adds THE SUSPECTS (SBFL): every
+line ranked by how exclusively failing runs execute it (Ochiai) — the
+statistics do the boring half of debugging before you read anything.
+Correlation, not causation, and the report says so; at fn granularity
+the units are call/return/raise lines (line granularity gives
+statement-level suspects).
+
+Past 100k events a trace auto-CHUNKS (#101): the events move out of
+the single JSON string into gzip+base64 chunks — files shrink 5-25x,
+the browser never parses one giant string, and jumps resume from
+KEYFRAMES (state snapshots every 64k events) instead of replaying the
+run from the start. --chunked forces it on, --no-chunked off; a
+missing chunk is announced loudly, in the file and in the viewer.
+Needs DecompressionStream (Chrome 80+ / Firefox 113+ / Safari 16.4+).
+
+-m pytest runs get PER-TEST CHAPTERS: a tiny plugin is auto-injected
+(-p _pyreplay_pytest_plugin) and every test becomes a named span —
+colored bands over the scrubber (green passed / red failed), the
+owning test shown while you scrub, TEST ▶/✓/✗ boundary events. With
+both outcomes present the trace also carries the per-test SBFL join:
+lines ranked by how exclusively FAILING tests executed them (Ochiai),
+printed after the run and clickable in the banner — ranked suspects
+from ONE suite run. Teardown-phase failures are not folded back into
+an already-passed test's chapter (stated limit).
 
 --diverge A.html B.html: where did two runs of the same code first part
 ways? Reported twice, honestly: STATE divergence (the same line runs on
@@ -86,8 +110,10 @@ next to it. The stdlib, site-packages and this tracer
 itself are never traced, so you can point it at the entry point of any codebase.
 """
 import ast
+import base64
 import dis
 import fnmatch
+import gzip
 import json
 import os
 import re
@@ -101,6 +127,10 @@ import weakref
 import types
 
 MAX_EVENTS = 200_000   # safety cap so a hot loop can't produce a 2 GB trace
+CHUNK_AUTO = 100_000     # events; past this the trace auto-chunks (#101)
+                         # (must sit BELOW the default event cap, or the
+                         #  auto path could never fire on default runs)
+CHUNK_EVENTS = 65_536    # events per gzip chunk
 MAX_REPR = 120         # truncate huge values; the viewer shows reprs, not objects
 SELF = os.path.realpath(__file__)
 
@@ -707,6 +737,43 @@ class Tracer:
         if event == "return":
             self._snapshots.pop(id(frame), None)
         return self
+
+    def chapter(self, kind, nodeid, outcome=None, f=None, l=None):
+        """#98: a test boundary, reported by the injected pytest plugin.
+        Chapter events ride the same stream (e="chap", k="s"|"e") so
+        they scrub, filter and honor the cap like every other event."""
+        if not self.armed or self.truncated \
+                or len(self.events) >= self.max_events:
+            return
+        ev = {"e": "chap", "k": kind, "id": str(nodeid),
+              "fn": str(nodeid), "ch": {}}
+        if kind == "e" and outcome:
+            ev["o"] = outcome
+        if f:
+            try:
+                rel = self._rel(os.path.realpath(
+                    os.path.join(os.getcwd(), f)))
+            except Exception:
+                rel = None
+            if rel:
+                ev["f"] = rel
+                ev["l"] = int(l) if l else 1
+                if rel not in self.sources:
+                    try:
+                        with open(os.path.join(self.root, rel),
+                                  encoding="utf-8",
+                                  errors="replace") as fh:
+                            self.sources[rel] = fh.read()
+                    except OSError:
+                        self.sources[rel] = ""
+        if self.granularity == "fn":
+            now = time.perf_counter_ns() // 1000
+            ev["ts"] = max(0, now - self._last_ts)
+            self._last_ts = now
+        tname = self._thread_label()
+        if tname != "MainThread":
+            ev["t"] = tname
+        self.events.append(ev)
 
     def _gen_mark(self, frame, event, yielding=None):
         """Generator/coroutine lifecycle: first call "c", resumption "r",
@@ -1806,7 +1873,7 @@ def _doctor(module, script, root, entry_label, module_ok):
 
 
 def _write_trace(tr, out, granularity, entry_label, error,
-                 trigger_desc=None):
+                 trigger_desc=None, extra=None, chunked=None):
     """Build the payload and write the self-contained replayer HTML —
     shared by the CLI run and the in-process watch() bracket, so both
     honor the same contract (line-only linevars/dataflow, the </ escape,
@@ -1832,16 +1899,43 @@ def _write_trace(tr, out, granularity, entry_label, error,
         "startAt": trigger_desc,
         "trip": getattr(tr, "trip", None),
     }
+    if extra:
+        payload.update(extra)
     template_path = os.path.join(os.path.dirname(SELF),
                                  "replayer_template.html")
     with open(template_path, encoding="utf-8") as f:
         template = f.read()
+    # #101: past the auto threshold (or on --chunked) the events array
+    # moves out of the single JSON string into gzip+base64 chunk tags —
+    # the browser never parses one giant string, and the file shrinks.
+    n_ev = len(tr.events)
+    if chunked is None:
+        chunked = n_ev > CHUNK_AUTO
+    chunk_html = ""
+    if chunked and n_ev:
+        b64s = []
+        for i in range(0, n_ev, CHUNK_EVENTS):
+            raw = json.dumps(tr.events[i:i + CHUNK_EVENTS],
+                             separators=(",", ":")).encode("utf-8")
+            b64s.append(base64.b64encode(
+                gzip.compress(raw, 6)).decode("ascii"))
+        payload["events"] = []
+        payload["chunked"] = {"chunks": len(b64s), "total": n_ev,
+                              "per": CHUNK_EVENTS}
+        chunk_html = "\n".join(
+            f'<script id="trace-chunk-{k}" '
+            f'type="application/gzip-base64">{b64}</script>'
+            for k, b64 in enumerate(b64s))
     # "</" would terminate the <script> tag early if a repr contains it
+    # (base64 never contains "<", so chunks need no escaping)
     data = json.dumps(payload).replace("</", "<\\/")
+    html = template.replace("__TRACE_DATA__", data)
+    html = html.replace("<!-- __TRACE_CHUNKS__ -->", chunk_html)
     with open(out, "w", encoding="utf-8") as f:
-        f.write(template.replace("__TRACE_DATA__", data))
+        f.write(html)
 
-    print(f"{len(tr.events)} events from {len(tr.sources)} file(s) -> {out}")
+    print(f"{len(tr.events)} events from {len(tr.sources)} file(s) -> {out}"
+          + (f" ({len(b64s)} gzip chunks)" if chunked and n_ev else ""))
     if error:
         print(f"note: script ended with {error} "
               f"(trace captured up to that point)")
@@ -1995,15 +2089,103 @@ class watch:
 
 
 def _extract_payload(html_path):
-    """Read the embedded JSON back out of a generated trace (the same
-    contract checks.py relies on)."""
+    """Read the embedded JSON back out of a generated trace — including
+    #101 chunked artifacts, whose events live in gzip+base64 chunk tags
+    (the same contract checks.py and the mapper rely on)."""
     with open(html_path, encoding="utf-8") as fh:
-        m = re.search(r'<script id="trace-data" '
-                      r'type="application/json">(.*?)</script>',
-                      fh.read(), re.S)
+        html = fh.read()
+    m = re.search(r'<script id="trace-data" '
+                  r'type="application/json">(.*?)</script>', html, re.S)
     if m is None:
         raise ValueError("no embedded trace data")
-    return json.loads(m.group(1).replace("<\\/", "</"))
+    data = json.loads(m.group(1).replace("<\\/", "</"))
+    ch = data.get("chunked")
+    if ch:
+        events = []
+        tags = re.findall(r'<script id="trace-chunk-(\d+)" '
+                          r'type="application/gzip-base64">(.*?)</script>',
+                          html, re.S)
+        for _, b64 in sorted(((int(k), s) for k, s in tags)):
+            events.extend(json.loads(
+                gzip.decompress(base64.b64decode(b64))))
+        if len(events) != ch.get("total"):
+            raise ValueError(f"chunked trace incomplete: {len(events)} "
+                             f"of {ch.get('total')} events")
+        data["events"] = events
+    return data
+
+
+def _ochiai_rank(cov_fail, cov_pass, n_fail, cap=15):
+    """#65: Ochiai suspiciousness — ef / sqrt(n_fail * (ef + ep)) — for
+    every unit at least one FAILING run/test touched. Ranked descending;
+    ties stay visibly equal (then sorted by unit for stability)."""
+    scored = []
+    for u, ef in cov_fail.items():
+        ep = cov_pass.get(u, 0)
+        scored.append((ef / ((n_fail * (ef + ep)) ** 0.5), ef, ep, u))
+    scored.sort(key=lambda s: (-s[0], s[3]))
+    return scored[:cap]
+
+
+def _chapter_suspicion(events, granularity):
+    """#98's killer join: per-TEST coverage from one suite trace ×
+    chapter outcomes -> the #65 suspicion ranking without N runs.
+    Returns (summary, suspicion) — either may be None: no chapters ->
+    (None, None); chapters but no pass/fail contrast -> (summary, None).
+    Skipped tests contribute no coverage (they measured nothing)."""
+    spans, open_ = [], {}
+    for i, e in enumerate(events):
+        if e.get("e") != "chap":
+            continue
+        if e.get("k") == "s":
+            open_[e.get("id")] = i
+        else:
+            s = open_.pop(e.get("id"), None)
+            if s is not None:
+                spans.append((e.get("id"), e.get("o", "passed"), s, i))
+    if not spans:
+        return None, None
+    counts = {"passed": 0, "failed": 0, "skipped": 0, "other": 0}
+    for _, o, _, _ in spans:
+        counts[o if o in counts else "other"] += 1
+    n_pass = counts["passed"]
+    n_fail = counts["failed"] + counts["other"]   # errors fail too
+    summary = {"tests": len(spans), **counts,
+               "failedIds": [nid for nid, o, _, _ in spans
+                             if o not in ("passed", "skipped")][:20]}
+    if not (n_pass and n_fail):
+        return summary, None
+    cov_fail, cov_pass = {}, {}
+    fail_spans = []
+    for nid, o, s, t in spans:
+        if o == "skipped":
+            continue
+        cov = {(e["f"], e["l"]) for e in events[s:t]
+               if e.get("f") and e.get("l") and e.get("e") != "chap"}
+        if o == "passed":
+            bucket = cov_pass
+        else:
+            bucket = cov_fail
+            fail_spans.append((s, t))
+        for u in cov:
+            bucket[u] = bucket.get(u, 0) + 1
+    rows = []
+    for score, ef, ep, (f, l) in _ochiai_rank(cov_fail, cov_pass,
+                                              n_fail):
+        ev_idx = None
+        for s, t in fail_spans:
+            for k in range(s, t):
+                e = events[k]
+                if e.get("f") == f and e.get("l") == l:
+                    ev_idx = k
+                    break
+            if ev_idx is not None:
+                break
+        rows.append({"f": f, "l": l, "score": round(score, 3),
+                     "ef": ef, "ep": ep, "ev": ev_idx})
+    return summary, {"unit": "line" if granularity == "line"
+                     else "boundary",
+                     "pass": n_pass, "fail": n_fail, "top": rows}
 
 
 def _run_harness(orig_argv, n_runs, out, entry_label, granularity,
@@ -2061,6 +2243,10 @@ def _run_harness(orig_argv, n_runs, out, entry_label, granularity,
     print(f"pyreplay: {n_runs} runs of {entry_label} ({granularity} "
           f"granularity), identical stdin each run", flush=True)
     per_run, seen_cls, interrupted = [], set(), False
+    # #65 SBFL: per-run coverage survives the trace deletion — the set
+    # of (file, line) pairs each run touched, split by outcome
+    cov_fail, cov_pass = {}, {}
+    n_fail_cov = n_pass_cov = 0
     try:
         for i in range(1, n_runs + 1):
             tr_path = f"{rep_base}_run{i}.html"
@@ -2070,18 +2256,23 @@ def _run_harness(orig_argv, n_runs, out, entry_label, granularity,
                                capture_output=True)
             ms = (time.perf_counter() - t0) * 1000.0
             cls, ev_count, note = f"no trace (exit {r.returncode})", 0, None
+            cov = None
             if os.path.exists(tr_path):
                 try:
                     data = _extract_payload(tr_path)
                     ev_count = len(data.get("events", []))
+                    cov = {(e["f"], e["l"]) for e in data.get("events", [])
+                           if e.get("f") and e.get("l")}
                     err = data.get("error")
                     if err is None and r.returncode == 0:
                         cls = "clean"
                     elif err is None:
                         cls = f"exit {r.returncode}"
                     else:
+                        # FIRST hard exc = the raise site (the last one
+                        # is merely where it escaped the top frame)
                         site = ""
-                        for e in reversed(data.get("events", [])):
+                        for e in data.get("events", []):
                             if e.get("e") == "exc" and e.get("x") \
                                     and not e["x"].get("soft"):
                                 site = f" at {e['f']}:{e['l']}"
@@ -2089,6 +2280,15 @@ def _run_harness(orig_argv, n_runs, out, entry_label, granularity,
                         cls = err.split(":")[0].strip() + site
                 except Exception as exc:
                     cls = f"unreadable trace ({type(exc).__name__})"
+                    cov = None
+            if cov is not None:
+                bucket = cov_pass if cls == "clean" else cov_fail
+                if cls == "clean":
+                    n_pass_cov += 1
+                else:
+                    n_fail_cov += 1
+                for u in cov:
+                    bucket[u] = bucket.get(u, 0) + 1
             first = cls not in seen_cls
             seen_cls.add(cls)
             if first and cls != "clean":
@@ -2116,11 +2316,58 @@ def _run_harness(orig_argv, n_runs, out, entry_label, granularity,
         print("error: no runs completed — nothing to report")
         return 2
 
+    # #65 SBFL (Ochiai): score every unit at least one FAILING run
+    # touched — ef / sqrt(totalFail * (ef + ep)). Needs contrast: with
+    # no passing or no failing runs there is no signal, and the report
+    # says nothing rather than inventing a ranking.
+    suspicion = None
+    if n_fail_cov and n_pass_cov:
+        scored = _ochiai_rank(cov_fail, cov_pass, n_fail_cov)
+        # sources + a jump target per suspect, from the kept traces
+        sources, fail_pls = {}, []
+        outdir = os.path.dirname(out)
+        for r_ in per_run:
+            if not r_["kept"]:
+                continue
+            rep_path = os.path.join(outdir, r_["kept"])
+            try:
+                pl = _extract_payload(rep_path)
+            except Exception:
+                continue   # unreadable rep: suspects lose links, not truth
+            for relf, text in (pl.get("sources") or {}).items():
+                sources.setdefault(relf, text)
+            if r_["cls"] != "clean":
+                fail_pls.append((r_["kept"], pl.get("events", [])))
+        rows = []
+        for score, ef, ep, (f, l) in scored:
+            src = None
+            text = sources.get(f)
+            if text:
+                ls = text.splitlines()
+                if 0 < l <= len(ls):
+                    src = ls[l - 1].strip()[:90]
+            rep = ev = None
+            for name, evs in fail_pls:
+                for k, e in enumerate(evs):
+                    if e.get("f") == f and e.get("l") == l:
+                        rep, ev = name, k + 1
+                        break
+                if rep:
+                    break
+            rows.append({"f": f, "l": l, "score": round(score, 3),
+                         "ef": ef, "ep": ep, "src": src,
+                         "rep": rep, "ev": ev})
+        suspicion = {"unit": "line" if granularity == "line"
+                     else "boundary",
+                     "pass": n_pass_cov, "fail": n_fail_cov,
+                     "top": rows}
+
     payload = {"script": entry_label, "requested": n_runs,
                "granularity": granularity,
                "python": sys.version.split()[0],
                "cmd": shown,   # child_flags already ends with the target
                "interrupted": interrupted,
+               "suspicion": suspicion,
                "perRun": per_run}
     template_path = os.path.join(os.path.dirname(SELF),
                                  "runs_template.html")
@@ -2137,6 +2384,15 @@ def _run_harness(orig_argv, n_runs, out, entry_label, granularity,
         rep = next((r_["kept"] for r_ in per_run
                     if r_["cls"] == cls and r_["kept"]), None)
         print(f"  {cnt:4d}x {cls}" + (f"  -> {rep}" if rep else ""))
+    if suspicion and suspicion["top"]:
+        u = "lines" if suspicion["unit"] == "line" \
+            else "call/return/raise lines (fn granularity)"
+        print(f"  suspicion — Ochiai over {u}, "
+              f"{suspicion['pass']} pass / {suspicion['fail']} fail "
+              f"(correlation, not causation):")
+        for row in suspicion["top"][:5]:
+            print(f"    {row['score']:.2f}  {row['f']}:{row['l']}"
+                  + (f"  {row['src']}" if row["src"] else ""))
     print(f"report -> {out}")
     return 0 if set(counts) == {"clean"} else 1
 
@@ -2303,6 +2559,8 @@ def main(argv):
     doctor = False
     trip = None
     runs_n = None
+    chunked_opt = None   # #101: None = auto by size
+    _chap_plug = None   # #98: the imported pytest chapter plugin
     while argv and (argv[0].startswith("--") or argv[0] == "-m"):
         if argv[0] == "-m" and len(argv) >= 2:
             # -m MODULE runs a module as __main__ (e.g. -m pytest tests/).
@@ -2349,6 +2607,12 @@ def main(argv):
                 print("error: --trip expects 'nan' (NaN/Inf tripwire)")
                 return 2
             trip, argv = argv[1], argv[2:]
+        elif argv[0] == "--chunked":
+            chunked_opt = True
+            argv = argv[1:]
+        elif argv[0] == "--no-chunked":
+            chunked_opt = False
+            argv = argv[1:]
         elif argv[0] == "--runs" and len(argv) >= 2:
             if not argv[1].isdigit() or int(argv[1]) < 2:
                 print("error: --runs expects an integer >= 2 "
@@ -2504,6 +2768,25 @@ def main(argv):
         if module == "pytest" and not any(
                 os.path.exists(a) or "::" in a for a in module_argv):
             module_argv = module_argv + [root]
+        if module == "pytest":
+            # #98: inject the chapter-reporting plugin — every test
+            # becomes a named span. -p accepts a module name, so the
+            # tracer's own directory must be importable. Importing it
+            # HERE claims the sys.modules entry pytest will reuse; the
+            # tracer handle rides on the module object itself (runpy
+            # swaps __main__ during the run, so globals can't carry it).
+            plug_dir = os.path.dirname(SELF)
+            if plug_dir not in sys.path:
+                sys.path.insert(0, plug_dir)
+            try:
+                import _pyreplay_pytest_plugin as _chap_plug
+                module_argv = ["-p", "_pyreplay_pytest_plugin"] \
+                    + module_argv
+            except ImportError:
+                _chap_plug = None
+                print("pyreplay: chapter plugin not importable — the "
+                      "suite runs untagged (no per-test chapters)",
+                      flush=True)
         # mimic `python -m MODULE ...`: run_module(alter_sys) fixes argv[0];
         # put the scope root AND cwd on sys.path so both the project package
         # and pytest's conftest/discovery resolve.
@@ -2556,6 +2839,8 @@ def main(argv):
     else:
         threading.settrace(tracer)  # threads started by the target too
         sys.settrace(tracer)
+    if _chap_plug is not None:
+        _chap_plug._ACTIVE_TRACER = tracer   # #98 handoff
     try:
         # run_path/run_module execute the entry as __main__, so a script's
         # own `if __name__ == "__main__":` block — or a module like pytest —
@@ -2573,6 +2858,8 @@ def main(argv):
         error = f"{type(exc).__name__}: {exc}"
     finally:
         hb_stop.set()
+        if _chap_plug is not None:
+            _chap_plug._ACTIVE_TRACER = None
         if mon is not None:
             mon.stop()
         else:
@@ -2592,7 +2879,35 @@ def main(argv):
             parts.append(f"hit #{start_count}")
         trigger_desc = ", ".join(parts)
 
-    _write_trace(tracer, out, granularity, entry_label, error, trigger_desc)
+    # #98: chapters recorded by the pytest plugin -> summary + the
+    # per-test SBFL join, embedded in the trace and echoed to stdout
+    extra = None
+    tsum, tsusp = _chapter_suspicion(tracer.events, granularity)
+    if tsum:
+        extra = {"tests": tsum, "testSuspicion": tsusp}
+        line = (f"tests: {tsum['tests']} — {tsum['passed']} passed"
+                + (f", {tsum['failed']} failed" if tsum["failed"] else "")
+                + (f", {tsum['other']} errored" if tsum["other"] else "")
+                + (f", {tsum['skipped']} skipped"
+                   if tsum["skipped"] else ""))
+        print(line)
+        if tsusp and tsusp["top"]:
+            u = "lines" if tsusp["unit"] == "line" \
+                else "call/return/raise lines (fn granularity)"
+            print(f"suspicion — Ochiai over {u}, {tsusp['pass']} passing "
+                  f"/ {tsusp['fail']} failing tests "
+                  f"(correlation, not causation):")
+            for row in tsusp["top"][:5]:
+                src = None
+                text = tracer.sources.get(row["f"])
+                if text:
+                    ls = text.splitlines()
+                    if 0 < row["l"] <= len(ls):
+                        src = ls[row["l"] - 1].strip()[:80]
+                print(f"    {row['score']:.2f}  {row['f']}:{row['l']}"
+                      + (f"  {src}" if src else ""))
+    _write_trace(tracer, out, granularity, entry_label, error,
+                 trigger_desc, extra=extra, chunked=chunked_opt)
     if perfetto:
         slices, nlanes, stray, unclosed = export_perfetto(
             tracer.events, entry_label, perfetto)

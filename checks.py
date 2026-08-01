@@ -10,6 +10,8 @@ embedded JSON from each generated HTML, and asserts the properties that
 were won in the adversarial-review sessions. Data-level only — no
 browser. Exit code 0 = all green.
 """
+import base64
+import gzip
 import json
 import os
 import re
@@ -46,7 +48,19 @@ def payload(html_path):
     m = re.search(r'<script id="(?:trace|map)-data" '
                   r'type="application/json">(.*?)</script>', html, re.S)
     expect(m is not None, f"no embedded JSON in {html_path}")
-    return json.loads(m.group(1).replace("<\\/", "</"))
+    data = json.loads(m.group(1).replace("<\\/", "</"))
+    ch = data.get("chunked")
+    if ch:   # #101: events live in gzip+base64 chunk tags
+        events = []
+        tags = re.findall(r'<script id="trace-chunk-(\d+)" '
+                          r'type="application/gzip-base64">(.*?)</script>',
+                          html, re.S)
+        for _, b64 in sorted(((int(k), s) for k, s in tags)):
+            events.extend(json.loads(gzip.decompress(base64.b64decode(b64))))
+        expect(len(events) == ch.get("total"),
+               f"chunked trace incomplete: {len(events)}/{ch.get('total')}")
+        data["events"] = events
+    return data
 
 
 def run_trace(script, *flags, stdin_text=None, name=None):
@@ -1130,6 +1144,147 @@ deco(1); deco(2)
            f"decorator must record the FIRST call only: {wd}")
 
 
+@check("chunked: gzip chunks round-trip, auto past 100k, honesty (#101)")
+def _():
+    # deterministic fixture (no functions/objects -> no 0x addresses):
+    # two separate runs produce byte-identical events, so the chunked
+    # and plain artifacts must decode to EXACTLY the same list
+    fx = fixture("fx_chunk.py",
+                 "a = 1\nb = [1, 2]\nb.append(a)\nc = 'x' * 3\n")
+    plain = run_trace(fx, name="fx_chunk_plain")
+    chunk = run_trace(fx, "--chunked", name="fx_chunk_gz")
+    meta = chunk.get("chunked")
+    expect(meta and meta["chunks"] == 1
+           and meta["total"] == len(chunk["events"]),
+           f"chunk meta wrong: {meta}")
+    expect(plain["events"] == chunk["events"],
+           "chunked events must decode identical to the plain run")
+    with open(os.path.join(TMP, "fx_chunk_gz.html"),
+              encoding="utf-8") as fh:
+        html = fh.read()
+    expect('id="trace-chunk-0" type="application/gzip-base64"' in html,
+           "chunk tag missing from the artifact")
+    for needle, why in [
+        ("function loadChunks", "async chunk loader missing"),
+        ("DecompressionStream", "browser decompression path missing"),
+        ("is MISSING", "damaged-chunk honesty note missing"),
+        ("function maybeKeyframe", "keyframe builder missing"),
+        ("function cloneStacks", "keyframe snapshot missing"),
+        ("window.PYREPLAY", "debug handle missing"),
+    ]:
+        expect(needle in html, f"chunked: {why} ({needle!r})")
+    # a damaged file must refuse loudly, never truncate silently
+    broken = re.sub(r'<script id="trace-chunk-0" '
+                    r'type="application/gzip-base64">.*?</script>',
+                    "", html, count=1, flags=re.S)
+    bp = os.path.join(TMP, "fx_chunk_broken.html")
+    with open(bp, "w", encoding="utf-8") as fh:
+        fh.write(broken)
+    try:
+        payload(bp)
+        loud = False
+    except Fail as exc:                 # payload()'s own expect fired
+        loud = "incomplete" in str(exc)
+    except Exception:
+        loud = True                     # any reader exception is loud
+    expect(loud, "reading a chunk-damaged trace must fail loudly")
+    # auto threshold: >100k events chunk WITHOUT the flag; --no-chunked
+    # forces the old single-string format on the same run
+    fx2 = fixture("fx_chunk_big.py",
+                  "t = 0\nfor i in range(26000):\n"
+                  "    t += i\n    t -= 1\n    t ^= 1\n")
+    big = run_trace(fx2, name="fx_chunk_auto")
+    expect(big.get("chunked") and big["chunked"]["chunks"] >= 2
+           and len(big["events"]) > 100000,
+           f"auto-chunking must fire past 100k events: "
+           f"{big.get('chunked')} n={len(big['events'])}")
+    off = run_trace(fx2, "--no-chunked", name="fx_chunk_off")
+    expect(off.get("chunked") is None,
+           "--no-chunked must force the single-string format")
+    expect(len(off["events"]) == len(big["events"]),
+           "both formats must hold the same run shape")
+
+
+@check("chapters: pytest tests become spans + per-test SBFL join (#98)")
+def _():
+    # needs a python with pytest: try the checks interpreter, then the
+    # repo's .venv — verifying a pytest integration without pytest is
+    # not possible, so the absence is a loud, actionable failure
+    pytest_py = None
+    for cand in (PY, os.path.join(HERE, ".venv", "bin", "python3")):
+        probe = subprocess.run([cand, "-c", "import pytest"],
+                               capture_output=True)
+        if probe.returncode == 0:
+            pytest_py = cand
+            break
+    expect(pytest_py is not None,
+           "#98 needs pytest in some python (checks interpreter or "
+           "./.venv) — pip install pytest to verify this feature")
+    suite = os.path.join(TMP, "chapsuite")
+    os.makedirs(suite, exist_ok=True)
+    with open(os.path.join(suite, "calc.py"), "w") as fh:
+        fh.write("def add(a, b):\n    return a + b\n\n\n"
+                 "def buggy_scale(x):\n    return x * 3\n")
+    with open(os.path.join(suite, "test_mini.py"), "w") as fh:
+        fh.write("from calc import add, buggy_scale\n\n\n"
+                 "def test_add_small():\n    assert add(2, 3) == 5\n\n\n"
+                 "def test_add_big():\n    assert add(10, 20) == 30\n\n\n"
+                 "def test_scale():\n    assert buggy_scale(4) == 8\n")
+    out = os.path.join(TMP, "t_chap.html")
+    r = subprocess.run([pytest_py, os.path.join(HERE, "tracer.py"),
+                        "--root", suite, "--out", out, "-m", "pytest",
+                        os.path.join(suite, "test_mini.py"), "-q"],
+                       capture_output=True, text=True, cwd=TMP,
+                       timeout=180)
+    expect(os.path.exists(out), f"suite trace missing: {r.stdout} "
+           f"{r.stderr}")
+    p = payload(out)
+    chaps = [e for e in p["events"] if e.get("e") == "chap"]
+    starts = [e for e in chaps if e["k"] == "s"]
+    ends = [e for e in chaps if e["k"] == "e"]
+    expect(len(starts) == 3 and len(ends) == 3,
+           f"3 tests must yield 3 start/end pairs: {len(starts)}/"
+           f"{len(ends)}")
+    expect(all(e.get("f") == "test_mini.py"
+               and isinstance(e.get("l"), int) for e in starts),
+           f"chapter starts must carry the test file:line: {starts}")
+    outcomes = sorted(e.get("o") for e in ends)
+    expect(outcomes == ["failed", "passed", "passed"],
+           f"outcomes wrong: {outcomes}")
+    fail_end = next(e for e in ends if e["o"] == "failed")
+    expect(fail_end["id"].endswith("::test_scale"),
+           f"the failing nodeid must name test_scale: {fail_end['id']}")
+    # spans well-formed: every end after its start
+    idx = {e["id"]: i for i, e in enumerate(p["events"])
+           if e.get("e") == "chap" and e["k"] == "s"}
+    for i, e in enumerate(p["events"]):
+        if e.get("e") == "chap" and e["k"] == "e":
+            expect(idx.get(e["id"], 10**9) < i,
+                   f"chapter end before start for {e['id']}")
+    # the summary and the killer join
+    ts = p["tests"]
+    expect(ts["tests"] == 3 and ts["passed"] == 2 and ts["failed"] == 1,
+           f"tests summary wrong: {ts}")
+    s = p["testSuspicion"]
+    expect(s is not None and s["pass"] == 2 and s["fail"] == 1,
+           f"per-test suspicion contrast wrong: {s}")
+    perfect = [row for row in s["top"] if row["score"] == 1.0]
+    expect(any(row["f"] == "calc.py" and row["ep"] == 0
+               and row["ef"] == 1 for row in perfect),
+           f"buggy_scale's lines (calc.py, only the failing test) must "
+           f"score 1.0: {s['top'][:5]}")
+    for row in perfect:
+        if row["ev"] is not None:
+            e = p["events"][row["ev"]]
+            expect(e.get("f") == row["f"] and e.get("l") == row["l"],
+                   f"suspect jump target mismatch: {row} -> {e}")
+    # non-pytest -m runs stay chapter-free (the plugin only rides pytest)
+    expect("tests" not in payload(os.path.join(TMP, "fx_chart.html"))
+           if os.path.exists(os.path.join(TMP, "fx_chart.html"))
+           else True,
+           "plain traces must not grow a tests summary")
+
+
 @check("diverge: state vs control divergence, identical pair, exits (#64)")
 def _():
     # env-controlled fixture: same control flow, different values ->
@@ -1190,7 +1345,7 @@ def _():
            f"branch divergence must show the control moment:\n{r3.stdout}")
 
 
-@check("runs: N-run harness classifies outcomes, keeps one trace each (#63)")
+@check("runs: harness outcomes + one kept trace each + SBFL suspects (#63+#65)")
 def _():
     # a counter file makes the "flake" fully deterministic: 6 runs share
     # the cwd, runs 3 and 6 (n=2, n=5) raise — 4 clean + 2 ValueError.
@@ -1242,7 +1397,24 @@ def _():
     expect(sorted(on_disk) == sorted(kept),
            f"non-representative traces must be deleted: {on_disk}")
     expect(fails[0]["note"], "first failing run must carry a stderr tail")
-    # the all-clean path exits 0
+    # #65 SBFL: the raise line is executed ONLY by failing runs ->
+    # perfect Ochiai score, deep-linked into a kept failing trace
+    s = data["suspicion"]
+    expect(s is not None and s["pass"] == 4 and s["fail"] == 2,
+           f"suspicion needs the 4/2 contrast recorded: {s}")
+    top = s["top"][0]
+    expect(top["l"] == 9 and top["score"] == 1.0
+           and top["ef"] == 2 and top["ep"] == 0,
+           f"the raise line must be the perfect suspect: {top}")
+    expect(top["rep"] in kept and top["ev"],
+           f"top suspect must deep-link into a kept failing trace: {top}")
+    expect(top["src"] and "raise ValueError" in top["src"],
+           f"suspect must carry its source line: {top['src']!r}")
+    # classification names the RAISE site (first hard exc), which is
+    # also the top suspect's line — the two views must agree
+    expect(fails[0]["cls"] == "ValueError at fx_nrun.py:9",
+           f"class must name the raise site: {fails[0]['cls']}")
+    # the all-clean path exits 0 and reports NO suspicion (no contrast)
     fx2 = fixture("fx_nrun_ok.py", "x = 1\nprint(x)\n")
     out2 = os.path.join(TMP, "runs_fx_ok.html")
     r2 = subprocess.run([PY, os.path.join(HERE, "tracer.py"),
@@ -1251,6 +1423,14 @@ def _():
                         timeout=120)
     expect(r2.returncode == 0,
            f"an all-clean run set must exit 0, got {r2.returncode}")
+    with open(out2, encoding="utf-8") as fh:
+        m2 = re.search(r'<script id="runs-data" '
+                       r'type="application/json">(.*?)</script>',
+                       fh.read(), re.S)
+    expect(json.loads(m2.group(1).replace("<\\/", "</"))["suspicion"]
+           is None,
+           "no contrast (all clean) must mean NO suspicion ranking — "
+           "never an invented one")
 
 
 @check("trip: NaN/Inf births marked at kind changes, recovery re-arms (#79)")
@@ -1317,6 +1497,29 @@ def _():
         (":chartvs", "phase partner pref missing"),
     ]:
         expect(needle in html, f"oscilloscope: {why} ({needle!r})")
+
+
+@check("query bar: grammar + wiring in the artifact (#109)")
+def _():
+    # renderer-side; the structural guard covers the grammar table, the
+    # honest unrecognized-token path, and the hit machinery. Behavior
+    # (15 predicates, jumps, pins) is verified in the browser.
+    fx = fixture("fx_query.py", "x = 1\nx = 2\n")
+    run_trace(fx, name="fx_query")
+    with open(os.path.join(TMP, "fx_query.html"),
+              encoding="utf-8") as fh:
+        html = fh.read()
+    for needle, why in [
+        ("function parseQuery", "query parser missing"),
+        ("function runQuery", "query runner missing"),
+        ("function jumpHit", "hit navigation missing"),
+        ("unrecognized: ", "typo'd operators must be reported"),
+        ('id="query"', "query input missing"),
+        ("changed:", "changed: predicate missing"),
+        ("srcLineAt", "bare-word source search missing"),
+        ("qmark", "hit pins missing"),
+    ]:
+        expect(needle in html, f"query bar: {why} ({needle!r})")
 
 
 @check("deep links: fragment state machinery wired into the artifact")

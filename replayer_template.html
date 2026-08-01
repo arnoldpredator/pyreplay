@@ -149,6 +149,37 @@
   .gly.trip { color: #e5c07b; }
   .tripnote { cursor: pointer; text-decoration: underline;
     text-underline-offset: 2px; }
+  #chaplabel { margin-left: 8px; color: var(--dim); }
+  #chaplabel.tok { color: #7fd1a8; }
+  #chaplabel.tfail { color: var(--err); }
+  #chapmarks { position: relative; height: 6px; margin: 0 7px 2px; }
+  .chapspan {
+    position: absolute; top: 0; height: 6px; border-radius: 2px;
+    cursor: pointer; min-width: 3px; opacity: 0.85;
+  }
+  .chapspan.tok { background: #2f5d47; }
+  .chapspan.tfail { background: var(--err); }
+  .chapspan.tskip { background: #4a4f5c; }
+  .chapspan:hover { opacity: 1; outline: 1px solid #fff5; }
+  .suspectlink { cursor: pointer; text-decoration: underline;
+    text-underline-offset: 2px; margin-left: 6px; }
+  #qbar { display: flex; align-items: center; gap: 6px;
+    margin: 0 7px 3px; }
+  #query { flex: 1; background: #171a22; color: var(--text);
+    border: 1px solid var(--border); border-radius: 4px;
+    padding: 3px 8px; font: inherit; font-size: 11px; }
+  #query:focus { outline: 1px solid var(--accent); }
+  #qcount { color: var(--dim); font-size: 11px; white-space: nowrap; }
+  #qbar button { background: var(--panel); color: var(--text);
+    border: 1px solid var(--border); border-radius: 4px;
+    cursor: pointer; padding: 1px 7px; }
+  #qmarks { position: relative; height: 7px; margin: 0 7px 2px; }
+  .qmark {
+    position: absolute; top: 0; width: 4px; height: 7px;
+    background: #d38aea; border-radius: 2px; cursor: pointer;
+    transform: translateX(-2px);
+  }
+  .qmark:hover { background: #eebcfa; }
   .chartbox { margin-top: 3px; }
   .chartsvg { display: block; background: #171a22;
     border: 1px solid var(--border); border-radius: 4px; }
@@ -371,7 +402,7 @@
     </section>
     <section>
       <h2>Event</h2>
-      <div><span id="badge" class="badge line">LINE</span><span id="thread"></span><span id="ctx"></span></div>
+      <div><span id="badge" class="badge line">LINE</span><span id="thread"></span><span id="ctx"></span><span id="chaplabel"></span></div>
       <div id="where"></div>
       <div id="hint"></div>
       <div id="retval"></div>
@@ -386,12 +417,23 @@
   </div>
 </main>
 <footer>
+  <div id="qbar">
+    <input id="query" type="search" spellcheck="false"
+      placeholder="query events — x=42 · count>10 · type:exc · exc:KeyError · fn:push · file:cart · changed:total · mut:items · after:5000 · trip · bare word = source text · space = AND ( / focuses · Enter = next hit )">
+    <span id="qcount"></span>
+    <button id="q-prev" title="previous hit, from the cursor">‹</button>
+    <button id="q-next" title="next hit, from the cursor">›</button>
+  </div>
   <input type="range" id="scrub" min="0" value="0">
 </footer>
 
 <!-- Trace data lives in a non-executing JSON tag: a bad payload can never
      kill the viewer's JavaScript, and the raw template stays valid. -->
 <script id="trace-data" type="application/json">__TRACE_DATA__</script>
+<!-- __TRACE_CHUNKS__ -->
+<!-- Past ~200k events the writer swaps the events array for gzip+base64
+     chunk tags here (#101): the browser never parses one giant string,
+     files shrink ~5x, and the loader shows its progress honestly. -->
 
 <script>
 const $ = id => document.getElementById(id);
@@ -417,11 +459,59 @@ try {
 } catch (e) {
   throw new Error("trace data is corrupt: " + e.message);
 }
-const events = DATA.events;
+
+/* #101 chunked traces: past ~200k events the writer stores the events
+   as gzip+base64 chunk tags instead of one giant JSON string. Loading
+   is async (DecompressionStream), with progress in the banner and a
+   LOUD note if a chunk is missing — so the whole viewer boots inside
+   one async wrapper; nothing below runs before the events exist. */
+let chunkDamage = null;
+async function loadChunks() {
+  const meta = DATA.chunked;
+  const b = $("banner");
+  b.className = "info";
+  b.style.display = "block";
+  if (typeof DecompressionStream === "undefined") {
+    b.textContent = "This trace is chunked (gzip) but this browser " +
+      "lacks DecompressionStream — needs Chrome 80+ / Firefox 113+ / " +
+      "Safari 16.4+.";
+    throw new Error("no DecompressionStream");
+  }
+  const out = [];
+  for (let k = 0; k < meta.chunks; k++) {
+    const tag = document.getElementById("trace-chunk-" + k);
+    if (!tag) {
+      chunkDamage = "chunk " + (k + 1) + " of " + meta.chunks +
+        " is MISSING — file damaged; showing the " + out.length +
+        " events before the gap, which end there honestly.";
+      break;
+    }
+    b.textContent = "decompressing events — chunk " + (k + 1) + " / " +
+      meta.chunks + " …";
+    const bytes = Uint8Array.from(atob(tag.textContent.trim()),
+                                  c => c.charCodeAt(0));
+    tag.textContent = "";   // free the base64 string immediately
+    const text = await new Response(
+      new Blob([bytes]).stream().pipeThrough(
+        new DecompressionStream("gzip"))).text();
+    for (const e of JSON.parse(text)) out.push(e);
+  }
+  if (!chunkDamage) {
+    b.textContent = "";
+    b.style.display = "none";
+    b.className = "";
+  }
+  return out;
+}
+
+(async () => {
+let events = DATA.events;
+if (DATA.chunked) events = await loadChunks();
 
 $("script-name").textContent = "· " + DATA.script + " · " +
   events.length + " events" +
-  (DATA.granularity === "fn" ? " · fn granularity" : "");
+  (DATA.granularity === "fn" ? " · fn granularity" : "") +
+  (DATA.chunked ? " · " + DATA.chunked.chunks + " gzip chunks" : "");
 if (DATA.error || DATA.truncated) {
   const b = $("banner");
   b.style.display = "block";
@@ -435,6 +525,15 @@ if (DATA.error || DATA.truncated) {
   b.textContent = "⚡ Recording began at trigger [" + DATA.startAt +
     "] — everything before it ran normally but is NOT in this trace. " +
     "The first events reconstruct the call stack and variables at that moment.";
+}
+/* a chunked file missing a chunk: after the error/trigger banner text
+   is set (textContent assignments above would erase an earlier note) */
+if (chunkDamage) {
+  const b = $("banner");
+  b.style.display = "block";
+  const dmg = document.createElement("span");
+  dmg.textContent = " ⚠ " + chunkDamage;
+  b.appendChild(dmg);
 }
 /* NaN/Inf tripwire (--trip nan): announce the FIRST birth loudly.
    Appended after the error/trigger text (textContent above would erase
@@ -462,6 +561,59 @@ if (DATA.trip) {
   }
   b.appendChild(note);
 }
+/* #98 per-test chapters: spans from the chap events, an index from
+   event -> owning test, a banner summary, and (when the suite had both
+   outcomes) the #65 suspects as clickable jumps. */
+const chapSpans = [];
+const chapterOf = new Array(events.length).fill(-1);
+(function () {
+  const open = Object.create(null);
+  events.forEach((e, i) => {
+    if (e.e !== "chap") return;
+    if (e.k === "s") { open[e.id] = i; return; }
+    const s = open[e.id];
+    if (s === undefined) return;
+    delete open[e.id];
+    chapSpans.push({ id: e.id, o: e.o || "passed", s, t: i });
+  });
+  chapSpans.forEach((sp, k) => {
+    for (let i = sp.s; i <= sp.t; i++) chapterOf[i] = k;
+  });
+  if (!chapSpans.length) return;
+  const n = { passed: 0, failed: 0, skipped: 0, other: 0 };
+  chapSpans.forEach(sp => {
+    n[sp.o in n ? sp.o : "other"] += 1;
+  });
+  const b = $("banner");
+  if (!b.style.display || b.style.display === "none") {
+    b.className = "info";
+    b.style.display = "block";
+  }
+  const sum = document.createElement("span");
+  sum.textContent = " " + chapSpans.length + " tests: " + n.passed +
+    " ✓" + (n.failed ? " · " + n.failed + " ✗" : "") +
+    (n.other ? " · " + n.other + " errored" : "") +
+    (n.skipped ? " · " + n.skipped + " −" : "") + ".";
+  b.appendChild(sum);
+  const S = DATA.testSuspicion;
+  if (S && S.top && S.top.length) {
+    const lbl = document.createElement("span");
+    lbl.textContent = " Suspects (Ochiai, correlation not causation):";
+    b.appendChild(lbl);
+    S.top.slice(0, 3).forEach(row => {
+      const a = document.createElement("span");
+      a.className = "suspectlink";
+      a.textContent = row.f + ":" + row.l + " (" +
+        row.score.toFixed(2) + ")";
+      a.title = "executed by " + row.ef + "/" + S.fail +
+        " failing vs " + row.ep + "/" + S.pass +
+        " passing tests — click to jump into a failing test";
+      if (row.ev !== null && row.ev !== undefined)
+        a.onclick = () => { stop(); goto(row.ev); };
+      b.appendChild(a);
+    });
+  }
+})();
 
 /* ---------- code panes: one pre-rendered pane per source file ---------- */
 const panes = {};
@@ -1536,6 +1688,30 @@ function fmtDur(us) {
    the current event belongs to. */
 let stateCache = null;   // { lastIdx, stacks, curT } — makes stepping O(1)
 
+/* keyframes (#101): every KF_EVERY events of a from-scratch walk, the
+   whole per-lane stack state is snapshotted (shallow frame + vars
+   copies — encodings are immutable, so sharing them is safe). A later
+   jump resumes from the nearest keyframe below the target instead of
+   replaying the run from event 0: seeks in a 2M-event trace replay at
+   most KF_EVERY events. Built lazily — the first deep jump pays the
+   full walk once and leaves the keyframes behind. */
+const KF_EVERY = 65536;
+const kfStore = new Map();   // index i -> state AFTER event i
+let kfIndices = [];
+function cloneStacks(stacks) {
+  const o = Object.create(null);
+  for (const t in stacks)
+    o[t] = stacks[t].map(fr => ({ ...fr, vars: { ...fr.vars },
+                                  prevVals: { ...fr.prevVals } }));
+  return o;
+}
+function maybeKeyframe(i, idx, stacks, curT) {
+  if (i < idx && (i + 1) % KF_EVERY === 0 && !kfStore.has(i)) {
+    kfStore.set(i, { stacks: cloneStacks(stacks), curT });
+    kfIndices.push(i);
+    kfIndices.sort((a, b) => a - b);
+  }
+}
 function computeStacks(idx) {
   let stacks, start, curT;
   if (stateCache && idx === stateCache.lastIdx + 1) {
@@ -1550,14 +1726,28 @@ function computeStacks(idx) {
     }
     start = idx;
   } else {
-    // backward step or jump: rebuild from the beginning (null proto —
-    // lane names are user thread/task names, "constructor" included)
+    // backward step or jump: rebuild — from the nearest keyframe when
+    // one exists, else from the beginning (null proto — lane names are
+    // user thread/task names, "constructor" included)
     stacks = Object.create(null);
     curT = "main";
     start = 0;
+    for (let q = kfIndices.length - 1; q >= 0; q--) {
+      if (kfIndices[q] < idx) {
+        const kf = kfStore.get(kfIndices[q]);
+        stacks = cloneStacks(kf.stacks);
+        curT = kf.curT;
+        start = kfIndices[q] + 1;
+        break;
+      }
+    }
   }
   for (let i = start; i <= idx; i++) {
     const ev = events[i];
+    if (ev.e === "chap") {           // a test boundary is not a frame,
+      maybeKeyframe(i, idx, stacks, curT);   // but state-after-it is
+      continue;                              // still snapshot-worthy
+    }
     const t = laneOf(ev);
     curT = t;
     const stack = stacks[t] || (stacks[t] = []);
@@ -1582,6 +1772,7 @@ function computeStacks(idx) {
     // pop returned frames, except when the return IS the current event,
     // so its frame stays visible with the return value shown
     if (ev.e === "return" && i < idx) stack.pop();
+    maybeKeyframe(i, idx, stacks, curT);
   }
   stateCache = { lastIdx: idx, stacks, curT };
   return { stack: stacks[curT] || [], thread: curT };
@@ -1639,7 +1830,14 @@ function render() {
 
   const badge = $("badge");
   const GK = { g: "generator", c: "coroutine", a: "async generator" };
-  if (ev.e === "exc") {
+  if (ev.e === "chap") {
+    const OS = { passed: "✓ passed", failed: "✗ FAILED",
+                 skipped: "− skipped" };
+    badge.className = "badge " +
+      (ev.o === "failed" ? "exc" : ev.k === "e" ? "return" : "call");
+    badge.textContent = ev.k === "s" ? "TEST ▶ " + ev.id
+      : "TEST " + (OS[ev.o] || "✗ " + (ev.o || "ended")) + " — " + ev.id;
+  } else if (ev.e === "exc") {
     const soft = ev.x && ev.x.soft;
     badge.className = "badge " + (soft ? "excsoft" : "exc");
     badge.textContent = soft ? "EXCEPTION (control-flow)" : "EXCEPTION";
@@ -1667,6 +1865,18 @@ function render() {
   $("ctx").textContent =
     MACH.imp && stack.some((fr, i) => i > 0 && fr.fn === "<module>")
       ? "⚙ import time" : "";
+  // which test owns this moment (#98) — colored by its outcome
+  const ck = chapterOf[idx];
+  const cl = $("chaplabel");
+  if (ck >= 0) {
+    const sp = chapSpans[ck];
+    cl.textContent = "· " + sp.id;
+    cl.className = sp.o === "passed" ? "tok"
+      : sp.o === "skipped" ? "tskip" : "tfail";
+  } else {
+    cl.textContent = "";
+    cl.className = "";
+  }
   // implicit dunder invocation hint
   const DUNDER = { __lt__: "<", __le__: "<=", __gt__: ">", __ge__: ">=",
     __eq__: "==", __ne__: "!=", __add__: "+", __sub__: "-", __mul__: "*",
@@ -2238,6 +2448,27 @@ $("scrub").max = Math.max(0, events.length - 1);
     footer.insertBefore(box, footer.firstChild);
   }
 })();
+/* test chapters (#98): one colored span per test above the scrubber —
+   green passed, red failed, gray skipped; click = jump to its start */
+(function () {
+  if (!chapSpans.length) return;
+  const box = document.createElement("div");
+  box.id = "chapmarks";
+  const total = Math.max(1, events.length - 1);
+  chapSpans.forEach(sp => {
+    const m = document.createElement("span");
+    m.className = "chapspan " + (sp.o === "passed" ? "tok"
+      : sp.o === "skipped" ? "tskip" : "tfail");
+    m.style.left = (sp.s / total * 100) + "%";
+    m.style.width = Math.max(0.4, (sp.t - sp.s) / total * 100) + "%";
+    m.title = sp.id + " — " + sp.o + " (events " + (sp.s + 1) + "–" +
+      (sp.t + 1) + ")";
+    m.onclick = () => { stop(); goto(sp.s); };
+    box.appendChild(m);
+  });
+  const footer = document.querySelector("footer");
+  footer.insertBefore(box, footer.firstChild);
+})();
 /* trip markers: every NaN/Inf birth, amber; the first one glows */
 (function () {
   if (!DATA.trip) return;
@@ -2322,7 +2553,165 @@ document.addEventListener("keydown", e => {
   else if (e.key === "b" || e.key === "B") toggleBookmark();
   else if (e.key === "[") jumpBookmark(-1);
   else if (e.key === "]") jumpBookmark(1);
+  else if (e.key === "/") { e.preventDefault(); $("query").focus(); }
 });
+
+/* the query bar (#109): search over EVENTS, not text. A tiny fixed
+   grammar — never eval of user code — where every space-separated
+   token must match (AND):
+     type:line|call|return|exc|chap|yield|resume   event kind
+     exc:Name        exception type contains Name
+     fn:txt file:txt substring of function / file
+     line:N          exact source line
+     after:N before:N  1-based event-index bounds
+     changed:VAR     VAR changed at this event
+     mut:VAR         VAR mutated in place here
+     task:txt thread:txt   lane filters
+     trip            a NaN/Inf birth (--trip)
+     VAR=val VAR>n VAR<n VAR>=n VAR<=n   the CHANGED value (= compares
+       the shown primitive text; <,> compare numerically)
+     anything else   substring of that event's SOURCE LINE
+   Honesty: value tests see the moments a variable CHANGED — the
+   recorded facts — not interpolated state between changes. */
+let qHits = [];
+function srcLineAt(ev) {
+  if (!ev.f || !ev.l) return "";
+  const text = DATA.sources[ev.f];
+  if (!text) return "";
+  const ls = text.split("\n");
+  return (0 < ev.l && ev.l <= ls.length) ? ls[ev.l - 1] : "";
+}
+function parseQuery(q) {
+  const preds = [], bad = [];
+  q.trim().split(/\s+/).filter(Boolean).forEach(tok => {
+    let m;
+    if ((m = tok.match(/^type:(\w+)$/i))) {
+      const k = { exception: "exc", exc: "exc", line: "line",
+                  call: "call", return: "return", ret: "return",
+                  chap: "chap", test: "chap", yield: "yield",
+                  resume: "resume" }[m[1].toLowerCase()];
+      if (!k) { bad.push(tok); return; }
+      if (k === "yield")
+        preds.push(e => e.e === "return" && e.g && e.g.s === "y");
+      else if (k === "resume")
+        preds.push(e => e.e === "call" && e.g && e.g.s === "r");
+      else preds.push(e => e.e === k);
+    } else if ((m = tok.match(/^exc:(.+)$/)))
+      preds.push(e => e.e === "exc" && e.x &&
+        String(e.x.t || "").includes(m[1]));
+    else if ((m = tok.match(/^fn:(.+)$/)))
+      preds.push(e => (e.fn || "").includes(m[1]));
+    else if ((m = tok.match(/^file:(.+)$/)))
+      preds.push(e => (e.f || "").includes(m[1]));
+    else if ((m = tok.match(/^line:(\d+)$/)))
+      preds.push(e => e.l === parseInt(m[1], 10));
+    else if ((m = tok.match(/^after:(\d+)$/))) {
+      const n = parseInt(m[1], 10);
+      preds.push((e, i) => i + 1 > n);
+    } else if ((m = tok.match(/^before:(\d+)$/))) {
+      const n = parseInt(m[1], 10);
+      preds.push((e, i) => i + 1 < n);
+    } else if ((m = tok.match(/^changed:(.+)$/)))
+      preds.push(e => e.ch && Object.prototype.hasOwnProperty.call(
+        e.ch, m[1]));
+    else if ((m = tok.match(/^mut:(.+)$/)))
+      preds.push(e => (e.mut || []).includes(m[1]));
+    else if ((m = tok.match(/^task:(.+)$/)))
+      preds.push(e => (e.tk || "").includes(m[1]));
+    else if ((m = tok.match(/^thread:(.+)$/)))
+      preds.push(e => (e.t || "").includes(m[1]));
+    else if (tok === "trip")
+      preds.push(e => !!e.trip);
+    else if ((m = tok.match(/^([A-Za-z_][\w.]*)(==|>=|<=|=|>|<)(.+)$/))) {
+      const name = m[1], op = m[2], valS = m[3];
+      preds.push(e => {
+        if (!e.ch || !Object.prototype.hasOwnProperty.call(e.ch, name))
+          return false;
+        const enc = e.ch[name];
+        if (!enc || (enc.t !== "p" && enc.t !== "s")) return false;
+        if (op === "=" || op === "==") return String(enc.v) === valS;
+        const a = parseNum(String(enc.v)), b = parseNum(valS);
+        if (Number.isNaN(a) || Number.isNaN(b)) return false;
+        return op === ">" ? a > b : op === "<" ? a < b
+             : op === ">=" ? a >= b : a <= b;
+      });
+    } else if (/^[A-Za-z_]\w*:\S/.test(tok)) {
+      bad.push(tok);   // looks like a typo'd operator — say so, never
+    }                  // silently downgrade it to a 0-hit text search
+    else preds.push(e => srcLineAt(e).includes(tok));
+  });
+  return { preds, bad };
+}
+function ensureQmarks() {
+  let box = document.getElementById("qmarks");
+  if (!box) {
+    box = document.createElement("div");
+    box.id = "qmarks";
+    const bar = document.getElementById("qbar");
+    bar.parentNode.insertBefore(box, bar);
+  }
+  return box;
+}
+function runQuery() {
+  const q = $("query").value;
+  const box = ensureQmarks();
+  box.innerHTML = "";
+  box.style.display = "none";
+  qHits = [];
+  if (!q.trim()) { $("qcount").textContent = ""; return; }
+  const { preds, bad } = parseQuery(q);
+  if (bad.length) {
+    $("qcount").textContent = "unrecognized: " + bad.join(" ");
+    return;
+  }
+  for (let i = 0; i < events.length; i++) {
+    const e = events[i];
+    let ok = true;
+    for (const p of preds) if (!p(e, i)) { ok = false; break; }
+    if (ok) qHits.push(i);
+  }
+  let label = qHits.length + " hit" + (qHits.length === 1 ? "" : "s");
+  if (qHits.length && qHits.length <= 3000) {
+    const total = Math.max(1, events.length - 1);
+    qHits.forEach(j => {
+      const p = document.createElement("span");
+      p.className = "qmark";
+      p.style.left = (j / total * 100) + "%";
+      p.title = "hit — event " + (j + 1);
+      p.onclick = () => { stop(); goto(j); };
+      box.appendChild(p);
+    });
+    box.style.display = "";
+  } else if (qHits.length) {
+    label += " — pins skipped past 3000";
+  }
+  $("qcount").textContent = label;
+}
+function jumpHit(dir) {
+  if (!qHits.length) return;
+  stop();
+  if (dir > 0) {
+    const t = qHits.find(j => j > idx);
+    goto(t !== undefined ? t : qHits[0]);          // wrap around
+  } else {
+    const arr = qHits.filter(j => j < idx);
+    goto(arr.length ? arr[arr.length - 1] : qHits[qHits.length - 1]);
+  }
+}
+let qTimer = null;
+$("query").addEventListener("input", () => {
+  if (qTimer) clearTimeout(qTimer);
+  qTimer = setTimeout(runQuery, 200);
+});
+$("query").addEventListener("keydown", e => {
+  if (e.key === "Enter") {
+    if (qTimer) { clearTimeout(qTimer); qTimer = null; }
+    runQuery();
+    jumpHit(e.shiftKey ? -1 : 1);
+  }
+});
+ctl("q-prev", () => jumpHit(-1));
+ctl("q-next", () => jumpHit(1));
 
 /* deep links: the URL fragment IS the viewer state.
    #ev=8412&var=dist&view=graph&ov=seen — paste the address into an
@@ -2382,6 +2771,16 @@ window.addEventListener("hashchange", () => { stop(); applyHash(); render(); });
 
 if (events.length) { applyHash(); render(); }
 else $("code").innerHTML = '<div class="empty" style="padding:20px">No events recorded.</div>';
+
+/* tiny console handle — everything now lives inside the async boot
+   scope, so expose the essentials for debugging and verification */
+window.PYREPLAY = {
+  goto, stop,
+  info: () => ({ events: events.length,
+                 chunked: !!DATA.chunked,
+                 keyframes: kfIndices.length })
+};
+})();
 </script>
 </body>
 </html>

@@ -20,6 +20,8 @@ unknown codebase to learn the geography, then aim tracer.py at the
 region that matters.
 """
 import ast
+import base64
+import gzip
 import bisect
 import fnmatch
 import importlib.util
@@ -436,6 +438,18 @@ def load_heat(trace_path, modules):
     if m is None:
         raise ValueError("not a pyreplay trace file")
     data = json.loads(m.group(1).replace("<\\/", "</"))
+    ch = data.get("chunked")
+    if ch:   # #101: events live in gzip+base64 chunk tags
+        events = []
+        tags = re.findall(r'<script id="trace-chunk-(\d+)" '
+                          r'type="application/gzip-base64">(.*?)</script>',
+                          html, re.S)
+        for _, b64 in sorted(((int(k), s) for k, s in tags)):
+            events.extend(json.loads(gzip.decompress(base64.b64decode(b64))))
+        if len(events) != ch.get("total"):
+            raise ValueError(f"chunked trace incomplete: "
+                             f"{len(events)}/{ch.get('total')}")
+        data["events"] = events
     events = data.get("events", [])
     kind = "time" if data.get("granularity") == "fn" else "counts"
     script = data.get("script")

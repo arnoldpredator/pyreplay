@@ -154,6 +154,10 @@
   }
   .tmark.tfirst { width: 6px; transform: translateX(-3px);
     box-shadow: 0 0 4px #e5c07b; }
+  .femark { position: absolute; top: 0; width: 4px; height: 7px;
+    background: #e78fbb; border-radius: 2px; cursor: pointer;
+    transform: translateX(-2px); }
+  .femark:hover { background: #ffc2e0; }
   .tmark:hover { background: #ffe0a3; }
   .gly.trip { color: #e5c07b; }
   .gly.shadow { color: #e5c07b; }
@@ -1153,6 +1157,51 @@ if (DATA.nonterm && DATA.nonterm.length) {
       goto(parseInt(e.target.dataset.goto, 10));
     }
   });
+}
+/* #123: float hygiene — the equality trap, where it executed; and
+   the bound reduction's ordering wobble. Evidence, never proof. */
+if (DATA.floatEq && DATA.floatEq.dyn.length) {
+  const fe = DATA.floatEq;
+  const [i0, names0] = fe.dyn[0];
+  const b = $("banner");
+  b.style.display = "block";
+  const note = document.createElement("div");
+  note.innerHTML = "≈ <b>float equality</b> executed " +
+    fe.dyn.length + (fe.capped ? "+" : "") + "× (" +
+    escapeHtml(names0.join(", ")) + " held float) — == on floats " +
+    "compares bit patterns, not mathematics. Pink pins mark each " +
+    'moment. <span class="wkj" data-goto="' + i0 +
+    '">first ›</span>';
+  b.appendChild(note);
+  b.addEventListener("click", e => {
+    if (e.target.classList && e.target.classList.contains("wkj")) {
+      stop();
+      goto(parseInt(e.target.dataset.goto, 10));
+    }
+  });
+}
+if (DATA.reduce) {
+  const rd = DATA.reduce;
+  const b = $("banner");
+  b.style.display = "block";
+  const note = document.createElement("div");
+  if (rd.refused) {
+    note.innerHTML = "≈ reduction probe [" + escapeHtml(rd.name) +
+      "]: refused — " + escapeHtml(rd.refused);
+  } else {
+    const f = x => escapeHtml(String(x));
+    note.innerHTML = "≈ <b>reduction probe</b> [" +
+      escapeHtml(rd.name) + "] · " + rd.n + " numbers: as recorded " +
+      f(rd.asRec) + " · fsum " + f(rd.fsum) + " · exact rational " +
+      f(rd.exact) + " · " + rd.perms + " orderings span [" +
+      f(rd.permMin) + ", " + f(rd.permMax) + "] — " +
+      (rd.spread === 0
+        ? "every ordering agrees to the bit."
+        : "<b>spread " + f(rd.spread.toExponential(2)) + "</b> — " +
+          "ill-conditioned at this data (evidence of sensitivity, " +
+          "not proof of error).");
+  }
+  b.appendChild(note);
 }
 /* #124: loop starvation — a synchronous stretch held the event loop
    past the threshold while other tasks sat waiting. fn-only (line
@@ -5238,11 +5287,22 @@ $("scrub").max = Math.max(0, events.length - 1);
    #73 invariant violations share the strip (and open it). */
 (function () {
   // #132's derived viol events (undeclared transitions) share it too
-  if (!DATA.trip && !DATA.invariants && !(DATA.fsm && DATA.fsm.viol))
+  if (!DATA.trip && !DATA.invariants && !(DATA.fsm && DATA.fsm.viol)
+      && !(DATA.floatEq && DATA.floatEq.dyn.length))
     return;
   const box = document.createElement("div");
   box.id = "tripmarks";
   const total = Math.max(1, events.length - 1);
+  // #123: pink ≈ pins — float equality executed at this moment
+  ((DATA.floatEq || {}).dyn || []).forEach(([i, names]) => {
+    const m = document.createElement("span");
+    m.className = "femark";
+    m.style.left = (i / total * 100) + "%";
+    m.title = "≈ float equality (" + names.join(", ") +
+      " held float) — event " + (i + 1);
+    m.onclick = () => { stop(); goto(i); };
+    box.appendChild(m);
+  });
   let first = true;
   events.forEach((e, i) => {
     // #73: invariant violations share the amber strip — both marks

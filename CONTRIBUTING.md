@@ -7,7 +7,7 @@ can pick an item and implement it. Features are numbered **#63 onward**, continu
 in FEATURES.md. Fifteen roadmap items have shipped since the list was
 written (63, 64, 65, 70, 77, 79, 80, 98, 101 v1, 103, 104 Tier 1,
 106, 109, 118, 120 v1) — their rows below are struck through;
-**27 remain unbuilt** (plus the stated remainders of 66/74/75/85/88/89/101/104/119/120/126/127/128/132/134).
+**26 remain unbuilt** (plus the stated remainders of 66/74/75/85/88/89/101/104/119/120/126/127/128/132/134).
 
 ## Start here — how to contribute
 
@@ -129,7 +129,7 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
 | 120 | ~~Boundary schemas~~ **shipped (v1; cross-run diff + map rows remain)** | M | ★★★ |
 | 121 | NVTX bridge: Python names on the GPU timeline | M | ★★ |
 | 122 | ~~Shadowing & collision audit~~ **shipped** | S | ★★ |
-| 123 | Float-hygiene probes | S–M | ★★ |
+| 123 | ~~Float-hygiene probes~~ **shipped** | S–M | ★★ |
 | 124 | ~~Event-loop starvation detector~~ **shipped** | S | ★★ |
 | 125 | ~~Mutation-survivor forensics (mutmut bridge)~~ **shipped** | M | ★★★ |
 | 126 | ~~Metamorphic relations harness~~ **shipped (shrinking awaits #66)** | S–M | ★★ |
@@ -1062,6 +1062,7 @@ original brief)*
 
 ### 123. Float-hygiene probes
 *(belongs with Section 1/3 — the lab & instruments; pairs with #79)*
+**Shipped 2026-08-01** — now catalog entry #123 in [FEATURES.md](FEATURES.md): float `==`/`!=` flagged where it executed (frame-state reconstruction; int==int never flags) + static literal sites, pink ≈ pins; `--probe-reduction NAME` re-sums the recorded list (as-recorded / sorted / 20 seeded permutations) beside fsum and the exact rational sum, spread verdict verbatim; refusals for windows/NaN/fn.
 - **What:** (a) flag float equality as it executes — the verdict
   machinery already sees the compare and the operand types; flag
   `== `/`!=` between floats statically too; (b) a harness probe:

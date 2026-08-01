@@ -3266,7 +3266,8 @@ def _doctor(module, script, root, entry_label, module_ok):
 
 def _write_trace(tr, out, granularity, entry_label, error,
                  trigger_desc=None, extra=None, chunked=None,
-                 fsm=None, memo=None, starve_ms=None):
+                 fsm=None, memo=None, starve_ms=None,
+                 reduce_name=None):
     """Build the payload and write the self-contained replayer HTML —
     shared by the CLI run and the in-process watch() bracket, so both
     honor the same contract (line-only linevars/dataflow, the </ escape,
@@ -3323,6 +3324,13 @@ def _write_trace(tr, out, granularity, entry_label, error,
         "memo": (_build_memo(tr.events, tr.sources, memo)
                  if memo is not None and granularity == "line"
                  else None),
+        # #123a: float == / != where it executed + static literal sites
+        "floatEq": (_float_probe(tr.events, tr.sources)
+                    if granularity == "line" else None),
+        # #123b: the bound reduction's ordering wobble, or null
+        "reduce": (_reduction_probe(tr.events, reduce_name)
+                   if reduce_name is not None
+                   and granularity == "line" else None),
         # #124: loop starvation (fn only — line events carry no wall
         # timestamps, so the detector would have nothing true to say)
         "starve": (_detect_starvation(tr.events,
@@ -3332,6 +3340,43 @@ def _write_trace(tr, out, granularity, entry_label, error,
     if granularity != "fn" and starve_ms is not None:
         print("--starve-ms: refused at line granularity — line events "
               "carry no wall timestamps; re-run with --granularity fn")
+    if reduce_name is not None and granularity != "line":
+        print("--probe-reduction: refused at fn granularity — the "
+              "probe reads recorded VALUES; re-run at line "
+              "granularity")
+    fe = payload.get("floatEq")
+    if fe and fe["dyn"]:
+        i0, names0 = fe["dyn"][0]
+        print(f"≈ float equality executed {len(fe['dyn'])}"
+              f"{'+' if fe['capped'] else ''}× — first at event "
+              f"{i0 + 1} ({tr.events[i0].get('f')}:"
+              f"{tr.events[i0].get('l')}, {', '.join(names0)} held "
+              f"float) — the classic silent trap; == on floats "
+              f"compares bit patterns, not mathematics")
+    rd = payload.get("reduce")
+    if rd is not None:
+        if rd.get("refused"):
+            print(f"≈ reduction probe [{rd['name']}]: refused — "
+                  f"{rd['refused']}")
+        else:
+            print(f"≈ reduction probe [{rd['name']}] "
+                  f"({rd['n']} numbers, last full value in "
+                  f"{rd['fn']}()):")
+            print(f"    as recorded   {rd['asRec']!r}")
+            print(f"    sorted asc    {rd['sortAsc']!r} · desc "
+                  f"{rd['sortDesc']!r}")
+            print(f"    {rd['perms']} permutations  "
+                  f"[{rd['permMin']!r}, {rd['permMax']!r}]")
+            print(f"    math.fsum     {rd['fsum']!r} · exact "
+                  f"rational {rd['exact']!r}")
+            if rd["spread"] == 0.0:
+                print("    verdict: every ordering agrees to the "
+                      "bit — well-conditioned at this data")
+            else:
+                print(f"    verdict: orderings disagree by "
+                      f"{rd['spread']:.3g} — the accumulation is "
+                      f"ill-conditioned at this data (evidence of "
+                      f"sensitivity, not proof of error)")
     st = payload["starve"]
     if st and st["inc"]:
         w = st["inc"][0]
@@ -3773,7 +3818,7 @@ def _run_harness(orig_argv, n_runs, out, entry_label, granularity,
               "--exclude", "--granularity", "--max-events", "--start-at",
               "--start-count", "--start-when", "--backend", "--trip",
               "--runs", "--check", "--chaos-schedule", "--fsm",
-              "--fsm-declare", "--memo", "--starve-ms"}
+              "--fsm-declare", "--memo", "--starve-ms", "--probe-reduction"}
     # --chaos-schedule is stripped and re-issued per child with a
     # DERIVED seed (base+i-1): N runs under one seed would explore one
     # biased stream N times; N seeds explore N different ones, and any
@@ -4305,6 +4350,174 @@ def _forensics_harness(ids):
     return 0 if (n_div or n_eq) else 1
 
 
+# ---- #123: float hygiene — the equality trap and the ordering wobble.
+# (a) float == / != flagged where it EXECUTED: the verdict machinery
+# already records every guard; a compare whose participating recorded
+# value is a float at that moment is the classic silent trap. Static
+# tier flags float literals inside == / != — provable from source.
+# (b) --probe-reduction NAME: the recorded floats of one bound list,
+# re-summed under permuted orderings beside math.fsum and the EXACT
+# rational sum (floats are exact binary rationals — Fraction sums
+# them without error). A spread is evidence of sensitivity, never
+# proof of error, and the report says so.
+
+FLOATEQ_CAP = 200
+
+
+def _float_probe(events, sources):
+    static = {}
+    for rel, text in sources.items():
+        try:
+            tree = ast.parse(text, filename=rel)
+        except SyntaxError:
+            continue
+        rows = []
+        lines = text.split("\n")
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Compare) and any(
+                    isinstance(op, (ast.Eq, ast.NotEq))
+                    for op in node.ops):
+                operands = [node.left] + list(node.comparators)
+                if any(isinstance(o, ast.Constant)
+                       and isinstance(o.value, float)
+                       for o in operands):
+                    rows.append([node.lineno,
+                                 (lines[node.lineno - 1] or "")
+                                 .strip()[:60]])
+        if rows:
+            static[rel] = rows
+
+    # dynamic tier: which names sit inside == / != on each guard line
+    cmp_names = {}   # (rel, line) -> set of names, or None = no eq
+    def names_of(rel, line, expr):
+        key = (rel, line)
+        if key in cmp_names:
+            return cmp_names[key]
+        got = None
+        try:
+            t = ast.parse(expr, mode="eval")
+            got = set()
+            for node in ast.walk(t):
+                if isinstance(node, ast.Compare) and any(
+                        isinstance(op, (ast.Eq, ast.NotEq))
+                        for op in node.ops):
+                    for o in [node.left] + list(node.comparators):
+                        for sub in ast.walk(o):
+                            if isinstance(sub, ast.Name):
+                                got.add(sub.id)
+            if not got:
+                got = None
+        except SyntaxError:
+            got = None       # truncated/odd expr: no claim
+        cmp_names[key] = got
+        return got
+
+    dyn = []
+    stacks, gen_saved = {}, {}
+    for i, ev in enumerate(events):
+        e = ev.get("e")
+        stack = stacks.setdefault(ev.get("t", "main"), [])
+        if e == "call":
+            gm = ev.get("g")
+            if gm is not None and gm.get("s") == "r" \
+                    and gm.get("i") in gen_saved:
+                stack.append(gen_saved.pop(gm["i"]))
+            else:
+                stack.append({})
+        elif e == "return":
+            gm = ev.get("g")
+            if gm is not None and gm.get("s") == "y" and stack:
+                gen_saved[gm["i"]] = stack[-1]
+            if stack:
+                stack.pop()
+            continue
+        if not stack:
+            continue
+        frame = stack[-1]
+        for nm, enc in (ev.get("ch") or {}).items():
+            if isinstance(enc, dict) and enc.get("t") == "p":
+                frame[nm] = enc.get("c")
+        cond = ev.get("cond")
+        if cond is None or ("==" not in cond.get("x", "")
+                            and "!=" not in cond.get("x", "")):
+            continue
+        names = names_of(ev.get("f"), ev.get("l"), cond["x"])
+        if not names:
+            continue
+        floats = sorted(nm for nm in names
+                        if frame.get(nm) == "float")
+        if floats and len(dyn) < FLOATEQ_CAP:
+            dyn.append([i, floats])
+    if not static and not dyn:
+        return None
+    return {"static": static, "dyn": dyn,
+            "capped": len(dyn) >= FLOATEQ_CAP}
+
+
+def _reduction_probe(events, name):
+    import math
+    import random as _rnd
+    from fractions import Fraction
+    last = None
+    last_fn = None
+    for ev in events:
+        enc = (ev.get("ch") or {}).get(name)
+        if isinstance(enc, dict):
+            last = enc
+            last_fn = ev.get("fn")
+    if last is None:
+        return {"name": name, "refused":
+                "never recorded — bind a variable that changes"}
+    if last.get("t") not in ("list", "tuple"):
+        return {"name": name, "refused":
+                "not a sequence (%s) — a reduction probe needs the "
+                "operand list" % (last.get("c") or last.get("t"))}
+    if last.get("n") != len(last.get("v") or []):
+        return {"name": name, "refused":
+                "windowed (%d of %d elements recorded) — permuting a "
+                "window would claim the whole"
+                % (len(last.get("v") or []), last.get("n") or 0)}
+    vals = []
+    for el in last["v"]:
+        if not (isinstance(el, dict) and el.get("t") == "p"
+                and el.get("c") in ("int", "float")):
+            return {"name": name, "refused":
+                    "non-numeric element — only int/float sums are "
+                    "probed"}
+        v = float(el["v"])
+        if math.isnan(v):
+            return {"name": name, "refused":
+                    "contains NaN — ordering experiments are "
+                    "meaningless past a NaN (see --trip nan)"}
+        vals.append(v)
+    if len(vals) < 3:
+        return {"name": name, "refused":
+                "%d element(s) — nothing to permute" % len(vals)}
+    def fold(seq):
+        acc = 0.0
+        for v in seq:
+            acc += v
+        return acc
+    as_rec = fold(vals)
+    fs = math.fsum(vals)
+    exact = float(sum(Fraction(v) for v in vals))
+    asc = fold(sorted(vals))
+    desc = fold(sorted(vals, reverse=True))
+    rng = _rnd.Random(1234)
+    sums = []
+    for _ in range(20):
+        p = vals[:]
+        rng.shuffle(p)
+        sums.append(fold(p))
+    allsums = [as_rec, asc, desc] + sums
+    spread = max(allsums) - min(allsums)
+    return {"name": name, "fn": last_fn, "n": len(vals),
+            "asRec": as_rec, "fsum": fs, "exact": exact,
+            "sortAsc": asc, "sortDesc": desc,
+            "permMin": min(sums), "permMax": max(sums),
+            "perms": 20, "spread": spread}
+
+
 # ---- #124: event-loop starvation — long synchronous stretches ----------
 # A blocked loop is the "program frozen" bug class and is invisible in
 # source. At fn granularity every inter-event delta is recorded; a
@@ -4619,7 +4832,7 @@ def _shrink_harness(orig_argv, model, cap, check_active, entry_label,
               "--start-at", "--start-count", "--start-when",
               "--backend", "--trip", "--runs", "--check",
               "--chaos-schedule", "--sweep", "--gen", "--predict",
-              "--sweep-seed", "--fsm", "--fsm-declare", "--memo", "--starve-ms",
+              "--sweep-seed", "--fsm", "--fsm-declare", "--memo", "--starve-ms", "--probe-reduction",
               "--relation", "--relation-trials", "--relation-seed",
               "--shrink-model", "--shrink-cap"}
     strip = {"--shrink", "--shrink-model", "--shrink-cap", "--out"}
@@ -4805,7 +5018,7 @@ def _relation_harness(orig_argv, relations, gen_file, trials, seed,
               "--start-at", "--start-count", "--start-when",
               "--backend", "--trip", "--runs", "--check",
               "--chaos-schedule", "--sweep", "--gen", "--predict",
-              "--sweep-seed", "--fsm", "--fsm-declare", "--memo", "--starve-ms",
+              "--sweep-seed", "--fsm", "--fsm-declare", "--memo", "--starve-ms", "--probe-reduction",
               "--relation", "--relation-trials", "--relation-seed"}
     strip = {"--relation", "--relation-trials", "--relation-seed",
              "--gen", "--out", "--granularity"}
@@ -5660,7 +5873,7 @@ def _sweep_harness(orig_argv, sweep_spec, gen_file, predict_src,
               "--start-count", "--start-when", "--backend", "--trip",
               "--runs", "--check", "--chaos-schedule", "--sweep",
               "--gen", "--predict", "--sweep-seed", "--fsm",
-              "--fsm-declare", "--memo", "--starve-ms"}
+              "--fsm-declare", "--memo", "--starve-ms", "--probe-reduction"}
     strip = {"--sweep", "--gen", "--predict", "--sweep-seed", "--out",
              "--granularity"}
     child_flags, i = [], 0
@@ -6064,6 +6277,7 @@ def main(argv):
     check_src = None
     chunked_opt = None   # #101: None = auto by size
     starve_ms = None     # #124: loop-starvation threshold (fn only)
+    reduce_name = None   # #123: the ONE probed reduction operand list
     console = True       # #118: console lane on by default
     _chap_plug = None   # #98: the imported pytest chapter plugin
     while argv and (argv[0].startswith("--") or argv[0] == "-m"):
@@ -6206,6 +6420,12 @@ def main(argv):
                 print(exc)
                 return 2
             argv = argv[2:]
+        elif argv[0] == "--probe-reduction" and len(argv) >= 2:
+            if not argv[1].isidentifier():
+                print("error: --probe-reduction expects one variable "
+                      "name (the list being summed)")
+                return 2
+            reduce_name, argv = argv[1], argv[2:]
         elif argv[0] == "--starve-ms" and len(argv) >= 2:
             if not argv[1].isdigit() or int(argv[1]) < 1:
                 print("error: --starve-ms expects a positive integer "
@@ -6812,7 +7032,8 @@ def main(argv):
     _write_trace(tracer, out, granularity, entry_label, error,
                  trigger_desc, extra=extra, chunked=chunked_opt,
                  fsm=(fsm_expr, fsm_declared) if fsm_expr else None,
-                 memo=memo_name, starve_ms=starve_ms)
+                 memo=memo_name, starve_ms=starve_ms,
+                 reduce_name=reduce_name)
     unstable = []
     for key, b in (bounds or {}).items():
         spots = [(n, d) for n, d in b["args"].items() if len(d) > 1]

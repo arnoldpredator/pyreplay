@@ -2904,6 +2904,79 @@ def _():
         expect(probe in tpl, f"seq contract missing: {probe}")
 
 
+@check("float hygiene: eq trap flags, ordering wobble, refusals (#123)")
+def _():
+    src = fixture("fh123.py", (
+        "def run(values):\n"
+        "    total = 0.0\n"
+        "    steps = 0\n"
+        "    for v in values:\n"
+        "        total += v\n"
+        "        steps += 1\n"
+        "        if steps == 2:\n"          # int == int: NOT a trap
+        "            pass\n"
+        "        if total == 0.5:\n"        # float ==: the trap
+        "            pass\n"
+        "    if total != 0.1:\n"            # static: float literal
+        "        pass\n"
+        "    return total\n"
+        "values = [1e16, 1.0, -1e16, 0.5]\n"
+        "run(values)\n"))
+    p = run_trace(src, "--probe-reduction", "values", name="fh123")
+    fe = p["floatEq"]
+    expect(fe is not None, "the probe must arm on this fixture")
+    expect(any(l == 11 for l, _ in fe["static"]["fh123.py"]),
+           f"the != 0.1 literal is statically provable: {fe['static']}")
+    dyn_lines = {p["events"][i]["l"] for i, _ in fe["dyn"]}
+    expect(9 in dyn_lines,
+           f"total == 0.5 executed with total float — flagged: "
+           f"{sorted(dyn_lines)}")
+    expect(7 not in dyn_lines,
+           "steps == 2 is int == int — flagging it would be noise, "
+           "not hygiene")
+    expect(all(names == ["total"] for i, names in fe["dyn"]
+               if p["events"][i]["l"] == 9),
+           "the flag names the float operand")
+
+    rd = p["reduce"]
+    expect(rd and not rd.get("refused"), f"probe must run: {rd}")
+    expect(rd["n"] == 4 and rd["fsum"] == 1.5 and rd["exact"] == 1.5,
+           f"fsum and the exact rational agree at 1.5: {rd}")
+    expect(rd["asRec"] == 0.5,
+           f"the recorded order absorbs the 1.0 into 1e16: "
+           f"{rd['asRec']}")
+    expect(rd["spread"] >= 1.0,
+           f"orderings must visibly disagree here: {rd['spread']}")
+
+    # refusals: windowed containers and NaN kill the experiment
+    src2 = fixture("fh123b.py", (
+        "big = [float(i) for i in range(500)]\n"
+        "nn = [1.0, float('nan'), 2.0]\n"))
+    p2 = run_trace(src2, "--probe-reduction", "big", name="fh123b")
+    expect("windowed" in (p2["reduce"] or {}).get("refused", ""),
+           f"a windowed list must refuse — permuting a window would "
+           f"claim the whole: {p2['reduce']}")
+    p3 = run_trace(src2, "--probe-reduction", "nn", name="fh123c")
+    expect("NaN" in (p3["reduce"] or {}).get("refused", ""),
+           f"NaN kills ordering experiments: {p3['reduce']}")
+
+    r = subprocess.run(
+        [PY, os.path.join(HERE, "tracer.py"), "--granularity", "fn",
+         "--probe-reduction", "values", "--out",
+         os.path.join(TMP, "fh123d.html"), src],
+        capture_output=True, text=True, cwd=TMP,
+        stdin=subprocess.DEVNULL, timeout=120)
+    expect("refused at fn granularity" in r.stdout,
+           f"fn traces record no values to probe: {r.stdout[-200:]}")
+
+    with open(os.path.join(HERE, "replayer_template.html"),
+              encoding="utf-8") as fh:
+        tpl = fh.read()
+    for probe in ("float equality", "femark", "reduction probe",
+                  "not proof of error"):
+        expect(probe in tpl, f"float-hygiene surface missing: {probe}")
+
+
 @check("starvation: held stretch, yield release, hb births (#124)")
 def _():
     src = fixture("st124.py", (

@@ -867,6 +867,17 @@ their original node — no phantom calls), and the 4000-node render cap
 announces itself. Works at both granularities — on an fn-level trace
 of a real codebase it is the whole run's shape in one panel.
 
+**Float hygiene.** Every line trace flags float `==`/`!=` at the
+moments it executed — the guard's operand held a float right there,
+says the pink pin — plus the statically provable float-literal sites.
+And `--probe-reduction values` runs the physicist's experiment on the
+recorded list: the sum as your program ordered it, sorted both ways,
+twenty seeded permutations, `math.fsum`, and the exact rational sum
+(floats are exact binary rationals — `Fraction` adds them without
+error). The spread is the conditioning of your data, measured —
+evidence of sensitivity, never proof of error, and refusals come with
+reasons (windowed lists, NaN, fn granularity).
+
 **Loop starvation.** In an asyncio fn trace, any synchronous stretch
 that held the event loop past 100 ms (asyncio's own slow-callback
 threshold; `--starve-ms N` tunes it) raises the ⏳ banner: which task,

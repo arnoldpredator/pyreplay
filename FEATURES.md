@@ -1363,6 +1363,41 @@ dead or invented panel; every cap and truncation is announced.
 
   [![Feature 78 — nontermination](screenshots/78-nonterm.png)](screenshots/78-nonterm.png)
 
+### 123. Float-hygiene probes — the equality trap and the ordering wobble
+- **Measured:** two instruments. (a) **Float equality, where it
+  executed**: every recorded guard whose `==`/`!=` operand names held
+  a float at that exact moment (frame states reconstructed event by
+  event; operand names parsed from the recorded expression — no
+  claim when unparseable; `int == int` never flags), plus the static
+  tier: float literals inside `==`/`!=`, provable from source. (b)
+  **`--probe-reduction NAME`**: the bound list's last full recorded
+  value re-summed as recorded, sorted both ways, and under 20 seeded
+  permutations — beside `math.fsum` and the EXACT rational sum
+  (floats are exact binary rationals; `Fraction` adds them without
+  error).
+- **Displayed:** the ≈ banner pair — "float equality executed 9×
+  (total held float) — == on floats compares bit patterns, not
+  mathematics" with pink pins at each moment, and the reduction
+  report: as-recorded · fsum · exact rational · the orderings' span,
+  with the verdict verbatim: *spread 1.85 — ill-conditioned at this
+  data (evidence of sensitivity, not proof of error)*.
+- **Why:** precision errors accumulate silently and bite numerical
+  code hardest; float `==` is the classic silent trap. pyreplay
+  cannot fix floating point, but it can measure the wobble and show
+  the door it came in through.
+- **Use case:** a sum crossing 1e16 absorbs the small terms — the
+  program's own answer reads 4.35 while fsum and the exact rational
+  agree on 3.49, and twenty orderings span [2.5, 4.25]. The
+  accumulation order IS the bug, measured.
+- **Command:** any line trace arms (a) ·
+  `--probe-reduction values` arms (b). Refusals with reasons:
+  windowed containers (permuting a window would claim the whole),
+  NaN elements, fn granularity.
+- **Screenshot** — the demo mid-guard: `total == 0.5` with
+  `total = 1e+16`, both banners telling the whole story:
+
+  [![Feature 123 — float hygiene](screenshots/123-float-hygiene.png)](screenshots/123-float-hygiene.png)
+
 ### 79. NaN/Inf tripwire — where the poison was born
 - **Measured:** with `--trip nan`, the encoder's own bounded output is
   scanned for NaN/Inf leaves. An event records a trip when a

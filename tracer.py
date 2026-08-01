@@ -81,6 +81,29 @@ run from the start. --chunked forces it on, --no-chunked off; a
 missing chunk is announced loudly, in the file and in the viewer.
 Needs DecompressionStream (Chrome 80+ / Firefox 113+ / Safari 16.4+).
 
+--check EXPR turns any run into a yes/no experiment for `git bisect
+run`: EXPR is watched per line like --start-when (state tests: "total
+< 0") AND evaluated once over the run facts (error, exc, events,
+output — the console text, hit, hits, tests_failed, truncated). Exit 1
+the moment either says yes; 0 clean; 3 if the expression was never
+evaluable anywhere (a typo must never look like a clean run). This
+mode overrides the usual exit-0-on-target-crash behavior.
+
+--black-box turns the tracer into a flight recorder: a ring buffer of
+the LAST --max-events events (fn granularity by default), rotation
+counted and announced in the banner; `kill -USR1 <pid>` dumps the
+current window as a normal trace WITHOUT stopping the run, and the end
+(or crash) writes the final window as usual. watch(ring=N) gives the
+same in-process. Pay ~nothing forever; have the film when it matters.
+
+Every fn or line trace also aggregates its BOUNDARY SCHEMAS (#120):
+the structural shape of every function's observed arguments and
+returns — types, keys, nesting, never values — shown on call/return
+events in the viewer ("lookup(catalog: dict{...}, sku: str) → ⚠
+dict{qty, price} 1x / NoneType 1x") with jump links to the deviant
+calls, and a terminal summary of every unstable interface. Shapes are
+honest to the recorded depth; observed, never declared.
+
 Every run records its CONSOLE LANE: each stdout/stderr line the target
 writes becomes an event tied to the frame that wrote it — a console
 panel in the replayer follows the replay, click a line to land on its
@@ -126,6 +149,7 @@ itself are never traced, so you can point it at the entry point of any codebase.
 """
 import ast
 import base64
+import collections
 import datetime
 import dis
 import fnmatch
@@ -138,6 +162,7 @@ import re
 import reprlib
 import runpy
 import shlex
+import signal
 import subprocess
 import sys
 import threading
@@ -626,6 +651,23 @@ def _mro_info(frame):
 
 LOG_CAP = 20_000   # console lines recorded per run; cap announced
 
+
+class _Ring(collections.deque):
+    """#103: a bounded event store that counts what it rotated out —
+    the flight recorder's honesty depends on knowing what was lost."""
+
+    def __init__(self, maxlen):
+        super().__init__(maxlen=maxlen)
+        self.appended = 0
+
+    def append(self, x):
+        self.appended += 1
+        super().append(x)
+
+    @property
+    def dropped(self):
+        return self.appended - len(self)
+
 # the REAL streams — the tracer's own runtime prints (heartbeat,
 # trigger-hit) go here so they are never recorded as target output
 _RAW = {"out": sys.stdout, "err": sys.stderr}
@@ -821,7 +863,8 @@ class Tracer:
 
     def __init__(self, root, max_events=MAX_EVENTS, start_at=None,
                  start_when=None, start_count=1, include=None,
-                 exclude=None, granularity="line", trip=None):
+                 exclude=None, granularity="line", trip=None,
+                 ring=None):
         self.root = os.path.realpath(root)
         self.max_events = max_events
         self.start_at = start_at        # (filename, lineno) trigger or None
@@ -834,6 +877,11 @@ class Tracer:
         self._poisoned = {}   # id(frame) -> {var names currently NaN/Inf}
         self._log_count = 0
         self.log_capped = False
+        self.check = None        # #70: compiled --check expression
+        self.check_hit = False
+        self.check_hits = 0
+        self.check_evals = 0     # successful evaluations (typo honesty)
+        self.check_first = None  # event index of the first hit
         self._hits = 0
         self._last_ts = time.perf_counter_ns() // 1000
         self._gen_ids = {}    # id(frame) -> generator instance number
@@ -845,7 +893,14 @@ class Tracer:
         self._tcounts = {}    # thread name -> how many threads used it
         # False = watching but not recording
         self.armed = start_at is None and start_when is None
-        self.events = []       # the event log — the backend/frontend contract
+        # #103: ring mode — a bounded window that never truncates the
+        # RUN, only its own memory; the cap machinery must stay silent
+        self.ring = ring
+        if ring:
+            self.events = _Ring(ring)
+            self.max_events = float("inf")
+        else:
+            self.events = []   # the event log — the backend/frontend contract
         self.sources = {}      # rel path -> file text, embedded for the viewer
         self._path_cache = {}  # raw co_filename -> rel path or None (= skip)
         self._snapshots = {}   # id(frame) -> {var: repr} for change detection
@@ -902,6 +957,19 @@ class Tracer:
             if event in ("return", "exception") and not self.truncated:
                 self._record_fn(frame, event, arg)
             return self
+        if self.check is not None and event == "line":
+            # #70: the run-level predicate, watched on every in-scope
+            # line (same contract as --start-when: not-evaluable-here
+            # counts as False, never as an error)
+            try:
+                if eval(self.check, frame.f_globals, frame.f_locals):
+                    if not self.check_hit:
+                        self.check_first = len(self.events)
+                    self.check_hit = True
+                    self.check_hits += 1
+                self.check_evals += 1
+            except Exception:
+                pass
         if not self.armed:
             if event == "line" and self._hits_trigger(frame):
                 self._arm(frame)
@@ -2275,7 +2343,7 @@ class watch:
 
     def __init__(self, out=None, granularity="line", root=None,
                  include=None, exclude=None, max_events=MAX_EVENTS,
-                 once=True, trip=None):
+                 once=True, trip=None, ring=None):
         if callable(out):
             raise TypeError("use @watch() with parentheses, not @watch")
         if granularity not in ("line", "fn"):
@@ -2285,6 +2353,7 @@ class watch:
                              "(variable values live in line events)")
         self.out = out
         self.trip = trip
+        self.ring = ring
         self.granularity = granularity
         self.root = root
         self.include = include
@@ -2314,7 +2383,8 @@ class watch:
                            else "watch @ <interactive>")
         self._tr = Tracer(root, self.max_events, include=self.include,
                           exclude=self.exclude,
-                          granularity=self.granularity, trip=self.trip)
+                          granularity=self.granularity, trip=self.trip,
+                          ring=self.ring)
         self._tr.abort_on_cap = False   # never kill the host program
         _watch_active = True
         self._caller = caller
@@ -2349,6 +2419,11 @@ class watch:
                 out = f"trace_watch_{n}.html"
                 n += 1
         out = os.path.abspath(out)
+        ring_extra = None
+        if self.ring:
+            ring_extra = {"size": self.ring,
+                          "dropped": self._tr.events.dropped}
+            self._tr.events = list(self._tr.events)
         capsule = {   # #104: the in-process bracket's capsule — the
             # HOST command is the reproduction recipe here
             "cmd": " ".join(shlex.quote(a) for a in
@@ -2367,7 +2442,7 @@ class watch:
             "stdin": None, "stdinTrunc": False,
         }
         _write_trace(self._tr, out, self.granularity, self._label, error,
-                     extra={"capsule": capsule})
+                     extra={"capsule": capsule, "ring": ring_extra})
         self.out = out
         self._tr = None
         return False                    # never swallow the block's raise
@@ -2493,6 +2568,79 @@ def _chapter_suspicion(events, granularity):
                      "pass": n_pass, "fail": n_fail, "top": rows}
 
 
+def _shape_of(enc, depth=2):
+    """#120: the STRUCTURAL shape of an encoded value — types, keys,
+    nesting; never the values. Honest to the recorded depth: what the
+    encoder truncated shows as an ellipsis, not a guess."""
+    if not isinstance(enc, dict):
+        return "?"
+    t = enc.get("t")
+    if t == "p":
+        return enc.get("c") or "num"
+    if t == "s":
+        return "str"
+    if t == "o":
+        return enc.get("c") or "object"
+    if t in ("list", "tuple", "set"):
+        if depth <= 0 or not enc.get("v"):
+            inner = "…" if enc.get("n") else ""
+        else:
+            kinds = sorted({_shape_of(x, depth - 1)
+                            for x in enc["v"][:8]})
+            inner = "|".join(kinds)
+        return f"{t}[{inner}]"
+    if t == "dict":
+        pairs = [p for p in (enc.get("v") or [])[:6]
+                 if isinstance(p, (list, tuple)) and len(p) == 2]
+        keys = [str(p[0]).strip("'\"") for p in pairs]
+        if depth > 0 and keys and len(keys) <= 5 \
+                and all(len(k) <= 14 for k in keys):
+            more = "…" if (enc.get("n") or 0) > len(pairs) else ""
+            return "dict{" + ", ".join(keys) + more + "}"
+        return f"dict{{{enc.get('n', '?')} keys}}"
+    if t == "obj":
+        return (enc.get("c") or "obj") + "{…}"
+    return t or "?"
+
+
+def _boundaries(events):
+    """#120: aggregate each function's OBSERVED interface — the shape
+    every argument and return actually had, with counts and the first
+    event index per shape (the jump target for a deviant call). Yields
+    are excluded: a generator's yields are its own story, not its
+    return contract."""
+    out = {}
+    for i, e in enumerate(events):
+        fn = e.get("fn")
+        if fn in (None, "<module>", "<genexpr>", "<listcomp>",
+                  "<dictcomp>", "<setcomp>") \
+                or e.get("e") not in ("call", "return"):
+            continue          # comprehension frames are machinery,
+                              # their .0 iterator is not an interface
+        if e.get("e") == "call" and (e.get("g") or {}).get("s") == "r":
+            continue                      # a resume is not a new call
+        key = f"{e.get('f')}:{fn}"
+        b = out.setdefault(key, {"calls": 0, "args": {}, "ret": {},
+                                 "l": e.get("l")})
+        if e.get("e") == "call":
+            b["calls"] += 1
+            for name, enc in (e.get("ch") or {}).items():
+                sh = _shape_of(enc)
+                d = b["args"].setdefault(name, {})
+                if sh not in d:
+                    d[sh] = [0, i]
+                d[sh][0] += 1
+        else:
+            if (e.get("g") or {}).get("s") == "y" or "ret" not in e:
+                continue
+            sh = _shape_of(e["ret"])
+            d = b["ret"]
+            if sh not in d:
+                d[sh] = [0, i]
+            d[sh][0] += 1
+    return {k: v for k, v in out.items() if v["calls"]}
+
+
 def _run_harness(orig_argv, n_runs, out, entry_label, granularity,
                  module, script):
     """#63: one run is an anecdote; N runs are an experiment. Execute the
@@ -2521,7 +2669,7 @@ def _run_harness(orig_argv, n_runs, out, entry_label, granularity,
     valued = {"--out", "--root", "--export-perfetto", "--include",
               "--exclude", "--granularity", "--max-events", "--start-at",
               "--start-count", "--start-when", "--backend", "--trip",
-              "--runs"}
+              "--runs", "--check"}
     strip = {"--runs", "--out", "--granularity"}
     child_flags, i = [], 0
     while i < len(orig_argv):
@@ -2535,13 +2683,29 @@ def _run_harness(orig_argv, n_runs, out, entry_label, granularity,
         i += step
     child_flags = ["--granularity", granularity] + child_flags
 
-    # the measurement protocol: every run gets the SAME stdin bytes
+    # the measurement protocol: every run gets the SAME stdin bytes.
+    # Probe before blocking — a daemon/CI stdin that never closes must
+    # not hang run 0 (found the hard way: this exact hang was the
+    # suite's ghost flake) — and ANNOUNCE before any blocking read, so
+    # a slow pipe is never mistaken for a freeze.
     stdin_bytes = b""
     if not sys.stdin.isatty():
         try:
-            stdin_bytes = sys.stdin.buffer.read()
+            import select
+            ready, _, _ = select.select([sys.stdin], [], [], 0.5)
         except Exception:
-            stdin_bytes = b""
+            ready = [sys.stdin]      # no select (exotic platform): read
+        if ready:
+            print("pyreplay: reading stdin to EOF (the N-run protocol "
+                  "feeds every run the same bytes)…", flush=True)
+            try:
+                stdin_bytes = sys.stdin.buffer.read()
+            except Exception:
+                stdin_bytes = b""
+        else:
+            print("pyreplay: stdin open but quiet after 0.5s — the "
+                  "runs get EMPTY stdin (pipe input explicitly, or "
+                  "close the descriptor)", flush=True)
 
     shown = " ".join([os.path.basename(sys.executable),
                       os.path.basename(SELF)] + child_flags)
@@ -2864,6 +3028,9 @@ def main(argv):
     doctor = False
     trip = None
     runs_n = None
+    black_box = False    # #103: ring-buffer flight recorder
+    check = None         # #70: compiled --check expression
+    check_src = None
     chunked_opt = None   # #101: None = auto by size
     console = True       # #118: console lane on by default
     _chap_plug = None   # #98: the imported pytest chapter plugin
@@ -2913,6 +3080,16 @@ def main(argv):
                 print("error: --trip expects 'nan' (NaN/Inf tripwire)")
                 return 2
             trip, argv = argv[1], argv[2:]
+        elif argv[0] == "--check" and len(argv) >= 2:
+            try:
+                check = compile(argv[1], "<check>", "eval")
+            except SyntaxError as exc:
+                print(f"error: --check is not a valid expression: {exc}")
+                return 2
+            check_src, argv = argv[1], argv[2:]
+        elif argv[0] == "--black-box":
+            black_box = True
+            argv = argv[1:]
         elif argv[0] == "--no-console":
             console = False
             argv = argv[1:]
@@ -2962,10 +3139,12 @@ def main(argv):
         # --granularity always wins; --start-at/--start-when need line
         # events, so triggers keep the line default even under -m.
         # --runs also defaults to fn: the harness pays every cost N times.
-        if (module is not None or runs_n) and not (start_at or start_when):
+        if (module is not None or runs_n or black_box) \
+                and not (start_at or start_when):
             granularity = "fn"
             if not doctor:
-                what = "-m runs" if module is not None else "--runs"
+                what = ("-m runs" if module is not None
+                        else "--runs" if runs_n else "--black-box")
                 print(f"pyreplay: {what} default to --granularity fn "
                       "(call-level overview) — pass --granularity line "
                       "plus --include/--start-at scoping for the line "
@@ -3094,7 +3273,13 @@ def main(argv):
         sys.stdin = _StdinTee(prev_stdin, stdin_sink)
 
     tracer = Tracer(root, max_events, start_at, start_when, start_count,
-                    include, exclude, granularity, trip=trip)
+                    include, exclude, granularity, trip=trip,
+                    ring=max_events if black_box else None)
+    tracer.check = check
+    if black_box:
+        print(f"pyreplay: flight recorder — keeping the LAST "
+              f"{max_events} events (window = --max-events); kill "
+              f"-USR1 this pid for a mid-run snapshot", flush=True)
     old_argv, old_path = sys.argv, sys.path[:]
     if module is not None:
         # pytest discovers tests from its positional paths, or the CWD if it
@@ -3179,6 +3364,38 @@ def main(argv):
         sys.settrace(tracer)
     if _chap_plug is not None:
         _chap_plug._ACTIVE_TRACER = tracer   # #98 handoff
+    old_usr1 = None
+    snap_n = 0
+    if black_box and hasattr(signal, "SIGUSR1"):
+        def _snap_dump(signum, frm):
+            # #103: dump the ring as a normal trace WITHOUT stopping —
+            # the tracer's own prints must bypass the console tee
+            nonlocal snap_n
+            snap_n += 1
+            shim = types.SimpleNamespace(
+                events=list(tracer.events), sources=dict(tracer.sources),
+                truncated=False, abort_on_cap=True,
+                max_events=tracer.ring, armed=tracer.armed,
+                trip=tracer.trip)
+            spath = f"{os.path.splitext(out)[0]}_snap{snap_n}.html"
+            saved_out = sys.stdout
+            sys.stdout = _RAW["out"]
+            try:
+                _write_trace(shim, spath, granularity,
+                             entry_label + " [SIGUSR1 snapshot]", None,
+                             extra={"ring": {"size": tracer.ring,
+                                             "dropped":
+                                             tracer.events.dropped},
+                                    "capsule": capsule})
+                print(f"pyreplay: snapshot -> {spath}",
+                      file=_RAW["err"], flush=True)
+            except Exception as exc:
+                print(f"pyreplay: snapshot failed: {exc}",
+                      file=_RAW["err"], flush=True)
+            finally:
+                sys.stdout = saved_out
+        old_usr1 = signal.signal(signal.SIGUSR1, _snap_dump)
+
     tees = None
     if console:
         # #118: the console lane — every stdout/stderr LINE the target
@@ -3220,6 +3437,14 @@ def main(argv):
             tees[1].tail()
             sys.stdout = tees[0]._real
             sys.stderr = tees[1]._real
+        if old_usr1 is not None:
+            signal.signal(signal.SIGUSR1, old_usr1)
+
+    ring_info = None
+    if black_box:
+        ring_info = {"size": tracer.ring,
+                     "dropped": tracer.events.dropped}
+        tracer.events = list(tracer.events)   # deques don't slice/dump
 
     trigger_desc = None
     if start_at or start_when:
@@ -3238,7 +3463,10 @@ def main(argv):
         capsule["stdin"] = base64.b64encode(
             bytes(stdin_sink.data)).decode("ascii")
         capsule["stdinTrunc"] = stdin_sink.total > len(stdin_sink.data)
+    bounds = _boundaries(tracer.events)
     extra = {"capsule": capsule,
+             "ring": ring_info,
+             "boundaries": bounds or None,
              "logCapped": tracer.log_capped or None}
     tsum, tsusp = _chapter_suspicion(tracer.events, granularity)
     if tsum:
@@ -3266,6 +3494,54 @@ def main(argv):
                       + (f"  {src}" if src else ""))
     _write_trace(tracer, out, granularity, entry_label, error,
                  trigger_desc, extra=extra, chunked=chunked_opt)
+    unstable = []
+    for key, b in (bounds or {}).items():
+        spots = [(n, d) for n, d in b["args"].items() if len(d) > 1]
+        if len(b["ret"]) > 1:
+            spots.append(("return", b["ret"]))
+        for n, d in spots:
+            dist = " / ".join(f"{sh} {c}x" for sh, (c, _)
+                              in sorted(d.items(), key=lambda kv:
+                                        -kv[1][0]))
+            unstable.append(f"  {key} — {n}: {dist}")
+    if unstable:
+        print(f"boundary instability — {len(unstable)} unstable "
+              f"interface(s) (shapes observed, not declared):")
+        for line in unstable[:8]:
+            print(line)
+    if check is not None:
+        # #70: the end-of-run facts — an expression over these (or a
+        # per-line state test above, or both) decides the exit code,
+        # which is exactly what `git bisect run` consumes
+        ns = {"error": error,
+              "exc": (error or "").split(":")[0],
+              "events": len(tracer.events),
+              "output": "\n".join(e.get("txt", "") for e in tracer.events
+                                  if e.get("e") == "log"),
+              "hit": tracer.check_hit,
+              "hits": tracer.check_hits,
+              "tests_failed": (tsum or {}).get("failed", 0)
+              + (tsum or {}).get("other", 0),
+              "truncated": tracer.truncated}
+        end_res = None
+        try:
+            end_res = bool(eval(check, {"__builtins__": {}}, ns))
+        except Exception:
+            end_res = None      # a state-only expression: line hits decide
+        if tracer.check_hit or end_res:
+            where = (f" — first at event {tracer.check_first + 1}"
+                     if tracer.check_hit and tracer.check_first is not None
+                     else "")
+            print(f"check [{check_src}]: HIT{where} (exit 1)")
+            return 1
+        if end_res is None and tracer.check_evals == 0:
+            print(f"check [{check_src}]: never evaluable — neither as "
+                  f"per-line state nor over the run facts (error/exc/"
+                  f"events/output/hit/hits/tests_failed/truncated). "
+                  f"Probably a typo (exit 3).")
+            return 3
+        print(f"check [{check_src}]: clean (exit 0)")
+        return 0
     if perfetto:
         slices, nlanes, stray, unclosed = export_perfetto(
             tracer.events, entry_label, perfetto)

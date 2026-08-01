@@ -67,8 +67,12 @@ def run_trace(script, *flags, stdin_text=None, name=None):
     out = os.path.join(TMP, (name or os.path.basename(script)) + ".html")
     cmd = [PY, os.path.join(HERE, "tracer.py"), "--out", out,
            *flags, script]
+    # stdin is pinned either way: inherited descriptors made subprocess
+    # behavior depend on HOW the suite was invoked (the ghost flake)
+    kw = ({"input": stdin_text} if stdin_text is not None
+          else {"stdin": subprocess.DEVNULL})
     r = subprocess.run(cmd, capture_output=True, text=True, cwd=TMP,
-                       input=stdin_text, timeout=120)
+                       timeout=120, **kw)
     expect(os.path.exists(out),
            f"tracer produced no output ({r.stdout} {r.stderr})")
     return payload(out)
@@ -79,7 +83,7 @@ def run_map(target, *flags, name="map"):
     cmd = [PY, os.path.join(HERE, "mapper.py"), "--out", out,
            *flags, target]
     r = subprocess.run(cmd, capture_output=True, text=True, cwd=TMP,
-                       timeout=120)
+                       stdin=subprocess.DEVNULL, timeout=120)
     expect(os.path.exists(out),
            f"mapper produced no output ({r.stdout} {r.stderr})")
     return payload(out)
@@ -744,7 +748,7 @@ def _():
     xo = os.path.join(TMP, "pf_refused.html")
     r = subprocess.run([PY, os.path.join(HERE, "tracer.py"),
                         "--out", xo, "--export-perfetto", xj, prog],
-                       capture_output=True, text=True, cwd=TMP, timeout=60)
+                       capture_output=True, stdin=subprocess.DEVNULL, text=True, cwd=TMP, timeout=60)
     expect(r.returncode == 2 and "needs --granularity fn" in r.stdout
            and not os.path.exists(xj) and not os.path.exists(xo),
            "line-granularity export must be refused before running")
@@ -799,7 +803,7 @@ def _():
     # line granularity keeps the settrace engine — refuse up front
     r = subprocess.run([PY, os.path.join(HERE, "tracer.py"),
                         "--backend", "monitoring", fx],
-                       capture_output=True, text=True, cwd=TMP, timeout=60)
+                       capture_output=True, stdin=subprocess.DEVNULL, text=True, cwd=TMP, timeout=60)
     expect(r.returncode == 2 and "settrace" in r.stdout,
            "monitoring at line granularity must be refused")
 
@@ -907,7 +911,7 @@ def _():
 
     def run_m(*args, cwd=base):
         return subprocess.run([PY, os.path.join(HERE, "tracer.py"), *args],
-                              capture_output=True, text=True, cwd=cwd,
+                              capture_output=True, stdin=subprocess.DEVNULL, text=True, cwd=cwd,
                               timeout=60)
 
     # -m runs the module as __main__; --root keeps the scope on the project;
@@ -977,7 +981,7 @@ def _():
     def run_t(*args, env_extra=None):
         env = dict(os.environ, **(env_extra or {}))
         return subprocess.run([PY, os.path.join(HERE, "tracer.py"), *args],
-                              capture_output=True, text=True, cwd=base,
+                              capture_output=True, stdin=subprocess.DEVNULL, text=True, cwd=base,
                               env=env, timeout=60)
 
     def gran(out):
@@ -1037,7 +1041,7 @@ def _():
     def run_d(*args):
         return subprocess.run([PY, os.path.join(HERE, "tracer.py"),
                                "--doctor", *args],
-                              capture_output=True, text=True, cwd=base,
+                              capture_output=True, stdin=subprocess.DEVNULL, text=True, cwd=base,
                               timeout=60)
 
     # benign entry: codebase misses a dep (advisory), but NOTHING runs and
@@ -1108,7 +1112,7 @@ def deco(x):
 deco(1); deco(2)
 """)
     # the whole point of #24: run with PLAIN python, not under tracer.py
-    r = subprocess.run([PY, host], capture_output=True, text=True,
+    r = subprocess.run([PY, host], capture_output=True, stdin=subprocess.DEVNULL, text=True,
                        cwd=base, timeout=60)
     expect(r.returncode == 0,
            f"host must run to completion: {r.stderr[-300:]}")
@@ -1142,6 +1146,120 @@ deco(1); deco(2)
            and payload(os.path.join(base, wd[0]))["script"]
            == "watch @ deco()",
            f"decorator must record the FIRST call only: {wd}")
+
+
+@check("check: run predicates decide the exit code (#70)")
+def _():
+    fx = fixture("fx_bisect.py", (
+        "total = 10\n"
+        "for i in range(5):\n"
+        "    total -= 4\n"
+        "print('end', total)\n"))
+
+    def run_check(expr, target=None):
+        return subprocess.run(
+            [PY, os.path.join(HERE, "tracer.py"), "--check", expr,
+             "--out", os.path.join(TMP, "t_c70.html"), target or fx],
+            capture_output=True, text=True, cwd=TMP,
+            stdin=subprocess.DEVNULL, timeout=120)
+
+    r = run_check("total < 0")
+    expect(r.returncode == 1 and "HIT — first at event" in r.stdout,
+           f"state hit must exit 1 with the moment: {r.stdout}")
+    r = run_check("total < -999")
+    expect(r.returncode == 0 and "clean (exit 0)" in r.stdout,
+           f"never-true must exit 0: {r.stdout}")
+    r = run_check("'end -10' in output")
+    expect(r.returncode == 1,
+           f"the console lane must be a queryable run fact: {r.stdout}")
+    r = run_check("no_such_name > 3")
+    expect(r.returncode == 3 and "never evaluable" in r.stdout,
+           f"a typo must exit 3, never a silent 0: {r.stdout}")
+    fx2 = fixture("fx_bisect2.py", "raise ValueError('boom')\n")
+    r = run_check("error", target=fx2)
+    expect(r.returncode == 1,
+           f"--check 'error' must flag a crashing run: {r.stdout}")
+
+
+@check("black-box: ring window, dropped honesty, live snapshot (#103)")
+def _():
+    fx = fixture("fx_ring.py", (
+        "import os, signal\n"
+        "def spin(n):\n"
+        "    t = 0\n"
+        "    for i in range(n):\n"
+        "        t += i\n"
+        "    return t\n"
+        "for r_ in range(60):\n"
+        "    spin(5)\n"
+        "os.kill(os.getpid(), signal.SIGUSR1)\n"
+        "for r_ in range(10):\n"
+        "    spin(5)\n"
+        "print('done')\n"))
+    out = os.path.join(TMP, "t_ring.html")
+    r = subprocess.run([PY, os.path.join(HERE, "tracer.py"),
+                        "--black-box", "--max-events", "50",
+                        "--out", out, fx],
+                       capture_output=True, text=True, cwd=TMP,
+                       stdin=subprocess.DEVNULL, timeout=120)
+    expect("done" in r.stdout, f"the run must survive the snapshot: "
+           f"{r.stdout} {r.stderr}")
+    p = payload(out)
+    expect(len(p["events"]) == 50 and p["ring"]["size"] == 50
+           and p["ring"]["dropped"] > 0,
+           f"ring window wrong: {len(p['events'])} {p.get('ring')}")
+    snap = os.path.join(TMP, "t_ring_snap1.html")
+    expect(os.path.exists(snap), "SIGUSR1 must dump a live snapshot")
+    sp = payload(snap)
+    expect(len(sp["events"]) <= 50 and "[SIGUSR1 snapshot]"
+           in sp["script"] and sp["ring"]["dropped"]
+           < p["ring"]["dropped"],
+           f"snapshot must be the mid-run window: {sp['script']} "
+           f"{sp.get('ring')}")
+    with open(out, encoding="utf-8") as fh:
+        expect("rotated out of the" in fh.read(),
+               "the ring banner honesty note is missing")
+
+
+@check("boundaries: observed interfaces, instability + jumps (#120)")
+def _():
+    fx = fixture("fx_shapes.py", (
+        "def lookup(catalog, sku):\n"
+        "    return catalog.get(sku)\n"
+        "def total(items):\n"
+        "    s = 0\n"
+        "    for i in items:\n"
+        "        s += i['qty']\n"
+        "    return s\n"
+        "cat = {'apple': {'qty': 3, 'price': 1.2}}\n"
+        "print(total([cat['apple']]))\n"
+        "print(lookup(cat, 'apple'))\n"
+        "print(lookup(cat, 'mango'))\n"))
+    r = subprocess.run([PY, os.path.join(HERE, "tracer.py"),
+                        "--out", os.path.join(TMP, "t_shapes.html"), fx],
+                       capture_output=True, text=True, cwd=TMP,
+                       stdin=subprocess.DEVNULL, timeout=120)
+    expect("boundary instability" in r.stdout
+           and "lookup — return:" in r.stdout,
+           f"terminal instability summary missing: {r.stdout}")
+    b = payload(os.path.join(TMP, "t_shapes.html"))["boundaries"]
+    tot = b["fx_shapes.py:total"]
+    expect(tot["args"]["items"] and
+           list(tot["args"]["items"]) == ["list[dict{qty, price}]"]
+           and list(tot["ret"]) == ["int"],
+           f"stable shapes wrong: {tot}")
+    lk = b["fx_shapes.py:lookup"]
+    expect(sorted(lk["ret"]) == ["NoneType", "dict{qty, price}"]
+           and lk["calls"] == 2,
+           f"unstable return not observed: {lk}")
+    ev_idx = lk["ret"]["NoneType"][1]
+    evs = payload(os.path.join(TMP, "t_shapes.html"))["events"]
+    expect(evs[ev_idx]["e"] == "return"
+           and evs[ev_idx]["fn"] == "lookup",
+           f"deviant jump target must be lookup's return: "
+           f"{evs[ev_idx]}")
+    expect(not any("genexpr" in k for k in b),
+           "comprehension frames are machinery, not interfaces")
 
 
 @check("capsule: rerun recipe embedded, stdin consumed lazily (#104)")
@@ -1320,7 +1438,7 @@ def _():
     pytest_py = None
     for cand in (PY, os.path.join(HERE, ".venv", "bin", "python3")):
         probe = subprocess.run([cand, "-c", "import pytest"],
-                               capture_output=True)
+                               capture_output=True, stdin=subprocess.DEVNULL)
         if probe.returncode == 0:
             pytest_py = cand
             break
@@ -1341,7 +1459,7 @@ def _():
     r = subprocess.run([pytest_py, os.path.join(HERE, "tracer.py"),
                         "--root", suite, "--out", out, "-m", "pytest",
                         os.path.join(suite, "test_mini.py"), "-q"],
-                       capture_output=True, text=True, cwd=TMP,
+                       capture_output=True, stdin=subprocess.DEVNULL, text=True, cwd=TMP,
                        timeout=180)
     expect(os.path.exists(out), f"suite trace missing: {r.stdout} "
            f"{r.stderr}")
@@ -1409,14 +1527,14 @@ def _():
         env = dict(os.environ, DIV=div)
         r = subprocess.run([PY, os.path.join(HERE, "tracer.py"),
                             "--out", outs[tag], fx],
-                           capture_output=True, text=True, cwd=TMP,
+                           capture_output=True, stdin=subprocess.DEVNULL, text=True, cwd=TMP,
                            env=env, timeout=120)
         expect(os.path.exists(outs[tag]), f"trace {tag} missing: {r.stderr}")
 
     def diverge(x, y):
         return subprocess.run([PY, os.path.join(HERE, "tracer.py"),
                                "--diverge", outs[x], outs[y]],
-                              capture_output=True, text=True, cwd=TMP,
+                              capture_output=True, stdin=subprocess.DEVNULL, text=True, cwd=TMP,
                               timeout=60)
 
     r = diverge("a", "b")
@@ -1444,7 +1562,7 @@ def _():
         outs[tag] = os.path.join(TMP, f"t_div_{tag}.html")
         subprocess.run([PY, os.path.join(HERE, "tracer.py"),
                         "--out", outs[tag], fx2],
-                       capture_output=True, text=True, cwd=TMP,
+                       capture_output=True, stdin=subprocess.DEVNULL, text=True, cwd=TMP,
                        env=dict(os.environ, DIV=div), timeout=120)
     r3 = diverge("c", "d")
     expect(r3.returncode == 1
@@ -1473,7 +1591,7 @@ def _():
     out = os.path.join(TMP, "runs_fx_nrun.html")
     r = subprocess.run([PY, os.path.join(HERE, "tracer.py"),
                         "--runs", "6", "--out", out, fx],
-                       capture_output=True, text=True, cwd=TMP,
+                       capture_output=True, stdin=subprocess.DEVNULL, text=True, cwd=TMP,
                        timeout=180)
     expect(r.returncode == 1,
            f"a run set with failures must exit 1, got {r.returncode} "
@@ -1526,7 +1644,7 @@ def _():
     out2 = os.path.join(TMP, "runs_fx_ok.html")
     r2 = subprocess.run([PY, os.path.join(HERE, "tracer.py"),
                          "--runs", "2", "--out", out2, fx2],
-                        capture_output=True, text=True, cwd=TMP,
+                        capture_output=True, stdin=subprocess.DEVNULL, text=True, cwd=TMP,
                         timeout=120)
     expect(r2.returncode == 0,
            f"an all-clean run set must exit 0, got {r2.returncode}")
@@ -1819,7 +1937,7 @@ def _():
     # flags AFTER the path are an error, never silently ignored
     r = subprocess.run([PY, os.path.join(HERE, "mapper.py"), d,
                         "--out", os.path.join(TMP, "never.html")],
-                       capture_output=True, text=True, timeout=60)
+                       capture_output=True, stdin=subprocess.DEVNULL, text=True, timeout=60)
     expect(r.returncode == 2 and
            not os.path.exists(os.path.join(TMP, "never.html")),
            "flags after the path must be rejected, not ignored")
@@ -1994,7 +2112,7 @@ def _():
         subprocess.run([PY, os.path.join(HERE, "tracer.py"), "--out", out,
                         "--granularity", "fn", "--root", base,
                         os.path.join(base, r + ".py")],
-                       capture_output=True, text=True, cwd=base, timeout=60)
+                       capture_output=True, stdin=subprocess.DEVNULL, text=True, cwd=base, timeout=60)
 
     a = run_map(base, "--trace", ta, name="map_aggA")["heat"]
     b = run_map(base, "--trace", tb, name="map_aggB")["heat"]

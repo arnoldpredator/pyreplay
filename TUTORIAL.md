@@ -599,6 +599,20 @@ never a proof. Noise is controlled by design: constants suppress what
 they imply, machinery objects are never mined, windowed containers
 are never judged.
 
+**The observed state machine (`--fsm`).** Declare ONE state variable —
+`--fsm "order.status"` — and the trace mines its transition diagram:
+the **State machine** panel draws states sized by dwell, edges
+weighted ×N (click = jump to the first occurrence), and lights the
+current state as the replay advances. Add `--fsm-declare
+lifecycle.txt` (`FROM -> TO` lines) and the diagram becomes a
+checker: every transition you never declared turns red AND lands in
+the stream as a derived viol event — amber badge, scrubber pins,
+`type:viol` in the query bar. `--runs N` merges all runs into one
+machine in the runs report. The rule under the diagram, verbatim:
+observed machine ⊆ true machine — a missing edge is never evidence
+of absence. The refund path nobody drew on the whiteboard shows up
+as one red arrow with a pin at the exact moment it happened.
+
 ## 4e. The replayer grows: chapters, console, query, whyline, schemas (2026-08)
 
 **Per-test chapters.** `python3 tracer.py -m pytest tests/` now

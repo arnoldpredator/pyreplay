@@ -7,7 +7,7 @@ can pick an item and implement it. Features are numbered **#63 onward**, continu
 in FEATURES.md. Fifteen roadmap items have shipped since the list was
 written (63, 64, 65, 70, 77, 79, 80, 98, 101 v1, 103, 104 Tier 1,
 106, 109, 118, 120 v1) — their rows below are struck through;
-**41 remain unbuilt** (plus the stated remainders of 74/75/85/88/89/101/104/119/120/127/128).
+**40 remain unbuilt** (plus the stated remainders of 74/75/85/88/89/101/104/119/120/127/128/132).
 
 ## Start here — how to contribute
 
@@ -138,7 +138,7 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
 | 129 | ~~Graph lens on the map (centrality, communities)~~ **shipped** | M | ★★ |
 | 130 | Trace compressibility (regularity strip) | S | ★ |
 | 131 | ~~CFG view: the code as a graph, the run as a path~~ **shipped** | M | ★★★ |
-| 132 | Observed state machine (one declared variable) | M | ★★ |
+| 132 | ~~Observed state machine (one declared variable)~~ **shipped (row-click binding remains)** | M | ★★ |
 | 133 | ~~Recursion tree view~~ **shipped** | S | ★★ |
 | 134 | Subproblem DAG (memo dependency view) | M | ★★ |
 | 135 | ~~Motion layer (tweened transitions, honest)~~ **shipped** | M | ★★ |
@@ -1297,6 +1297,7 @@ per algorithm.
 
 ### 132. The observed state machine
 *(sibling of #74 — mined behavior)*
+**Shipped 2026-08-01** — now catalog entry #132 in [FEATURES.md](FEATURES.md): `--fsm EXPR` (rides the #72 watch machinery) + `--fsm-declare FILE` checker — State machine panel with dwell-sized nodes, ×N edges with first-occurrence jumps, current state lit, gap-crossing transitions dashed; undeclared transitions spliced as derived viol events (badge/pins/type:viol free via #73); `--runs` merges N runs into one machine in the runs report. The honesty clause verbatim under the diagram. What remains: the click-a-variable-row binding (renderer-mined from the change index, no re-trace).
 - **What:** declare one state variable (`--fsm order.status`, or a
   click on a variable row) and the tool mines the transition diagram
   from the trace: nodes = observed values sized by dwell, edges =

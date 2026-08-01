@@ -3131,11 +3131,17 @@ def _doctor(module, script, root, entry_label, module_ok):
 
 
 def _write_trace(tr, out, granularity, entry_label, error,
-                 trigger_desc=None, extra=None, chunked=None):
+                 trigger_desc=None, extra=None, chunked=None,
+                 fsm=None):
     """Build the payload and write the self-contained replayer HTML —
     shared by the CLI run and the in-process watch() bracket, so both
     honor the same contract (line-only linevars/dataflow, the </ escape,
     honest truncation notes)."""
+    fsm_data = None
+    if fsm is not None and granularity == "line":
+        # #132 runs FIRST: it may splice derived viol events into the
+        # stream, and every later pass must see the final indices
+        fsm_data = _build_fsm(tr.events, fsm[0], fsm[1])
     if granularity == "line":
         annotate_conditionals(tr.events, tr.sources)
     cfg = {}
@@ -3171,6 +3177,7 @@ def _write_trace(tr, out, granularity, entry_label, error,
         # #74: this run's own mined invariants — support = this run's
         # observations only; --runs --mine multiplies the evidence
         "mined": mine_invariants([{"events": tr.events}]),
+        "fsm": fsm_data,   # #132, or null without --fsm
     }
     if extra:
         payload.update(extra)
@@ -3587,7 +3594,8 @@ def _run_harness(orig_argv, n_runs, out, entry_label, granularity,
     valued = {"--out", "--root", "--export-perfetto", "--include",
               "--exclude", "--granularity", "--max-events", "--start-at",
               "--start-count", "--start-when", "--backend", "--trip",
-              "--runs", "--check", "--chaos-schedule"}
+              "--runs", "--check", "--chaos-schedule", "--fsm",
+              "--fsm-declare"}
     # --chaos-schedule is stripped and re-issued per child with a
     # DERIVED seed (base+i-1): N runs under one seed would explore one
     # biased stream N times; N seeds explore N different ones, and any
@@ -3645,6 +3653,7 @@ def _run_harness(orig_argv, n_runs, out, entry_label, granularity,
     cov_fail, cov_pass = {}, {}
     n_fail_cov = n_pass_cov = 0
     mine_acc = {}        # #74: fingerprints survive the trace deletion
+    fsm_acc = None       # #132: N runs merged into ONE machine
     try:
         for i in range(1, n_runs + 1):
             tr_path = f"{rep_base}_run{i}.html"
@@ -3665,6 +3674,30 @@ def _run_harness(orig_argv, n_runs, out, entry_label, granularity,
                            if e.get("f") and e.get("l")}
                     if mine:      # #74: fingerprints before deletion
                         _mine_collect(data, mine_acc, i)
+                    if data.get("fsm"):   # #132: merge machines
+                        f = data["fsm"]
+                        if fsm_acc is None:
+                            fsm_acc = {"expr": f["expr"],
+                                       "declared": bool(f["declared"]),
+                                       "states": {}, "edges": {},
+                                       "runs": 0, "viol": 0}
+                        fsm_acc["runs"] += 1
+                        fsm_acc["viol"] += f.get("viol", 0)
+                        for s in f["states"]:
+                            st = fsm_acc["states"].setdefault(
+                                s["v"], {"dwell": 0, "runs": 0})
+                            st["dwell"] += s["dwell"]
+                            st["runs"] += 1
+                        names = [s["v"] for s in f["states"]]
+                        for e in f["edges"]:
+                            key = names[e["a"]] + " -> " + names[e["b"]]
+                            me = fsm_acc["edges"].setdefault(
+                                key, {"n": 0, "runs": 0,
+                                      "forbidden": e["forbidden"],
+                                      "gap": False})
+                            me["n"] += e["n"]
+                            me["runs"] += 1
+                            me["gap"] = me["gap"] or e["gap"]
                     err = data.get("error")
                     if err is None and r.returncode == 0:
                         cls = "clean"
@@ -3773,6 +3806,7 @@ def _run_harness(orig_argv, n_runs, out, entry_label, granularity,
                "interrupted": interrupted,
                "suspicion": suspicion,
                "mined": mined,        # #74, or null without --mine
+               "fsm": fsm_acc,        # #132, or null without --fsm
                "perRun": per_run}
     template_path = os.path.join(os.path.dirname(SELF),
                                  "runs_template.html")
@@ -3800,8 +3834,141 @@ def _run_harness(orig_argv, n_runs, out, entry_label, granularity,
                   + (f"  {row['src']}" if row["src"] else ""))
     if mined is not None:
         _mine_print(mined, len(per_run))
+    if fsm_acc:
+        print(f"\nobserved machine [{fsm_acc['expr']}] across "
+              f"{fsm_acc['runs']} run(s) — observed ⊆ true; a missing "
+              f"edge is never evidence of absence:")
+        for key, e in sorted(fsm_acc["edges"].items(),
+                             key=lambda kv: -kv[1]["n"]):
+            print(f"    {key}   ×{e['n']} in {e['runs']} run(s)"
+                  + ("   ⚠ NOT DECLARED" if e["forbidden"] else "")
+                  + ("   (crossed an unobservable gap)"
+                     if e["gap"] else ""))
+        if fsm_acc["viol"]:
+            print(f"  ⚠ {fsm_acc['viol']} undeclared transition(s) — "
+                  f"each is a viol event in its kept trace")
     print(f"report -> {out}")
     return 0 if set(counts) == {"clean"} else 1
+
+
+# ---- #132: the observed state machine -----------------------------------
+# One declared name (--fsm EXPR) rides the #72 watch machinery — the
+# change stream IS the transition log. The post-pass mines the machine
+# from it: nodes = observed values sized by dwell, edges = observed
+# transitions with counts and first-occurrence jumps. Honesty, verbatim
+# where the machine is drawn: observed machine ⊆ true machine — a
+# missing edge is never evidence of absence.
+
+def _fsm_label(enc):
+    """A state's display label from its encoding — primitives verbatim,
+    containers by shape (a state variable should be small; the panel
+    says so when it isn't)."""
+    if not isinstance(enc, dict):
+        return "?"
+    if enc.get("c") == "unevaluable":
+        return None                       # a hole, not a state
+    if enc.get("t") in ("p", "s"):        # scalar / string: the value
+        v = str(enc.get("v"))
+        return v if len(v) <= 40 else v[:38] + "…"
+    if enc.get("n") is not None:
+        return (enc.get("c") or enc.get("t")) + "[" + str(enc["n"]) + "]"
+    return enc.get("c") or enc.get("t") or "?"
+
+
+def _parse_fsm_declare(path):
+    """Declared-transitions file: one 'A -> B' per line (values as the
+    replayer displays them), '#' comments. Returns a set of pairs."""
+    declared = set()
+    with open(path, encoding="utf-8") as fh:
+        for lineno, raw in enumerate(fh, 1):
+            line = raw.split("#", 1)[0].strip()
+            if not line:
+                continue
+            a, sep, b = line.partition("->")
+            if not sep or not a.strip() or not b.strip():
+                raise SystemExit(
+                    f"error: --fsm-declare {path}:{lineno}: expected "
+                    f"'FROM -> TO' (values as displayed), got: {line!r}")
+            declared.add((a.strip(), b.strip()))
+    return declared
+
+
+def _build_fsm(events, expr, declared):
+    """Mine the machine from the recorded change stream, in global
+    stream order (the observed interleaving is the truth). When a
+    declared set exists, undeclared transitions become viol events
+    SPLICED after the observing event — labeled as derived, and the
+    #73 machinery (badge, pins, type:viol) renders them for free."""
+    wkey = "watch:" + expr
+
+    def walk():
+        cur, gap = None, False
+        for i, ev in enumerate(events):
+            ch = ev.get("ch") or {}
+            if wkey not in ch:
+                continue
+            lab = _fsm_label(ch[wkey])
+            if lab is None:               # unobservable stretch begins
+                gap = True
+                continue
+            if cur is None:
+                yield (i, None, lab, False)
+                cur, gap = lab, False
+            elif lab != cur:
+                yield (i, cur, lab, gap)
+                cur, gap = lab, False
+            else:
+                gap = False
+        return
+
+    if declared:
+        inserts = []
+        for i, a, b, _gap in walk():
+            if a is not None and (a, b) not in declared:
+                src = events[i]
+                inserts.append((i, {
+                    "e": "viol", "f": src.get("f"), "l": src.get("l"),
+                    "fn": src.get("fn"),
+                    **({"t": src["t"]} if src.get("t") else {}),
+                    **({"tk": src["tk"]} if src.get("tk") else {}),
+                    "inv": f"fsm: {a} -> {b} not declared "
+                           f"(derived from --fsm-declare)",
+                    "vals": {expr: (src.get("ch") or {}).get(wkey)},
+                }))
+        for i, ev in reversed(inserts):
+            events.insert(i + 1, ev)
+
+    states, order = {}, []
+    edges = {}
+    obs = []
+    for i, a, b, gap in walk():
+        if b not in states:
+            states[b] = {"v": b, "dwell": 0, "first": i}
+            order.append(b)
+        obs.append([i, order.index(b)])
+        if a is not None:
+            key = (a, b)
+            e = edges.setdefault(key, {"n": 0, "first": i, "gap": False})
+            e["n"] += 1
+            e["gap"] = e["gap"] or gap
+    for k, (i, si) in enumerate(obs):
+        end = obs[k + 1][0] if k + 1 < len(obs) else len(events)
+        states[order[si]]["dwell"] += end - i
+    n_viol = 0
+    edge_list = []
+    for (a, b), e in sorted(edges.items(),
+                            key=lambda kv: (-kv[1]["n"], kv[0])):
+        forb = bool(declared) and (a, b) not in declared
+        if forb:
+            n_viol += e["n"]
+        edge_list.append({"a": order.index(a), "b": order.index(b),
+                          "n": e["n"], "first": e["first"],
+                          "gap": e["gap"], "forbidden": forb})
+    return {"expr": expr,
+            "declared": sorted(list(x) for x in declared)
+            if declared else None,
+            "states": [states[v] for v in order],
+            "edges": edge_list, "obs": obs, "viol": n_viol}
 
 
 # ---- #74: invariant mining (Daikon-lite) --------------------------------
@@ -4238,7 +4405,8 @@ def _sweep_harness(orig_argv, sweep_spec, gen_file, predict_src,
               "--exclude", "--granularity", "--max-events", "--start-at",
               "--start-count", "--start-when", "--backend", "--trip",
               "--runs", "--check", "--chaos-schedule", "--sweep",
-              "--gen", "--predict", "--sweep-seed"}
+              "--gen", "--predict", "--sweep-seed", "--fsm",
+              "--fsm-declare"}
     strip = {"--sweep", "--gen", "--predict", "--sweep-seed", "--out",
              "--granularity"}
     child_flags, i = [], 0
@@ -4618,6 +4786,8 @@ def main(argv):
     predict_src = None   # #127: claimed growth, e.g. "n^2"
     sweep_seed = 1234
     mine_flag = False    # #74: --runs N --mine (multi-run mining)
+    fsm_expr = None      # #132: the ONE declared state name
+    fsm_declared = None  # #132: declared transitions, or None
     watch_list = []      # #72: [(src, code)] watch expressions
     inv_list = []        # #73: [(src, code, names)] invariants
     check = None         # #70: compiled --check expression
@@ -4743,6 +4913,28 @@ def main(argv):
         elif argv[0] == "--mine":
             mine_flag = True
             argv = argv[1:]
+        elif argv[0] == "--fsm" and len(argv) >= 2:
+            if fsm_expr is not None:
+                print("error: --fsm binds ONE declared name — the "
+                      "machine of one state variable, not a dashboard")
+                return 2
+            fsm_expr = argv[1]
+            try:
+                compile(fsm_expr, "<fsm>", "eval")
+            except SyntaxError as exc:
+                print(f"error: --fsm is not a valid expression: {exc}")
+                return 2
+            argv = argv[2:]
+        elif argv[0] == "--fsm-declare" and len(argv) >= 2:
+            if not os.path.isfile(argv[1]):
+                print(f"error: --fsm-declare file not found: {argv[1]}")
+                return 2
+            try:
+                fsm_declared = _parse_fsm_declare(argv[1])
+            except SystemExit as exc:
+                print(exc)
+                return 2
+            argv = argv[2:]
         elif argv[0] == "--start-at" and len(argv) >= 2:
             fname, _, lineno = argv[1].rpartition(":")
             if not fname or not lineno.isdigit():
@@ -4821,6 +5013,19 @@ def main(argv):
               "stands alone as a mode: tracer.py --mine a.html b.html "
               "— single traces mine themselves automatically.")
         return 2
+    if fsm_declared is not None and fsm_expr is None:
+        print("error: --fsm-declare needs --fsm EXPR (the state "
+              "variable whose transitions the file declares)")
+        return 2
+    if fsm_expr is not None and granularity == "fn":
+        print("error: --fsm observes the state per LINE event — drop "
+              "--granularity fn (and scope the cost with --include)")
+        return 2
+    if fsm_expr is not None:
+        # ride the #72 watch machinery: the change stream IS the log
+        if not any(src == fsm_expr for src, _ in watch_list):
+            watch_list.append((fsm_expr,
+                               compile(fsm_expr, "<fsm>", "eval")))
     if sweep_spec and runs_n:
         print("error: --sweep and --runs are different experiments — "
               "a ladder of sizes vs repetitions of one input. Run them "
@@ -5236,7 +5441,8 @@ def main(argv):
                 print(f"    {row['score']:.2f}  {row['f']}:{row['l']}"
                       + (f"  {src}" if src else ""))
     _write_trace(tracer, out, granularity, entry_label, error,
-                 trigger_desc, extra=extra, chunked=chunked_opt)
+                 trigger_desc, extra=extra, chunked=chunked_opt,
+                 fsm=(fsm_expr, fsm_declared) if fsm_expr else None)
     unstable = []
     for key, b in (bounds or {}).items():
         spots = [(n, d) for n, d in b["args"].items() if len(d) > 1]

@@ -1110,6 +1110,48 @@ dead or invented panel; every cap and truncation is announced.
 
   [![Feature 74 — invariant mining](screenshots/74-mined.png)](screenshots/74-mined.png)
 
+### 132. The observed state machine (`--fsm EXPR`)
+- **Measured:** one declared name — `--fsm order.status` — rides the
+  watch machinery (#72): the expression is evaluated per line event
+  into the change stream, and the post-pass mines the machine from it
+  in global stream order: states = observed values (first-seen
+  order), dwell = events spent in each, edges = observed transitions
+  with counts and first-occurrence indices. A value that dies
+  mid-frame leaves the honest hole; a transition across an
+  unobservable stretch wears a **gap** flag. With `--fsm-declare
+  FILE` (`FROM -> TO` lines, `#` comments) the view becomes a
+  checker: every undeclared transition is spliced into the stream as
+  a derived **viol event** — badge, amber pins and `type:viol`
+  queries all work through the #73 machinery, and the event says it
+  is derived.
+- **Displayed:** the **State machine** panel: the transition diagram
+  with nodes sized by dwell share, edges weighted ×N (click = jump
+  to the first occurrence), forbidden edges red, gap-crossers
+  dashed, and the current state lit as the replay advances —
+  `current: paid`. Over 40 distinct values the diagram declines and
+  says why ("is this really a state variable?"). `--runs N` merges
+  all runs into ONE machine in the runs report — states, edges ×N
+  across k runs, forbidden marked.
+- **Why:** state machines are how half of real systems are designed
+  and almost never how they are observed. The mined diagram is
+  executable documentation and a drift detector — the general
+  instrument for every automata-shaped mental model, bound by one
+  flag, never an authored scene.
+- **Use case:** an order lifecycle: `new → paid → shipped →
+  delivered` — and one red edge, `delivered → paid ×1`, the refund
+  path nobody drew on the whiteboard, with a viol event pinned at
+  the exact moment it happened.
+- **Command:** `python3 tracer.py --fsm "order.status" [--fsm-declare
+  lifecycle.txt] app.py` (line granularity; one name — the machine
+  of one state variable, not a dashboard). Honesty, verbatim under
+  the diagram: *observed machine ⊆ true machine — a missing edge is
+  never evidence of absence.*
+- **Screenshot** — the violation moment: ⚖ INVARIANT VIOLATED naming
+  `fsm: delivered -> paid not declared`, the red edge in the
+  diagram, `current: paid` lit, the honesty line below.
+
+  [![Feature 132 — observed FSM](screenshots/132-fsm.png)](screenshots/132-fsm.png)
+
 ### 77. The whyline — "why didn't this line run?"
 - **Measured:** a static AST pass stamps every line with its innermost
   controlling construct (then/else/loop/loop-else/except/case/def —

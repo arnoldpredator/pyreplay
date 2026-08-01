@@ -262,6 +262,31 @@
     opacity: .4; }
   .cfgt { font-size: 8.5px; }
   .cfgt.ghost { opacity: .5; }
+  #fsmbox { border-top: 1px solid var(--border); padding: 6px 10px;
+    font-size: 11px; color: var(--dim); }
+  #fsmbox summary { cursor: pointer; color: var(--text); }
+  #fsmbox #fsmstat { color: var(--dim); font-weight: 400; }
+  #fsmcur { margin: 4px 0; color: var(--text); }
+  #fsmcur b { color: var(--changed-text); }
+  #fsmdiag { background: #171a22; border: 1px solid var(--border);
+    border-radius: 4px; margin-top: 3px; overflow: auto;
+    max-height: 340px; }
+  #fsmnote { color: var(--dim); font-style: italic; font-size: 10.5px;
+    margin-top: 4px; line-height: 1.5; }
+  .fsn circle { fill: #303a55; stroke: #9db0d8; stroke-width: 1.8; }
+  .fsn.cur circle { fill: #3d3320; stroke: var(--changed-text);
+    stroke-width: 2.6; }
+  .fsn text { fill: #f0f3fa; font-size: 10.5px; text-anchor: middle;
+    paint-order: stroke; stroke: #171a22; stroke-width: 3px; }
+  .fsn.cur text { fill: var(--changed-text); }
+  .fsn .fsd { fill: var(--dim); font-size: 8.5px; }
+  .fse { fill: none; stroke: #93a1c0; cursor: pointer; }
+  .fse.forb { stroke: var(--err); }
+  .fse.gap { stroke-dasharray: 4 4; }
+  .fset { font-size: 9px; fill: #93a1c0; cursor: pointer; }
+  .fset.forb { fill: var(--err); font-weight: 700; }
+  polygon.fsah { fill: #93a1c0; }
+  polygon.fsah.forb { fill: var(--err); }
   #treebox { border-top: 1px solid var(--border); padding: 6px 10px;
     font-size: 11px; color: var(--dim); }
   #treebox summary { cursor: pointer; color: var(--text); }
@@ -605,6 +630,12 @@
       <h2>Console <span id="constat"></span></h2>
       <div id="console"></div>
     </section>
+    <details id="fsmbox" title="#132: the observed state machine of the --fsm variable — mined from the recorded change stream" style="display:none">
+      <summary>State machine <span id="fsmstat"></span></summary>
+      <div id="fsmcur"></div>
+      <div id="fsmdiag"></div>
+      <div id="fsmnote"></div>
+    </details>
     <details id="treebox" title="#133: the run's call tree — the recurrence, drawn; every node a frame with its arguments and return">
       <summary>Call tree <span id="treestat"></span></summary>
       <div id="treelevels"></div>
@@ -2580,6 +2611,146 @@ $("g-reset").onclick = () => {
   gateToast("ledger cleared");
 };
 
+/* #132: the observed state machine — one declared name's transition
+   diagram, mined from the recorded change stream. Nodes sized by
+   dwell, edges weighted with first-occurrence jumps, the current
+   state lit as the replay advances. The honesty rule is printed
+   under the diagram, verbatim: observed machine ⊆ true machine — a
+   missing edge is never evidence of absence. */
+const fsmBox = $("fsmbox");
+let fsmCur = -1, fsmBuilt = false;
+const FSM_DIAG_CAP = 40;
+function fsmStateAt(i) {
+  const obs = DATA.fsm.obs;
+  let lo = 0, hi = obs.length - 1, best = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (obs[mid][0] <= i) { best = obs[mid][1]; lo = mid + 1; }
+    else hi = mid - 1;
+  }
+  return best;
+}
+function fsmBuild() {
+  if (fsmBuilt) return;
+  fsmBuilt = true;
+  const F = DATA.fsm;
+  const n = F.states.length;
+  if (n > FSM_DIAG_CAP) {
+    $("fsmdiag").innerHTML = "";
+    $("fsmnote").textContent = n + " distinct values — not a small " +
+      "machine (is this really a state variable?). Top states by " +
+      "dwell: " + F.states.slice().sort((a, b) => b.dwell - a.dwell)
+        .slice(0, 10).map(s => s.v).join(" · ") +
+      ". The diagram caps at " + FSM_DIAG_CAP + " states.";
+    return;
+  }
+  const totalDwell = Math.max(1, F.states.reduce(
+    (a, s) => a + s.dwell, 0));
+  const W = 300, H = Math.max(180, 90 + n * 26);
+  const cx = W / 2, cy = H / 2;
+  const R = Math.min(cx, cy) - 42;
+  const pos = F.states.map((s, i) => {
+    if (n === 1) return [cx, cy];
+    const a = -Math.PI / 2 + i * 2 * Math.PI / n;
+    return [cx + R * Math.cos(a), cy + R * Math.sin(a)];
+  });
+  const rad = F.states.map(s =>
+    Math.max(11, Math.min(26, 11 + 22 * Math.sqrt(s.dwell / totalDwell))));
+  const parts = [];
+  const seenPair = new Set();
+  for (const e of F.edges) {
+    const [x1, y1] = pos[e.a], [x2, y2] = pos[e.b];
+    const dx = x2 - x1, dy = y2 - y1;
+    const len = Math.hypot(dx, dy) || 1;
+    const both = seenPair.has(e.b + ">" + e.a);
+    seenPair.add(e.a + ">" + e.b);
+    // bow sideways when the reverse edge exists, so pairs never overlap
+    const bow = both ? 14 : 7;
+    const mx = (x1 + x2) / 2 - dy / len * bow;
+    const my = (y1 + y2) / 2 + dx / len * bow;
+    const t1 = rad[e.a] / len, t2 = rad[e.b] / len;
+    const ax = x1 + dx * t1, ay = y1 + dy * t1;
+    const bx2 = x2 - dx * t2 - dx / len * 3, by2 = y2 - dy * t2 - dy / len * 3;
+    const cls = (e.forbidden ? " forb" : "") + (e.gap ? " gap" : "");
+    const w = Math.min(1 + Math.log2(e.n + 1), 3.5);
+    const title = F.states[e.a].v + " → " + F.states[e.b].v + " ×" +
+      e.n + (e.forbidden ? " — NOT DECLARED (each occurrence is a " +
+      "viol event)" : "") + (e.gap ? " — crossed an unobservable gap"
+      : "") + " · click = jump to its first occurrence";
+    parts.push('<path class="fse' + cls + '" stroke-width="' + w +
+      '" d="M' + ax + " " + ay + " Q" + mx + " " + my + " " + bx2 +
+      " " + by2 + '" data-goto="' + e.first + '"><title>' +
+      esc2(title) + "</title></path>");
+    const ang = Math.atan2(by2 - my, bx2 - mx);
+    const A = 6;
+    parts.push('<polygon class="fsah' + (e.forbidden ? " forb" : "") +
+      '" points="' +
+      (bx2 - A * Math.cos(ang - 0.45)) + "," +
+      (by2 - A * Math.sin(ang - 0.45)) + " " +
+      (bx2 - A * Math.cos(ang + 0.45)) + "," +
+      (by2 - A * Math.sin(ang + 0.45)) + " " + bx2 + "," + by2 +
+      '"/>');
+    parts.push('<text class="fset' + (e.forbidden ? " forb" : "") +
+      '" x="' + mx + '" y="' + (my - 2) + '" text-anchor="middle" ' +
+      'data-goto="' + e.first + '">×' + e.n +
+      (e.forbidden ? " ⚠" : "") + "</text>");
+  }
+  F.states.forEach((s, i) => {
+    const [x, y] = pos[i];
+    const share = Math.round(s.dwell / totalDwell * 100);
+    parts.push('<g class="fsn" data-fsn="' + i + '"><circle cx="' + x +
+      '" cy="' + y + '" r="' + rad[i] + '"/><text x="' + x + '" y="' +
+      (y + 3) + '">' + esc2(String(s.v).slice(0, 14)) + "</text>" +
+      '<text class="fsd" x="' + x + '" y="' + (y + rad[i] + 10) +
+      '" text-anchor="middle">' + share + "% dwell</text>" +
+      "<title>" + esc2(s.v) + " — " + s.dwell +
+      " event(s) of dwell (" + share + "%), first seen at event " +
+      (s.first + 1) + "</title></g>");
+  });
+  $("fsmdiag").innerHTML = '<svg width="' + W + '" height="' + H +
+    '" viewBox="0 0 ' + W + " " + H + '">' + parts.join("") + "</svg>";
+  $("fsmnote").textContent = "observed machine ⊆ true machine — a " +
+    "missing edge is never evidence of absence. " +
+    (F.declared ? F.viol
+      ? "⚠ " + F.viol + " transition(s) fell outside --fsm-declare — " +
+        "each is a viol event (amber pins, type:viol)."
+      : "every observed transition was declared."
+      : "no --fsm-declare file — the machine is mined, not checked.");
+}
+function updateFsm() {
+  if (!DATA.fsm || !fsmBox.open) return;
+  fsmBuild();
+  const cur = fsmStateAt(idx);
+  if (cur === fsmCur) return;
+  fsmCur = cur;
+  $("fsmdiag").querySelectorAll(".fsn.cur").forEach(el =>
+    el.classList.remove("cur"));
+  if (cur >= 0) {
+    const el = $("fsmdiag").querySelector('[data-fsn="' + cur + '"]');
+    if (el) el.classList.add("cur");
+    $("fsmcur").innerHTML = "current: <b>" +
+      esc2(DATA.fsm.states[cur].v) + "</b>";
+  } else {
+    $("fsmcur").innerHTML = "current: <b>(not yet observed)</b>";
+  }
+}
+if (DATA.fsm) {
+  fsmBox.style.display = "";
+  $("fsmstat").textContent = "· " + DATA.fsm.expr + " · " +
+    DATA.fsm.states.length + " states · " +
+    DATA.fsm.edges.reduce((a, e) => a + e.n, 0) + " transitions";
+  fsmBox.addEventListener("toggle", () => {
+    fsmCur = -1;
+    updateFsm();
+  });
+  $("fsmdiag").addEventListener("click", e => {
+    const g = e.target.closest("[data-goto]");
+    if (!g) return;
+    stop();
+    goto(parseInt(g.dataset.goto, 10));
+  });
+}
+
 /* #133: the call tree — not lanes, not a flame chart: the run's
    recursion as the tree it is, every node a frame carrying its
    arguments and return value, the cursor descending live. A pure
@@ -3556,6 +3727,7 @@ function render() {
   renderConsole();
   updateAnatomy();
   updateTree();
+  updateFsm();                           // #132: the token walks the machine
   if (gateOn) gateVars();                // #128: claimable names follow
   motionKeys();                          // #135: identity for the NEXT diff
   if (msnap) motionPlay(msnap);
@@ -3806,7 +3978,9 @@ $("scrub").max = Math.max(0, events.length - 1);
 /* trip markers: every NaN/Inf birth, amber; the first one glows.
    #73 invariant violations share the strip (and open it). */
 (function () {
-  if (!DATA.trip && !DATA.invariants) return;
+  // #132's derived viol events (undeclared transitions) share it too
+  if (!DATA.trip && !DATA.invariants && !(DATA.fsm && DATA.fsm.viol))
+    return;
   const box = document.createElement("div");
   box.id = "tripmarks";
   const total = Math.max(1, events.length - 1);

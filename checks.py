@@ -3081,6 +3081,116 @@ def _():
            "a single module carries no graph lens (nothing to rank)")
 
 
+@check("fsm: mined machine, forbidden splice, gap honesty (#132)")
+def _():
+    src = fixture("fsm132.py", (
+        "class Order:\n"
+        "    def __init__(self):\n"
+        "        self.status = 'new'\n"
+        "def advance(order, to):\n"
+        "    order.status = to\n"
+        "def process(order):\n"
+        "    advance(order, 'paid')\n"
+        "    advance(order, 'shipped')\n"
+        "    advance(order, 'delivered')\n"
+        "    advance(order, 'paid')\n"
+        "    advance(order, 'cancelled')\n"
+        "order = Order()\n"
+        "process(order)\n"
+        "print(order.status)\n"))
+    dec = fixture("fsm132.txt", (
+        "# the whiteboard lifecycle\n"
+        "new -> paid\n"
+        "paid -> shipped\n"
+        "shipped -> delivered\n"
+        "paid -> cancelled\n"))
+    p = run_trace(src, "--fsm", "order.status", "--fsm-declare", dec)
+    f = p["fsm"]
+    names = [s["v"] for s in f["states"]]
+    expect(names == ["new", "paid", "shipped", "delivered", "cancelled"],
+           f"states in first-seen order: {names}")
+    expect(all(s["dwell"] > 0 for s in f["states"]),
+           "every state must carry dwell")
+    ed = {(names[e["a"]], names[e["b"]]):
+          (e["n"], e["forbidden"]) for e in f["edges"]}
+    expect(ed == {("new", "paid"): (1, False),
+                  ("paid", "shipped"): (1, False),
+                  ("shipped", "delivered"): (1, False),
+                  ("delivered", "paid"): (1, True),
+                  ("paid", "cancelled"): (1, False)},
+           f"the machine must be exact, refund edge forbidden: {ed}")
+    viols = [i for i, e in enumerate(p["events"]) if e["e"] == "viol"]
+    expect(len(viols) == 1 and f["viol"] == 1,
+           f"exactly one derived viol event: {viols}")
+    ve = p["events"][viols[0]]
+    expect("not declared" in ve["inv"] and ve.get("fn"),
+           f"the viol names the edge and its frame: {ve}")
+    prev = p["events"][viols[0] - 1]
+    expect("watch:order.status" in (prev.get("ch") or {}),
+           "the viol must sit right after the observing event")
+    obs_idx = [o[0] for o in f["obs"]]
+    expect(obs_idx == sorted(obs_idx) and f["obs"][0][1] == 0,
+           "observations strictly ordered, first state first")
+    # without a declare file: mined only — nothing forbidden, no viols
+    q = run_trace(src, "--fsm", "order.status", name="fsm132_free")
+    expect(q["fsm"]["viol"] == 0
+           and not any(e["forbidden"] for e in q["fsm"]["edges"])
+           and not any(e["e"] == "viol" for e in q["events"]),
+           "no declaration = a mined machine, never a checker")
+    # gap honesty: a state that DIES and returns changed crosses a gap
+    src2 = fixture("fsm132_gap.py", (
+        "class Box:\n"
+        "    pass\n"
+        "b = Box()\n"
+        "b.state = 'on'\n"
+        "b.state = 'off'\n"
+        "del b\n"
+        "x = 1\n"
+        "b = Box()\n"
+        "b.state = 'on'\n"
+        "print(b.state)\n"))
+    g = run_trace(src2, "--fsm", "b.state", name="fsm132_gap")
+    ge = {(g["fsm"]["states"][e["a"]]["v"],
+           g["fsm"]["states"][e["b"]]["v"]): e["gap"]
+          for e in g["fsm"]["edges"]}
+    expect(ge.get(("on", "off")) is False and ge.get(("off", "on")),
+           f"the transition across the del must wear the gap flag: {ge}")
+    # gates: one name only; declare needs fsm; fn granularity refused
+    r = subprocess.run([PY, os.path.join(HERE, "tracer.py"),
+                        "--fsm", "a", "--fsm", "b", src],
+                       capture_output=True, text=True, cwd=TMP,
+                       stdin=subprocess.DEVNULL, timeout=60)
+    expect(r.returncode == 2 and "ONE declared name" in r.stdout,
+           "--fsm binds one name")
+    r = subprocess.run([PY, os.path.join(HERE, "tracer.py"),
+                        "--fsm-declare", dec, src],
+                       capture_output=True, text=True, cwd=TMP,
+                       stdin=subprocess.DEVNULL, timeout=60)
+    expect(r.returncode == 2, "--fsm-declare without --fsm refused")
+    r = subprocess.run([PY, os.path.join(HERE, "tracer.py"),
+                        "--granularity", "fn", "--fsm", "order.status",
+                        src], capture_output=True, text=True, cwd=TMP,
+                       stdin=subprocess.DEVNULL, timeout=60)
+    expect(r.returncode == 2 and "LINE event" in r.stdout,
+           "--fsm at fn granularity refused with the reason")
+    # #63 aggregation: two runs, one machine, counts doubled
+    rout = os.path.join(TMP, "runs_fsm132.html")
+    subprocess.run([PY, os.path.join(HERE, "tracer.py"),
+                    "--runs", "2", "--granularity", "line",
+                    "--fsm", "order.status", "--fsm-declare", dec,
+                    "--out", rout, src],
+                   capture_output=True, text=True, cwd=TMP,
+                   stdin=subprocess.DEVNULL, timeout=300)
+    with open(rout, encoding="utf-8") as fh:
+        mm = re.search(r'<script id="runs-data" type="application/'
+                       r'json">(.*?)</script>', fh.read(), re.S)
+    rf = json.loads(mm.group(1).replace("<\\/", "</")).get("fsm")
+    expect(rf and rf["runs"] == 2
+           and rf["edges"]["delivered -> paid"]["n"] == 2
+           and rf["edges"]["delivered -> paid"]["forbidden"],
+           f"two runs must merge into ONE machine, counts summed: {rf}")
+
+
 # ---------------------------------------------------------------- runner
 
 def main():

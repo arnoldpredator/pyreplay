@@ -1024,6 +1024,12 @@ window.addEventListener("unhandledrejection", ev => {
     " — please report this message.";
 });
 window.onerror = function (msg, src, lineno) {
+  // the "template opened directly" halt below THROWS on purpose to
+  // stop boot — it's an expected state with its own calm note, not a
+  // bug to report. Don't paint the alarm banner over that note.
+  if (typeof msg === "string" &&
+      msg.indexOf("template opened directly") >= 0)
+    return false;
   const b = $("banner");
   b.style.display = "block";
   b.textContent = "Viewer error: " + msg + " (line " + lineno + ")\n" +

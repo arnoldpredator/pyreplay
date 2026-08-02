@@ -1125,9 +1125,14 @@ excluded). Read the honesty on the banner: it's recorded under
 tracemalloc's ~2× overhead, the process totals include the tracer's
 event buffer, and it sees Python-level allocations only — a
 numpy/torch tensor allocated in C reads ~zero here while RSS climbs
-(that's Memray's job). Works at `fn` granularity too. The map's
-BYTES-per-module palette is the stated next step; the data already
-rides in the trace.
+(that's Memray's job). Works at `fn` granularity too. And the bytes
+land on the map: build it with `--trace` of a `--memory` run and
+switch the lens to **memory (bytes)** (or open `map.html#lens=memory`)
+— modules tint by share of the largest in-scope snapshot, with byte
+badges and the between-snapshots caveat in every tooltip. Several
+runs adopted together keep the largest snapshot whole and name the
+trace it came from — one distribution is one moment of one run, so
+snapshots are never mixed into a state that never existed.
 
 **Input shrinking (`--shrink`).** A huge input that crashes is a
 chore; the tiny core that still crashes is a diagnosis. Pipe the

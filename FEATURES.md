@@ -3301,14 +3301,24 @@ Statistics over many runs: rates instead of anecdotes, divergences instead of gu
   `--black-box` (the ring would drift the sample indices) and
   `--backend monitoring` (the sampler rides the settrace dispatcher)
   are refused with reasons.
-- **Stated v1 remainder:** the map's third palette (BYTES ALLOCATED
-  per module) — the per-module distribution already ships in the
-  trace payload and prints at exit; painting it onto the map is the
-  follow-up.
+- **The map's BYTES palette (the v1 remainder, landed).** Map with
+  `--trace` of a `--memory` run (auto-heat adopts them too) and the
+  lens select gains **memory (bytes)**: modules tinted by share of
+  the largest in-scope snapshot, 📈 byte badges and tooltips carrying
+  the between-snapshots caveat, folded packages summing member bytes
+  (additive within ONE snapshot). Aggregating several runs adopts the
+  single largest snapshot WHOLE and names its trace — a distribution
+  is one moment of one run; summing moments would paint a state that
+  never existed. Bytes in files outside the map are counted, never
+  guessed onto a module. `map.html#lens=memory` deep-links the
+  palette (any lens name works).
 - **Screenshot** — the growth curve under the scrubber and the 📈
-  banner with the peak and the top module at your code's peak.
+  banner with the peak and the top module at your code's peak; and
+  the map wearing the bytes palette, the retainer module glowing.
 
   [![Feature 122 — memory calorimetry](screenshots/r6-memory.png)](screenshots/r6-memory.png)
+
+  [![Feature 122 — the bytes palette on the map](screenshots/122-mem-palette.png)](screenshots/122-mem-palette.png)
 
 ### 123. Mutation-survivor forensics — why did this mutant live?
 - **Measured:** the bridge uses **mutmut as-is** (never rebuilt): the

@@ -211,6 +211,7 @@
       <option value="churn">churn × cx</option>
       <option value="risk">risk (× heat)</option>
       <option value="graph">graph (structure)</option>
+      <option value="memory">memory (bytes)</option>
     </select></label>
   <label class="toggle" id="apileaklbl" style="display:none"
     title="#100: paint encapsulation leaks — outside imports of _private modules/names and names outside a declared __all__ — dashed red">
@@ -429,6 +430,9 @@ function buildNote(allCycles) {
       (h.unmatched ? ", " + h.unmatched.toLocaleString() +
         " events outside this map" : "") +
       ' · <span class="hlegend"></span> 0→100% of run' +
+      (h.memory && $("lens").value !== "memory"
+        ? " · 📈 bytes palette recorded — switch the lens to memory"
+        : "") +
       (h.importCost && Object.keys(h.importCost).length
         ? " · ⚙ " + fmtCost(Object.values(h.importCost)
             .reduce((a, b) => a + b, 0)) +
@@ -440,6 +444,23 @@ function buildNote(allCycles) {
           (h.darkTotal > h.dark.length
             ? " (top " + h.dark.length + " drawn)" : "") + "</span>"
         : ""));
+  }
+  if (DATA.heat && DATA.heat.memory && $("lens").value === "memory") {
+    // after the heat unshift so the ACTIVE lens line leads the banner
+    const M = DATA.heat.memory;
+    const fmtB = n => { for (const u of ["B", "KB", "MB"]) {
+      if (Math.abs(n) < 1024) return (u === "B" ? Math.round(n)
+        : n.toFixed(1)) + " " + u; n /= 1024; } return n.toFixed(1) + " GB"; };
+    bits.unshift('memory lens: ' +
+      '<span style="color:#61afef">📈 IN-SCOPE BYTES</span>' +
+      " at the largest sampled snapshot — " +
+      fmtB(M.at || 0) + " across " +
+      Object.keys(M.perMod || {}).length + " module(s), from " +
+      esc(M.from || "") +
+      (M.outside ? " · " + fmtB(M.outside) + " outside this map" : "") +
+      " — tint = share of that snapshot. Python-level "
+      + "(C-extension memory invisible); the tracer's own buffer is "
+      + "out of scope; the exact peak may fall between snapshots.");
   }
   $("note").innerHTML = bits.join(" · ");
 }
@@ -456,9 +477,10 @@ if (DATA.layers) DATA.layers.viol.forEach(v =>
   LVIOL.set(v.s + "|" + v.d, v.rule));
 if (LEAKS.size) $("apileaklbl").style.display = "";
 $("showapileaks").onchange = render;
-if (DATA.churn || DATA.graphlens) {   // #95 lenses need history;
-  $("lenslbl").style.display = "";    // #129's graph lens is static
-  if (!DATA.heat)
+const HASMEM = !!(DATA.heat && DATA.heat.memory);   // #6 remainder
+if (DATA.churn || DATA.graphlens || HASMEM) {   // #95 lenses need
+  $("lenslbl").style.display = "";    // history; #129's graph lens and
+  if (!DATA.heat)                     // the bytes palette are per-map
     $("lens").querySelector('option[value="risk"]').disabled = true;
   if (!DATA.churn) {
     $("lens").querySelector('option[value="churn"]').disabled = true;
@@ -466,6 +488,8 @@ if (DATA.churn || DATA.graphlens) {   // #95 lenses need history;
   }
   if (!DATA.graphlens)
     $("lens").querySelector('option[value="graph"]').disabled = true;
+  if (!HASMEM)
+    $("lens").querySelector('option[value="memory"]').disabled = true;
 }
 
 /* ---------- grouping: modules fold into package boxes ----------
@@ -704,9 +728,15 @@ function render() {
   // #95 crime lens: churn × complexity (× heat under "risk"). Scores
   // are normalized by the repo's own maxima — the brightest box is
   // THIS codebase's top offender, not an absolute claim.
-  const lens = (DATA.churn || DATA.graphlens) ? $("lens").value : "heat";
+  const lens = (DATA.churn || DATA.graphlens ||
+    (DATA.heat && DATA.heat.memory)) ? $("lens").value : "heat";
   const CH = (lens === "churn" || lens === "risk") && DATA.churn
     ? DATA.churn.files : null;
+  // #6 remainder: the BYTES palette — one in-scope tracemalloc
+  // snapshot (the largest sampled), painted as share of itself
+  const MEM = lens === "memory" && DATA.heat && DATA.heat.memory
+    ? DATA.heat.memory : null;
+  const memAt = MEM ? Math.max(1, MEM.at || 0) : 1;
   // #129: the graph lens — tint by betweenness, borders by community
   const GB = lens === "graph" ? DATA.graphlens : null;
   let maxB = 1;
@@ -753,8 +783,8 @@ function render() {
     [0.75, 28, 92, 48, 0.96],
     [1.00, 8, 92, 46, 1.00],
   ];
-  const heatFill = n => {
-    const s = Math.min(1, n / totalEv);
+  const stopFill = share => {
+    const s = Math.min(1, share);
     let a = HEAT_STOPS[0], b = HEAT_STOPS[HEAT_STOPS.length - 1];
     for (let i = 1; i < HEAT_STOPS.length; i++) {
       if (s <= HEAT_STOPS[i][0]) { a = HEAT_STOPS[i - 1]; b = HEAT_STOPS[i]; break; }
@@ -763,6 +793,18 @@ function render() {
     const mix = j => a[j] + (b[j] - a[j]) * t;
     return "hsl(" + mix(1).toFixed(0) + " " + mix(2).toFixed(0) + "% " +
       mix(3).toFixed(1) + "% / " + mix(4).toFixed(2) + ")";
+  };
+  const heatFill = n => stopFill(n / totalEv);
+  // memory lens: same weather language, share of the snapshot itself
+  const memBytes = m => MEM ? (MEM.perMod || {})[m.id] || 0 : 0;
+  const memFill = b => stopFill(b / memAt);
+  const fmtBytes = n => {
+    for (const u of ["B", "KB", "MB"]) {
+      if (Math.abs(n) < 1024) return (u === "B" ? Math.round(n)
+        : n.toFixed(1)) + " " + u;
+      n /= 1024;
+    }
+    return n.toFixed(1) + " GB";
   };
 
   // selected class: its transitive local ancestors + inheritance edges
@@ -1061,6 +1103,10 @@ function render() {
     // #95: a folded package under the crime lens wears its WORST
     // member's score — a fold must never hide the top offender
     const pkgCrime = CH ? Math.max(0, ...g.members.map(crime)) : 0;
+    // memory lens: a folded package carries the SUM of member bytes
+    // (bytes are additive within one snapshot — unlike moments)
+    const pkgMem = MEM
+      ? g.members.reduce((a, m) => a + memBytes(m), 0) : 0;
     const cls = "pkg" + (isF ? " folded" : "") +
       (CH ? (pkgCrime === 0 ? " cold" : "")
           : (H && !rn ? " cold" : "")) +
@@ -1070,7 +1116,10 @@ function render() {
     svgPkg += '<g class="' + cls + '" data-pkg="' + esc(g.id) + '">' +
       '<rect x="' + gg.x + '" y="' + gg.y + '" width="' + gg.w +
       '" height="' + gg.h + '" rx="9"' +
-      (CH
+      (MEM
+        ? (isF && pkgMem > 0
+          ? ' style="fill:' + memFill(pkgMem) + '"' : "")
+        : CH
         ? (isF && pkgCrime > 0
           ? ' style="fill:' + heatFill(pkgCrime * totalEv) + '"' : "")
         : isF && H && rn
@@ -1128,7 +1177,10 @@ function render() {
     svg += '<g class="' + cls + '" data-mod="' + esc(m.id) + '">' +
       '<rect x="' + g.x + '" y="' + g.y + '" width="' + g.w +
       '" height="' + g.h + '" rx="6"' +
-      (GB
+      (MEM
+        ? (memBytes(m) > 0
+          ? ' style="fill:' + memFill(memBytes(m)) + '"' : "")
+        : GB
         ? (bScore(m) > 0
           ? ' style="fill:' + graphFill(bScore(m)) + '"' : "")
         : CH
@@ -1141,10 +1193,13 @@ function render() {
       '<text class="mloc" x="' + (g.x + 10) + '" y="' + (g.y + 31) + '">' +
       (m.err ? "parse error" : m.loc + " loc · " + m.defs.length + " defs" +
        (DEADN[m.id] ? " · 👻" + DEADN[m.id] : "") +
-       (mh ? " · " + (heatKind === "time"
-         ? fmtUs(mh.tSelf || 0)
-         : mh.n.toLocaleString() + " ev") + " (" +
-        (modShare(mh) / totalEv * 100).toFixed(0) + "%)" : "")) +
+       (MEM && memBytes(m)
+         ? " · 📈 " + fmtBytes(memBytes(m)) + " (" +
+           (memBytes(m) / memAt * 100).toFixed(0) + "%)"
+         : mh ? " · " + (heatKind === "time"
+           ? fmtUs(mh.tSelf || 0)
+           : mh.n.toLocaleString() + " ev") + " (" +
+          (modShare(mh) / totalEv * 100).toFixed(0) + "%)" : "")) +
       (sccIndex[m.id] !== undefined
         ? ' <tspan fill="#ff6b6b" font-weight="700">⭯</tspan>' : "") +
       (m.dynimp
@@ -1152,6 +1207,13 @@ function render() {
       (m.shadows && m.shadows.length
         ? ' <tspan fill="#e5c07b" font-weight="700">👥</tspan>' : "") +
       "</text><title>" + esc(m.path +
+        (MEM && memBytes(m)
+          ? "\n📈 " + fmtBytes(memBytes(m)) + " in-scope at the "
+            + "largest sampled snapshot (" +
+            (memBytes(m) / memAt * 100).toFixed(1) + "% of " +
+            fmtBytes(memAt) + ") — Python-level; the exact peak may "
+            + "fall between snapshots"
+          : "") +
         (GB
           ? "\n⛓ betweenness " + ((GB.between || {})[m.id] || 0) +
             " (static import graph)" +
@@ -1698,6 +1760,16 @@ $("showcyc").onchange = render;
 $("showheat").onchange = render;
 $("showdark").onchange = render;
 $("lens").onchange = () => { buildNote(false); render(); };
+// a shareable lens (the deep-link doctrine, map edition): #lens=memory
+// opens the map already wearing that palette — ignored when the lens
+// isn't available for this map
+{
+  const mh = (location.hash.match(/lens=([a-z]+)/) || [])[1];
+  if (mh) {
+    const o = $("lens").querySelector('option[value="' + mh + '"]');
+    if (o && !o.disabled) { $("lens").value = mh; buildNote(false); }
+  }
+}
 /* one spotlight at a time: search, a cycle, or a walls row — every
    entry point clears the others, and the note-bar link state follows */
 function setCycleSel(i) {

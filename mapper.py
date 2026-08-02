@@ -688,10 +688,29 @@ def load_heat(trace_path, modules):
             k -= 1
             scanned += 1
     total = abs_ts if kind == "time" else len(events)
+    # #6 remainder: --memory traces carry a per-file byte distribution
+    # (in-scope bytes at the largest sampled snapshot). Map the rel
+    # paths onto modules with the same matcher the events use; bytes in
+    # files outside this map are COUNTED, never guessed onto a module.
+    mem = None
+    m_ = data.get("memory")
+    if m_ and m_.get("perFile"):
+        per_mod, outside = {}, 0
+        for f, b in m_["perFile"].items():
+            mm = mod_for(f)
+            if mm is not None:
+                per_mod[mm["id"]] = per_mod.get(mm["id"], 0) + b
+            else:
+                outside += b
+        if per_mod or outside:
+            mem = {"perMod": per_mod,
+                   "at": m_.get("perFileAt") or 0,
+                   "peak": m_.get("peak", 0), "outside": outside,
+                   "from": os.path.basename(trace_path)}
     return {"trace": os.path.basename(trace_path), "events": len(events),
             "unmatched": unmatched, "mods": heat, "kind": kind,
             "xmod": xmod, "importCost": imp_cost, "script": script,
-            "total": max(1, total)}
+            "memory": mem, "total": max(1, total)}
 
 
 def aggregate_heat(heats):
@@ -730,12 +749,21 @@ def aggregate_heat(heats):
     for h in heats:   # #99: import cost sums across adopted runs
         for k, us in h.get("importCost", {}).items():
             imp_cost[k] = imp_cost.get(k, 0) + us
+    # #6 remainder: a byte distribution is ONE moment of ONE run —
+    # summing snapshots from different runs would paint a state that
+    # never existed. Adopt the run with the largest in-scope snapshot
+    # whole; its "from" names which trace the palette speaks for.
+    mem = None
+    for h in heats:
+        hm = h.get("memory")
+        if hm and (mem is None or hm.get("at", 0) > mem.get("at", 0)):
+            mem = hm
     return {"trace": f"{len(heats)} traces: "
             + ", ".join(h["trace"] for h in heats),
             "events": sum(h["events"] for h in heats),
             "unmatched": sum(h["unmatched"] for h in heats),
             "mods": mods, "kind": kind, "script": heats[0]["script"],
-            "xmod": xmod, "importCost": imp_cost,
+            "xmod": xmod, "importCost": imp_cost, "memory": mem,
             "total": max(1, total)}
 
 
@@ -1463,6 +1491,22 @@ def main(argv):
                       f"{heat['trace']}, {len(heat['mods'])} modules "
                       f"touched, {heat['unmatched']} events outside "
                       f"this map")
+                if heat.get("memory"):
+                    hm = heat["memory"]
+
+                    def _hb(n):
+                        for u in ("B", "KB", "MB"):
+                            if abs(n) < 1024:
+                                return (f"{n:.0f} {u}" if u == "B"
+                                        else f"{n:.1f} {u}")
+                            n /= 1024
+                        return f"{n:.1f} GB"
+                    print(f"memory palette: {_hb(hm.get('at', 0))} "
+                          f"in-scope across {len(hm['perMod'])} "
+                          f"module(s) from {hm['from']}"
+                          + (f", {_hb(hm['outside'])} outside this map"
+                             if hm.get("outside") else "")
+                          + " — lens → memory (bytes)")
                 if heat_out:
                     with open(heat_out, "w", encoding="utf-8") as fh:
                         json.dump(heat, fh, indent=1)

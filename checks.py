@@ -5535,6 +5535,81 @@ def _():
         expect(probe in tpl, f"budget surface missing: {probe}")
 
 
+@check("memory palette: bytes-per-module on the map, snapshots "
+       "never mixed (#6 remainder)")
+def _():
+    # the stated --memory v1 remainder: perFile ships in the payload;
+    # the map paints it. One snapshot is ONE moment — aggregation must
+    # adopt the largest whole, never sum across runs.
+    mdir = os.path.join(TMP, "memmap")
+    os.makedirs(mdir, exist_ok=True)
+    with open(os.path.join(mdir, "helper.py"), "w") as fh:
+        fh.write("CACHE = []\n\n\ndef load(n):\n"
+                 "    CACHE.extend(list(range(n)))\n"
+                 "    return len(CACHE)\n")
+    with open(os.path.join(mdir, "main.py"), "w") as fh:
+        fh.write("import helper\n\n\ndef work():\n"
+                 "    return helper.load(120000)\n\n\n"
+                 "print(work())\n")
+    tr_out = os.path.join(TMP, "memmap_trace.html")
+    subprocess.run(
+        [PY, os.path.join(HERE, "tracer.py"), "--memory", "--out",
+         tr_out, os.path.join(mdir, "main.py")],
+        capture_output=True, text=True, cwd=mdir,
+        stdin=subprocess.DEVNULL, timeout=120)
+    expect(os.path.exists(tr_out), "memory trace not produced")
+
+    out = os.path.join(TMP, "memmap_map.html")
+    r = subprocess.run(
+        [PY, os.path.join(HERE, "mapper.py"), "--out", out,
+         "--trace", tr_out, mdir],
+        capture_output=True, text=True, cwd=TMP,
+        stdin=subprocess.DEVNULL, timeout=120)
+    expect("memory palette:" in r.stdout,
+           f"the terminal must announce the palette: {r.stdout[-400:]}")
+    p = payload(out)
+    mem = (p.get("heat") or {}).get("memory")
+    expect(mem is not None, "heat.memory must ride the map payload")
+    expect(mem["from"] == os.path.basename(tr_out),
+           f"the palette names its trace: {mem.get('from')}")
+    pm = mem["perMod"]
+    expect(pm.get("helper", 0) > 500_000,
+           f"the retainer module carries the bytes: {pm}")
+    expect(pm.get("helper", 0) > pm.get("main", 10 ** 12) or
+           "main" not in pm,
+           f"helper must outweigh main: {pm}")
+    expect(mem["at"] >= max(pm.values()), "in-scope total >= any module")
+
+    # aggregation: the largest in-scope snapshot wins WHOLE
+    sys.path.insert(0, HERE)
+    import importlib
+    import mapper as _mp
+    importlib.reload(_mp)
+    h1 = {"trace": "a", "events": 10, "unmatched": 0, "mods": {},
+          "kind": "counts", "script": "s", "xmod": {}, "importCost": {},
+          "memory": {"perMod": {"m": 100}, "at": 100, "peak": 0,
+                     "outside": 0, "from": "a"}, "total": 10}
+    h2 = {"trace": "b", "events": 10, "unmatched": 0, "mods": {},
+          "kind": "counts", "script": "s", "xmod": {}, "importCost": {},
+          "memory": {"perMod": {"m": 60, "n": 70}, "at": 130, "peak": 0,
+                     "outside": 0, "from": "b"}, "total": 10}
+    agg = _mp.aggregate_heat([h1, h2])
+    expect(agg["memory"]["from"] == "b" and agg["memory"]["at"] == 130
+           and agg["memory"]["perMod"] == {"m": 60, "n": 70},
+           f"largest snapshot adopted whole, never a mix: "
+           f"{agg['memory']}")
+    h3 = dict(h1, memory=None)
+    expect(_mp.aggregate_heat([h3, h2])["memory"]["from"] == "b",
+           "runs without --memory never block the palette")
+
+    with open(os.path.join(HERE, "map_template.html"),
+              encoding="utf-8") as fh:
+        tpl = fh.read()
+    for probe in ('option value="memory"', "IN-SCOPE BYTES",
+                  "lens=([a-z]+)", "memFill", "share of that snapshot"):
+        expect(probe in tpl, f"palette surface missing: {probe}")
+
+
 # ---------------------------------------------------------------- runner
 
 def main():

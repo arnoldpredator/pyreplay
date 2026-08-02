@@ -154,7 +154,7 @@ which for a leaked file may never come) — the leak test is instead
 "a tracked handle whose `.closed` is still False at trace end", so
 only provably-open resources are flagged.
 
-### 6. Memory heat (calorimetry) — SHIPPED (v1)
+### 6. Memory heat (calorimetry) — SHIPPED
 Now **catalog #122** (`--memory`): `tracemalloc` sampled through the
 run into a growth strip-chart under the scrubber (current + peak
 high-water), with per-module bytes attributed from periodic
@@ -165,10 +165,11 @@ reads ~zero; Memray is the native specialist). One design choice
 worth recording: samples are a payload OVERLAY
 (`memory.samples = [[event_index, cur, peak]]`), not stream MEM
 events — a measurement isn't a program moment, and this keeps every
-other feature's event handling untouched. **Stated v1 remainder:**
-the map's third palette (BYTES per module) — `memory.perFile` ships
-in the payload already; painting it on the map is the next step. A
-good, self-contained contribution.
+other feature's event handling untouched. **The v1 remainder landed
+too:** the map's third palette — lens "memory (bytes)", tint = share
+of the largest in-scope snapshot, byte badges + tooltips, and
+multi-run aggregation adopts the largest snapshot WHOLE (one
+distribution is one moment of one run; snapshots never mix).
 
 ---
 

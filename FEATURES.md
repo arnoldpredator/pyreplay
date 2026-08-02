@@ -1203,6 +1203,26 @@ The right half of the screen: every value rendered by its shape, every change ma
 
   [![Feature 55 — windowing](screenshots/27-windowing.png)](screenshots/27-windowing.png)
 
+- **The global per-value budget (✂).** The per-level caps above bound
+  each nesting level, but object attributes are deliberately
+  depth-transparent and the cycle guard is path-local — so
+  graph-shaped data (a grid node whose `connections` hold nodes whose
+  `connections` hold nodes…) used to multiply those caps together:
+  measured at 193 KB single events and a 105 MB trace on a real
+  pathfinding library. Every top-level value (and every change
+  window) now carries one total budget (~8 KB): when it runs out,
+  descent stops and the value degrades to its repr **marked ✂**, with
+  the same mark on the top-level value and a `[✂ budget-cut]` note in
+  the explain bundle. Honesty rules: the cut is *announced at every
+  node where structure was withheld* (`bt` in the event data), leaf
+  fidelity is never cut (a primitive always shows whole), a plain
+  opaque that would repr anyway is never stamped, and values that fit
+  encode byte-identically to before. To see a cut region whole, step
+  to where the inner object is its own variable — a fresh value gets
+  a fresh budget.
+
+  [![Feature 55 — the per-value budget cutting a node graph, every cut marked ✂](screenshots/55-enc-budget.png)](screenshots/55-enc-budget.png)
+
 ### 56. Alternate views: grid · bars · graph · edges
 - **Measured:** shape detection on the encoded value: list-of-lists →
   grid; numeric list → bars; adjacency structures → graph; list of

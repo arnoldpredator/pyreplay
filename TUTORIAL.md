@@ -465,6 +465,16 @@ deepest thing that changed lights up:
   Limits: containers up to ~4096 elements are change-tracked; beyond
   that (and for deep mutations inside dict values), changes past the
   head may go unseen — this is a documented cost/honesty trade-off.
+- **Graph-shaped data and the ✂ mark**: object attributes are
+  deliberately depth-transparent, so a node whose attribute holds
+  nodes holding more nodes could multiply the caps above into
+  megabyte values. One total budget (~8 KB) now spans each recorded
+  value: where it runs out, descent stops and the spot shows its repr
+  with a **✂** (hover it for the rule). A ✂ on the value itself means
+  "somewhere inside, structure was withheld". Primitives are never
+  cut, values that fit are untouched, and the fix when you care about
+  a cut region is free: step to an event where that inner object is a
+  variable of its own — a fresh value gets a fresh budget.
 
 **Every variable has a navigable life.** Each row in the Variables
 panel shows ‹ 3/6 › — its change ordinal and total within this frame.

@@ -5465,6 +5465,76 @@ def _():
         expect(probe in tpl, f"decision-table contract missing: {probe}")
 
 
+@check("enc budget: graph blowup capped, cut announced, leaves whole")
+def _():
+    # the pathfinding-expedition finding: object attrs are depth-
+    # transparent and the cycle guard is path-local, so graph-shaped
+    # data multiplied per-level caps into 100+ MB traces. One global
+    # per-value budget must bound it — and SAY so.
+    sys.path.insert(0, HERE)
+    import importlib
+    import tracer as _tr
+    importlib.reload(_tr)
+
+    class Node:
+        def __init__(s, i):
+            s.i, s.walkable, s.links = i, True, []
+
+    nodes = [Node(i) for i in range(30)]
+    for a in nodes:                       # shared refs, no cycles per path
+        a.links = [n for n in nodes if n is not a][:6]
+
+    enc = _tr.encode(nodes)
+    raw = json.dumps(enc)
+    expect(len(raw) < 4 * _tr.ENC_BUDGET,
+           f"a 30-node graph list must stay near ENC_BUDGET "
+           f"(approx debits allow slack): {len(raw)} bytes")
+    expect(enc.get("bt") == 1, "the top-level value announces the cut")
+
+    def cuts(e):
+        if not isinstance(e, dict):
+            return 0
+        own = 1 if (e.get("bt") and e.get("t") == "o") else 0
+        for c in (e.get("v") or []):
+            own += cuts(c[1] if isinstance(c, list) else c)
+        return own
+    expect(cuts(enc) > 0, "the exact cut nodes carry bt themselves")
+    expect(_tr.encode(nodes) == enc,
+           "budget truncation is deterministic — no phantom diffs")
+
+    healthy = _tr.encode([1, [2, 3], {"a": "x" * 300}])
+    expect("bt" not in json.dumps(healthy),
+           "modest values carry no budget mark")
+    expect(_tr.encode(nodes[0]).get("t") == "obj",
+           "one node alone fits: the budget cuts graphs, not objects")
+    w = _tr.encode_window(nodes, 0, 25)
+    expect(w.get("bt") == 1 and len(json.dumps(w)) < 4 * _tr.ENC_BUDGET,
+           "one budget spans a whole window")
+
+    # end-to-end: the recorded change of a graph variable carries bt
+    src = fixture("encb.py", (
+        "class N:\n"
+        "    def __init__(s, i):\n"
+        "        s.i = i\n"
+        "        s.links = []\n"
+        "nodes = [N(i) for i in range(30)]\n"
+        "for a in nodes:\n"
+        "    a.links = [n for n in nodes if n is not a][:6]\n"
+        "big = nodes\n"
+        "big = nodes[1:]\n"))
+    p = run_trace(src, name="encb")
+    stamped = [e for e in p["events"]
+               for enc2 in (e.get("ch") or {}).values()
+               if isinstance(enc2, dict) and enc2.get("bt")]
+    expect(stamped, "a traced graph assignment records bt on its change")
+
+    with open(os.path.join(HERE, "replayer_template.html"),
+              encoding="utf-8") as fh:
+        tpl = fh.read()
+    for probe in ("btmark", "function btMark", "✂", "budget-cut"):
+        expect(probe in tpl, f"budget surface missing: {probe}")
+
+
 # ---------------------------------------------------------------- runner
 
 def main():

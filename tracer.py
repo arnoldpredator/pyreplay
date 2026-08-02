@@ -364,6 +364,13 @@ MAX_ITEMS = 30    # container elements recorded per level
 MAX_DEPTH = 3     # nesting levels recorded before falling back to repr
 FP_LIMIT = 4096   # max container size we shadow-copy for change detection
 MAX_WINDOW = 60   # max elements encoded in a change-centered window
+ENC_BUDGET = 8192  # approx bytes ONE encoded value may occupy in total —
+                   # the local caps above bound each level, but object
+                   # attributes are depth-transparent and the cycle guard
+                   # is path-local, so graph-shaped data multiplies levels
+                   # together (measured: a 30-node grid list = 59 KB,
+                   # single events 193 KB, traces 105 MB). The budget is
+                   # the house cap doctrine one level up: total per value.
 
 
 _SKIP_INSTANCE = (type, types.ModuleType, types.FunctionType,
@@ -434,7 +441,7 @@ def _shape_meta(value):
     return meta
 
 
-def encode(value, depth=MAX_DEPTH, _objs=None):
+def encode(value, depth=MAX_DEPTH, _objs=None, _budget=None):
     """Structured, size-capped encoding of any Python value.
 
     The viewer picks a semantic renderer by the "t" tag:
@@ -446,27 +453,51 @@ def encode(value, depth=MAX_DEPTH, _objs=None):
     Objects are depth-TRANSPARENT (attributes are first-class data, not
     a nesting level); _objs carries the ids of instances currently being
     encoded so self-referential objects can't recurse forever.
+
+    Each top-level call also carries a TOTAL budget (_budget =
+    [approx_bytes_left, hit_flag], seeded with ENC_BUDGET): depth
+    transparency plus the path-local cycle guard let graph-shaped data
+    multiply the per-level caps together, so the whole value gets one
+    global cap too. When it runs out, DESCENT stops — structured values
+    degrade to their repr stamped "bt": 1 (budget-truncated), and the
+    top-level encoding is stamped "bt": 1 so the viewer can announce
+    the cut. Leaf fidelity is never cut, only depth; a plain opaque
+    that would repr anyway is never stamped.
     """
+    root = _budget is None
+    if root:
+        _budget = [ENC_BUDGET, False]
     try:
         cls = type(value).__name__
         if value is None or isinstance(value, (int, float, bool, complex)):
-            return {"t": "p", "c": cls, "v": safe_repr(value)}
+            v = safe_repr(value)
+            _budget[0] -= 24 + len(v)
+            return {"t": "p", "c": cls, "v": v}
         if isinstance(value, str):
             v = value if len(value) <= MAX_REPR else value[:MAX_REPR] + "…"
+            _budget[0] -= 24 + len(v)
             return {"t": "s", "c": cls, "v": v}
-        if depth > 0:
+        cut = False   # structured value NOT descended because budget hit
+        if depth > 0 and _budget[0] > 0:
             if isinstance(value, (bytes, bytearray)):
                 # mutable byte buffers: render as int cells like a list,
                 # so index assignments are visible (repr truncation hid them)
+                head = value[:MAX_ITEMS]
+                _budget[0] -= 24 + 8 * len(head)
                 return {"t": "list", "c": cls, "n": len(value),
                         "v": [{"t": "p", "c": "int", "v": str(b)}
-                              for b in value[:MAX_ITEMS]]}
+                              for b in head]}
             if isinstance(value, (list, tuple)):
-                return {"t": "list" if isinstance(value, list) else "tuple",
-                        "c": cls, "n": len(value),
-                        "v": [encode(x, depth - 1, _objs)
-                              for x in value[:MAX_ITEMS]]}
+                _budget[0] -= 24
+                enc = {"t": "list" if isinstance(value, list) else "tuple",
+                       "c": cls, "n": len(value),
+                       "v": [encode(x, depth - 1, _objs, _budget)
+                             for x in value[:MAX_ITEMS]]}
+                if root and _budget[1]:
+                    enc["bt"] = 1
+                return enc
             if isinstance(value, dict):
+                _budget[0] -= 24
                 pairs = []
                 seen = {}
                 for i, (k, v) in enumerate(value.items()):
@@ -477,12 +508,20 @@ def encode(value, depth=MAX_DEPTH, _objs=None):
                     seen[ks] = dup
                     if dup > 1:   # truncated reprs may collide: disambiguate
                         ks = f"{ks} #{dup}"
-                    pairs.append([ks, encode(v, depth - 1, _objs)])
-                return {"t": "dict", "c": cls, "n": len(value), "v": pairs}
+                    _budget[0] -= 8 + len(ks)
+                    pairs.append([ks, encode(v, depth - 1, _objs, _budget)])
+                enc = {"t": "dict", "c": cls, "n": len(value), "v": pairs}
+                if root and _budget[1]:
+                    enc["bt"] = 1
+                return enc
             if isinstance(value, (set, frozenset)):
-                return {"t": "set", "c": cls, "n": len(value),
-                        "v": [encode(x, depth - 1, _objs)
-                              for x, _ in zip(value, range(MAX_ITEMS))]}
+                _budget[0] -= 24
+                enc = {"t": "set", "c": cls, "n": len(value),
+                       "v": [encode(x, depth - 1, _objs, _budget)
+                             for x, _ in zip(value, range(MAX_ITEMS))]}
+                if root and _budget[1]:
+                    enc["bt"] = 1
+                return enc
             try:
                 # class instances: expose their attributes — that's where
                 # OOP code keeps its data (self.adj_list, self.n, ...)
@@ -495,14 +534,34 @@ def encode(value, depth=MAX_DEPTH, _objs=None):
                 if oid in objs:   # cycle: this instance is an ancestor
                     return {"t": "o", "c": cls, "v": safe_repr(value)}
                 objs = objs | {oid}
+                _budget[0] -= 24
                 pairs = []
                 for k, v in attrs[:MAX_ITEMS]:
-                    pairs.append([k, encode(v, depth, objs)])
+                    _budget[0] -= 8 + len(k)
+                    pairs.append([k, encode(v, depth, objs, _budget)])
                 enc = {"t": "obj", "c": cls, "n": len(attrs),
                        "v": pairs}
                 enc.update(_shape_meta(value))   # #83: pandas-style
+                if root and _budget[1]:
+                    enc["bt"] = 1
                 return enc
+        elif depth > 0:
+            # depth remains but the value's total budget is spent — a
+            # structured value here is being CUT, and must say so. A
+            # plain opaque would repr regardless: no stamp, no lie.
+            if isinstance(value, (bytes, bytearray, list, tuple,
+                                  dict, set, frozenset)):
+                cut = True
+            else:
+                try:
+                    cut = _instance_attrs(value) is not None
+                except Exception:
+                    cut = False
         enc = {"t": "o", "c": cls, "v": safe_repr(value)}
+        _budget[0] -= 24 + len(enc["v"])
+        if cut:
+            _budget[1] = True
+            enc["bt"] = 1
         enc.update(_shape_meta(value))           # #83: numpy/torch
         return enc
     except Exception:
@@ -633,10 +692,14 @@ def encode_window(value, lo, hi, chi=None):
     """Encode value[lo:hi] with an "off" marker so the viewer can label
     real indices, plus "chi": the authoritative changed indices — window
     positions can't be compared across events, so the tracer must say
-    which elements changed."""
+    which elements changed. One ENC_BUDGET spans the whole window — 60
+    graph-shaped elements would otherwise multiply just like one value."""
+    b = [ENC_BUDGET, False]
     out = {"t": "tuple" if isinstance(value, tuple) else "list",
            "c": type(value).__name__, "n": len(value), "off": lo,
-           "v": [encode(x, MAX_DEPTH - 1) for x in value[lo:hi]]}
+           "v": [encode(x, MAX_DEPTH - 1, None, b) for x in value[lo:hi]]}
+    if b[1]:
+        out["bt"] = 1
     if chi:
         out["chi"] = chi
     return out
@@ -682,6 +745,7 @@ def windowed_value(value, enc, fp, old_fp):
                 return enc
             pairs, fill = [], []
             seen = {}
+            b = [ENC_BUDGET, False]   # one budget for the whole window
             for k, v in value.items():
                 ks = safe_repr(k)
                 dup = seen.get(ks, 0) + 1
@@ -689,13 +753,16 @@ def windowed_value(value, enc, fp, old_fp):
                 if dup > 1:      # truncated reprs may collide: disambiguate
                     ks = f"{ks} #{dup}"
                 if k in changed_keys and len(pairs) < MAX_WINDOW:
-                    pairs.append([ks, encode(v, MAX_DEPTH - 1)])
+                    pairs.append([ks, encode(v, MAX_DEPTH - 1, None, b)])
                 elif len(fill) < MAX_ITEMS:
-                    fill.append([ks, encode(v, MAX_DEPTH - 1)])
+                    fill.append([ks, encode(v, MAX_DEPTH - 1, None, b)])
             fill = fill[:max(0, MAX_ITEMS - len(pairs))]
-            return {"t": "dict", "c": type(value).__name__, "n": len(value),
-                    "nc": len(pairs),   # first nc pairs are the changed ones
-                    "v": pairs + fill}
+            out = {"t": "dict", "c": type(value).__name__, "n": len(value),
+                   "nc": len(pairs),   # first nc pairs are the changed ones
+                   "v": pairs + fill}
+            if b[1]:
+                out["bt"] = 1
+            return out
         if isinstance(fp, tuple) and fp and fp[0] == "obj" \
                 and isinstance(old_fp, tuple) and old_fp \
                 and old_fp[0] == "obj":
@@ -727,9 +794,13 @@ def windowed_value(value, enc, fp, old_fp):
                 if x not in added:
                     items.append(x)
                     budget -= 1
-            return {"t": "set", "c": type(value).__name__, "n": len(value),
-                    "na": n_added,   # first na items are the newly added
-                    "v": [encode(x, MAX_DEPTH - 1) for x in items]}
+            b = [ENC_BUDGET, False]   # one budget for the whole window
+            out = {"t": "set", "c": type(value).__name__, "n": len(value),
+                   "na": n_added,   # first na items are the newly added
+                   "v": [encode(x, MAX_DEPTH - 1, None, b) for x in items]}
+            if b[1]:
+                out["bt"] = 1
+            return out
     except Exception:
         pass
     return enc

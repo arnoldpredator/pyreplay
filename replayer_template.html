@@ -189,6 +189,8 @@
   .gly.shape { color: #56b6c2; }
   .gly.tflow { color: var(--warn); cursor: pointer; }
   .shmeta { color: #56b6c2; font-size: 11px; }
+  .btmark { color: #e5c07b; font-size: 11px; cursor: help;
+            margin-left: 3px; }
   .shmeta.vchanged { color: var(--changed-text); font-weight: 700; }
   .tripnote { cursor: pointer; text-decoration: underline;
     text-underline-offset: 2px; }
@@ -1753,6 +1755,18 @@ function titleAttr(enc) {
   return ' title="' + escapeHtml(label) + '"';
 }
 
+/* The tracer stamps "bt": 1 where the per-value encoding budget cut
+   DESCENT (and on the top-level value that contains such a cut) —
+   graph-shaped data multiplies the per-level caps, so one global cap
+   bounds the whole value. The mark says structure was withheld, not
+   changed: recorded truth stays recorded truth. */
+function btMark(enc) {
+  return enc.bt ? '<span class="btmark" title="encoding budget hit: ' +
+    'structure beyond this point was not recorded (one value is capped ' +
+    'at ~8 KB total; graph-shaped data multiplies depth). Step to where ' +
+    'the inner value is its own variable to see it whole.">✂</span>' : "";
+}
+
 /* Highlighting philosophy: mark ONLY the deepest thing that changed.
    If an element is a container of the same type as before, recursion
    marks the leaf inside it; the containing boxes stay unmarked. */
@@ -1776,7 +1790,7 @@ function renderValue(enc, old) {
         "</span>";
     }
     return '<span class="pv' + cls + ch + '"' + titleAttr(enc) + ">" +
-      escapeHtml(text) + "</span>" + meta;
+      escapeHtml(text) + "</span>" + meta + btMark(enc);
   }
   if (CONT.has(enc.t) && enc.n === 0) {
     const ch = old !== undefined && sig(old) !== sig(enc) ? " vchanged" : "";
@@ -1809,7 +1823,7 @@ function renderValue(enc, old) {
       rows += '<div class="drow more">+' + (enc.n - enc.v.length) +
         " more</div>";
     return '<span class="cont dict"' + titleAttr(enc) + ">" + rows +
-      "</span>";
+      "</span>" + btMark(enc);
   }
   if (enc.t === "set") return renderSet(enc, old);
   if (enc.t === "list" || enc.t === "tuple") {
@@ -1853,7 +1867,7 @@ function renderValue(enc, old) {
       cells += '<span class="cell more" title="' + after +
         ' more elements after this window">+' + after + "</span>";
     return '<span class="cont ' + enc.t + '"' + titleAttr(enc) + ">" +
-      cells + "</span>";
+      cells + "</span>" + btMark(enc);
   }
   if (enc.t === "dict") {
     const sameType = old !== undefined && old.t === "dict";
@@ -1886,7 +1900,7 @@ function renderValue(enc, old) {
       rows += '<div class="drow more">+' + (enc.n - enc.v.length) +
         " more</div>";
     return '<span class="cont dict"' + titleAttr(enc) + ">" + rows +
-      "</span>";
+      "</span>" + btMark(enc);
   }
   return "";
 }
@@ -2797,7 +2811,8 @@ function renderSet(enc, old) {
   if (enc.n > enc.v.length)
     cells += '<span class="cell more">+' + (enc.n - enc.v.length) +
       "</span>";
-  return '<span class="cont set"' + titleAttr(enc) + ">" + cells + "</span>";
+  return '<span class="cont set"' + titleAttr(enc) + ">" + cells +
+    "</span>" + btMark(enc);
 }
 
 /* ---------- variable life index ----------
@@ -5163,9 +5178,12 @@ function render() {
       const isCh = changed.has(k);
       const old = isCh && top.prevVals ? top.prevVals[k] : undefined;
       if (v && v.t === "obj") {
-        displayRows.push({ label: k, isCh,
-          enc: { t: "o", c: v.c, v: "<" + (v.c || "object") + " instance>" },
-          old: undefined });
+        // root "bt" rides onto the synthetic header row so the ✂ is
+        // visible even when the cut sits deep inside one attribute
+        const hdr = { t: "o", c: v.c,
+                      v: "<" + (v.c || "object") + " instance>" };
+        if (v.bt) hdr.bt = 1;
+        displayRows.push({ label: k, isCh, enc: hdr, old: undefined });
         const oldMap = {};
         if (old !== undefined && old.t === "obj")
           old.v.forEach(p => { oldMap[p[0]] = p[1]; });
@@ -5571,6 +5589,12 @@ renderBmarks();
 const EXPLAIN_SPAN = 25;      // events each side of the cursor
 const EXPLAIN_CHAR_CAP = 20000;
 function textVal(enc) {
+  // "bt": the per-value encoding budget cut descent here — say so in
+  // text exactly like the ✂ mark does in the panel
+  const t = textVal0(enc);
+  return enc && enc.bt ? t + " [✂ budget-cut]" : t;
+}
+function textVal0(enc) {
   if (!enc || typeof enc !== "object") return "?";
   if (enc.t === "p") return String(enc.v);
   if (enc.t === "s") return "'" + enc.v + "'";

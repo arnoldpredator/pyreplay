@@ -102,7 +102,7 @@ your target language). Both are laid out in
 ## Tests
 
 ```bash
-python3 checks.py     # 108 data-level checks — should print all green
+python3 checks.py     # 109 data-level checks — should print all green
 ```
 
 Every feature is pinned by a check. Run it before and after any change; a

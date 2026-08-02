@@ -5089,6 +5089,34 @@ def _():
              "--export-perfetto", "x.json", "--granularity", "fn")
     expect(b.returncode == 2 and "timing truth" in b.stdout,
            "perfetto under injection refused (rule 4)")
+    # SUBMODULE target (pkg.mod.fn): the resolver must wait for the
+    # deeper import instead of arming on the package — including the
+    # ambiguous case where __init__ from-imports the submodule (so
+    # mod is ALSO an attribute of pkg at the package's wrap moment)
+    os.makedirs(os.path.join(TMP, "inj2pkg"), exist_ok=True)
+    with open(os.path.join(TMP, "inj2pkg", "__init__.py"), "w") as fh:
+        fh.write("from . import mod\n")
+    with open(os.path.join(TMP, "inj2pkg", "mod.py"), "w") as fh:
+        fh.write("def fn(n):\n    return n\n")
+    pm = fixture("inj2_pm.py", (
+        "import inj2pkg.mod\n"
+        "try:\n"
+        "    print(inj2pkg.mod.fn(1))\n"
+        "except ValueError:\n"
+        "    print('caught')\n"))
+    out3 = os.path.join(TMP, "inj2_f.html")
+    r = subprocess.run([PY, os.path.join(HERE, "tracer.py"), "--out",
+                        out3, "--inject",
+                        "inj2pkg.mod.fn:raises=ValueError", pm],
+                       capture_output=True, text=True, cwd=TMP,
+                       stdin=subprocess.DEVNULL, timeout=120)
+    p3 = payload(out3)
+    expect(p3["inject"]["specs"][0]["armed"]
+           and p3["inject"]["count"] == 1
+           and any("caught" in e.get("txt", "") for e in p3["events"]
+                   if e.get("e") == "log"),
+           f"a dotted submodule target arms on the SUBMODULE and "
+           f"injects: {p3['inject']}")
     # the replayer carries the contract
     with open(os.path.join(HERE, "replayer_template.html"),
               encoding="utf-8") as fh:

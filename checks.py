@@ -4603,6 +4603,15 @@ def _():
     expect(b.returncode == 2 and "ONE argument" in b.stdout
            and "--sweep" in b.stdout,
            "the sweep-protocol signature is named, not just refused")
+    # a generator that crashes at LOAD is refused cleanly with the
+    # exception named — never a raw traceback into the terminal
+    crash = fixture("fz1_gen3.py",
+                    "raise RuntimeError('boom at import')\n")
+    b = fuzz("--fuzz", crash, "--runs", "2", tgt)
+    expect(b.returncode == 2 and "crashed while loading" in b.stdout
+           and "RuntimeError" in b.stdout
+           and "Traceback" not in b.stdout,
+           f"a crashing gen file is a clean refusal: {b.stdout[-200:]}")
 
 
 @check("oracle: differential verdicts, kept pair, shrink wiring "
@@ -4905,6 +4914,32 @@ def _():
         expect(want in covfiles,
                f"{want} (os.open/io.open/pathlib/builtins) must be "
                f"caught — coverage is not builtins-only: {covfiles}")
+    # REGRESSION GUARD (review round 2): the stale-stash mispair. An
+    # io.open (bypasses the wrapper) leaves a pending stash; a later
+    # plain open() whose audit did NOT record (IO_CAP) must DISCARD
+    # it — never adopt it. The first cut adopted it and accused the
+    # properly-closed victim file of being the leak.
+    st = fixture("io5_stale.py", (
+        "import io, sys\n"
+        "for i in range(4999):\n"
+        "    io.open('io5_burn.txt', 'w').close()\n"
+        "v = io.open('io5_victim.txt', 'w')\n"
+        "v.write('x')\n"
+        "v.close()\n"
+        "c = open('io5_culprit.txt', 'w')\n"
+        "c.write('y')\n"
+        "sys._pin = c\n"))
+    out2 = os.path.join(TMP, "io5_stale.html")
+    rs = subprocess.run([PY, os.path.join(HERE, "tracer.py"), "--out",
+                         out2, "--io", "--granularity", "fn", st],
+                        capture_output=True, text=True, cwd=TMP,
+                        stdin=subprocess.DEVNULL, timeout=300)
+    ps = payload(out2)
+    expect(not [e for e in ps["events"] if e.get("leak")]
+           and "io5_victim" not in rs.stdout.split("unclosed")[-1],
+           "a stale stash must be discarded, never pair the closed "
+           "victim with the capped culprit's handle")
+    expect(ps["io"]["capped"], "the cap itself must still announce")
     # audit hooks fire at fn granularity too (no line events needed)
     r2, p2 = run("--granularity", "fn")
     io2 = [e for e in p2["events"] if e.get("e") == "io"]

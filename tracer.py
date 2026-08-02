@@ -106,7 +106,10 @@ and --sweep are refused (perturbed time is not performance truth).
 Repeat --inject for multiple faults. Error-handling paths are the
 least-tested code anywhere; injection is the only way to SEE them
 run — watch the raise propagate and find out what actually catches
-it.
+it. Honest limit (inherent to attribute patching): a module that
+did `from m import fn` BEFORE the wrapper armed holds a direct
+reference and bypasses it — calls seen/injected counts are true for
+the wrapped attribute only. CLI-only; watch() is untouched.
 
 --memory adds tracemalloc calorimetry: time-heat says where the run
 computed, memory-heat says where it RETAINED. A growth curve is
@@ -123,6 +126,7 @@ per-module numbers are your code's allocations (tracer frames are
 out of scope); and tracemalloc sees Python-level allocations ONLY —
 a numpy/torch tensor allocated in C reads ~zero here while system RSS
 climbs (Memray is the native-allocation specialist in the funnel).
+CLI-only; watch() is untouched.
 
 --io opens the I/O lane: every file the program opened, host it
 contacted, subprocess it spawned, exec/eval it ran and import your
@@ -138,6 +142,7 @@ audit layer sees Python-level operations, not raw C syscalls, and
 "no operations" is an observation, not a guarantee. Endpoint
 addresses are captured for free; payload capture stays external
 (mitmproxy et al. — we bridge specialists, we don't clone them).
+CLI-only; watch() is untouched.
 
 --oracle REF.py is differential testing: the reference implementation
 IS the specification (the AtCoder workflow, automated). Target and
@@ -1275,7 +1280,14 @@ def _io_audit_hook(event, args):
                 return
             idx = tr.record_io(kind, event, detail, frame)
             if idx is not None:
-                tr._io_pending[threading.get_ident()] = idx
+                # stash WITH the path so the wrapper can verify it is
+                # pairing its own event: io.open/pathlib bypass the
+                # wrapper and leave their stash behind, and a later
+                # plain open() whose audit didn't record (cap) must
+                # not adopt it — that mispair flagged a CLOSED file
+                # as the leak once (the bug-study's stale-stash case)
+                tr._io_pending[threading.get_ident()] = \
+                    (idx, _io_str(args[0]) if args else None)
             return
         # imports AND dynamic code fire transitively for every stdlib
         # module a target pulls in (importlib exec's each module body)
@@ -1316,10 +1328,14 @@ def _install_io(tracer):
         tr = _IO_ACTIVE
         if tr is not None:
             try:
-                idx = tr._io_pending.pop(threading.get_ident(), None)
-                if idx is not None:
+                got = tr._io_pending.pop(threading.get_ident(), None)
+                # pair ONLY a stash whose path matches this open — a
+                # stale stash (from a bypassing io.open/pathlib call)
+                # is discarded, never adopted; a missed pairing just
+                # means "not provably leaked", the honest side
+                if got is not None and got[1] == _io_str(file):
                     tr._io_handles.append(
-                        (weakref.ref(fh), idx, _io_str(file)))
+                        (weakref.ref(fh), got[0], _io_str(file)))
             except Exception:
                 pass
         return fh
@@ -4624,8 +4640,14 @@ def _load_fuzz_gen(path):
     """Load and validate the roadmap-#1 generator protocol: gen(rng)
     -> str|bytes stdin or [args…] argv. Returns (genfn, None) or
     (None, the refusal message) — the gen(value, seed) sweep/relation
-    protocol is NAMED, not just rejected."""
-    ns = runpy.run_path(os.path.realpath(path))
+    protocol is NAMED, not just rejected, and a generator that crashes
+    while LOADING is refused cleanly, never a raw traceback."""
+    try:
+        ns = runpy.run_path(os.path.realpath(path))
+    except BaseException as exc:
+        return None, (f"error: --fuzz file crashed while loading "
+                      f"({type(exc).__name__}: {exc}) — fix the "
+                      f"generator before the search can start")
     genfn = ns.get("gen")
     if not callable(genfn):
         return None, ("error: --fuzz file must define gen(rng) -> "
@@ -6055,7 +6077,13 @@ def _relation_harness(orig_argv, relations, gen_file, trials, seed,
     0 iff every relation held on every trial (git-bisect-ready)."""
     genfn = None
     if gen_file:
-        ns = runpy.run_path(os.path.realpath(gen_file))
+        try:
+            ns = runpy.run_path(os.path.realpath(gen_file))
+        except BaseException as exc:
+            print(f"error: --gen file crashed while loading "
+                  f"({type(exc).__name__}: {exc}) — fix the "
+                  f"generator before the trials can start")
+            return 2
         genfn = ns.get("gen")
         if not callable(genfn):
             print("error: --gen file must define gen(value, seed) -> "
@@ -7084,7 +7112,13 @@ def _sweep_harness(orig_argv, sweep_spec, gen_file, predict_src,
         return 2
     genfn = None
     if gen_file:
-        ns = runpy.run_path(os.path.realpath(gen_file))
+        try:
+            ns = runpy.run_path(os.path.realpath(gen_file))
+        except BaseException as exc:
+            print(f"error: --gen file crashed while loading "
+                  f"({type(exc).__name__}: {exc}) — fix the "
+                  f"generator before the sweep can start")
+            return 2
         genfn = ns.get("gen")
         if not callable(genfn):
             print("error: --gen file must define gen(value, seed) -> "

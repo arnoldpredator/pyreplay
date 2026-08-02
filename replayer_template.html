@@ -1017,10 +1017,16 @@ const $ = id => document.getElementById(id);
 
 /* Any uncaught error becomes a visible banner instead of dead buttons. */
 window.addEventListener("unhandledrejection", ev => {
+  // loadChunks throws "no DecompressionStream" on purpose AFTER
+  // painting its own calm banner — that intentional halt must not be
+  // overwritten with a "please report" alarm (same rule as onerror's
+  // template-opened-directly case below)
+  const m = (ev.reason && ev.reason.message) || String(ev.reason);
+  if (m.indexOf("no DecompressionStream") >= 0)
+    return;
   const b = document.getElementById("banner");
   b.style.display = "block";
-  b.textContent = "Viewer error during load: " +
-    (ev.reason && ev.reason.message || ev.reason) +
+  b.textContent = "Viewer error during load: " + m +
     " — please report this message.";
 });
 window.onerror = function (msg, src, lineno) {

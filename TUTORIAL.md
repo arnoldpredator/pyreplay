@@ -14,6 +14,36 @@ run, heat the map and let it aim you, then descend into the
 replayer's depth as the questions get harder. Part numbers match the
 feature catalog (FEATURES.md).
 
+## The philosophy — an observatory, not a lens
+
+Most debugging tools are one lens: a profiler shows time, a debugger
+shows one moment, a log shows what you thought to print. pyreplay is
+built as an **observatory with a funnel doctrine**: many instruments
+that compose, ordered wide-and-cheap first, narrow-and-expensive
+last. One full descent through it looks like this:
+
+**`--fuzz` finds a failure** (seeded, reproducible) → **`--shrink`
+cuts the input to the tiny core that still fails** → **an oracle
+judges the output** (`--oracle` against a reference implementation,
+or a `--relation` symmetry when no reference exists) → **a violation
+hands you `--diverge`, which pins the FIRST event where two runs
+part ways** (the cause, before the symptom) → **the provenance panel
+and the whyline explain where that wrong value came from** →
+**the map shows where it all lives in the architecture** (heat,
+walls, dark edges) → **the memory palette shows what it retained**
+(`--memory`, lens → memory (bytes)).
+
+Every arrow is a real handoff: the finishing stage prints the exact
+next command — scoped, seeded, ready to paste, and deliberately
+never auto-run. You stay the scientist; the tool hands you the next
+instrument and teaches the funnel by doing so. Underneath all of it
+sits one contract that makes the composition trustworthy: **the
+display marks only what was actually recorded.** Partial state stays
+unmarked rather than guessed, and every cap, window and truncation
+announces itself on screen. You can only stack seven instruments
+into one investigation if you can trust every single cell — so that
+trust is the load-bearing feature.
+
 ---
 
 ## Part 1 — The static map
@@ -123,13 +153,14 @@ modules, initial ranking — watch the giant component collapse; a
 cliff is a wall the fan counts missed), and the degree distribution
 with its caution: this few points prove no power law.
 
-# pyreplay tracer — user guide
-
-Record a Python program's execution — every line, call, return, and
-variable change — into a single self-contained HTML file you can replay
-in any browser: step forward/back, play at chosen speed, scrub anywhere.
+---
 
 ## Part 2 — Record a run
+
+The tracer records a Python program's execution — every line, call,
+return, and variable change — into a single self-contained HTML file
+you can replay in any browser: step forward/back, play at chosen
+speed, scrub anywhere.
 
 ```bash
 python3 tracer.py path/to/your_script.py
@@ -207,6 +238,7 @@ Notes:
 
 ### Big codebases: scoping and function granularity
 
+```bash
 # trace only these files (globs, project-relative or bare filename)
 python3 tracer.py --include 'cart.py' --include 'pkg/*' main.py
 python3 tracer.py --exclude 'tests/*' main.py      # mapper speaks the

@@ -274,7 +274,56 @@ single line event, so its per-iteration variables are not
 re-observed — switch back to the default engine to watch a
 comprehension iterate.
 
+### Entering without a script: `-m`, pytest, and `watch()`
+
+Library code that no script runs directly still has two natural
+doors. **Module entry**: `python3 tracer.py -m pytest tests/` (or
+`-m mypackage.tool args…`) runs the module exactly as
+`python3 -m` would, with `--root DIR` naming the folder that counts
+as "your code" (default: the current directory) — this is how you
+trace a test suite, the natural entry for libraries. `-m` runs
+default to `--granularity fn`; add `--granularity line` back when
+you want the microscope. An un-importable module is refused with the
+reason, never half-run.
+
+**In-process entry (`watch()`)**: when even `-m` doesn't fit — a
+notebook cell, a framework callback, one function deep inside an
+application you can't relaunch — import the tracer instead of
+running under it:
+
+```python
+from tracer import watch
+
+with watch():                 # brackets any block
+    suspicious_function()
+
+@watch()                      # or: record this function's FIRST call
+def handler(msg): ...         # (once=False records every call)
+```
+
+Each recording writes a normal self-contained `trace_watch*.html`
+(line granularity, provenance included). The semantics are chosen
+for guests in someone else's process: a block exception is recorded
+AND re-raised, hitting the event cap stops recording but lets the
+host program run on, nested `watch()` no-ops with a message, and any
+debugger's prior trace hook is restored on exit. In notebooks pass
+`root=` (the default scope root is the calling file's folder).
+
 ### Recording for real life
+
+**The trace doctor (`--doctor`).** Prefix any invocation with
+`--doctor` and instead of running, the tracer prints the setup
+report: which python and venv would run, whether the entry can even
+import, every missing external dependency across the codebase with
+the exact install line (an editable install when the root is a pip
+package), and pytest configuration traps (a config-forced `xdist`
+means worker subprocesses the tracer can't see — it tells you to
+append `-n0`). Nothing runs, nothing is written; exit 3 means "the
+entry is blocked". The reactive half is on in EVERY run: a
+doomed-import preflight that names the missing module and the pip
+line before the run wastes your time, the same hint after a
+`ModuleNotFoundError` crash, and a 30-second stderr heartbeat on
+long runs (`PYREPLAY_HEARTBEAT=seconds` tunes it, 0 disables).
 
 **The flight recorder (`--black-box`).** Recording becomes a ring
 buffer of the last `--max-events` events: the run is never truncated,
@@ -343,11 +392,12 @@ module"). Only when nothing runnable reaches the module does the
 `YOUR_SCRIPT.py` placeholder appear, and if pytest-style tests import
 it, the note says so (run them under pytest once, re-map, and
 auto-heat fills everything in). Entry paths are absolute, so commands
-work from wherever your shell is. The map tells you WHERE; the ⌖ writes the HOW. Badges show **#1, #2…** execution
-order and **⚠N** where hard exceptions fired; untouched modules fade —
-one glance answers "which part of this codebase actually executes?". Expand a hot module
-and every function shows **×N** (its event count this run); class
-chips tint by their methods' heat. The `heat` checkbox toggles the
+work from wherever your shell is. The map tells you WHERE; the ⌖
+writes the HOW. Badges show **#1, #2…** execution order and **⚠N**
+where hard exceptions fired; untouched modules fade — one glance
+answers "which part of this codebase actually executes?". Expand a
+hot module and every function shows **×N** (its event count this
+run); class chips tint by their methods' heat. The `heat` checkbox toggles the
 overlay. Note the honest details: importing a module executes its
 top-level code, so "cold" modules still show a few events, and class
 bodies run at import time — the map shows Python as it really is.
@@ -373,7 +423,6 @@ autopsy is honestly absent there.
 
 ## Part 4 — Read the replay
 
-Open the generated HTML in a browser. Layout:
 Open the generated HTML in a browser. Layout:
 
 - **Left**: source code, current line highlighted, one tab per traced file.
@@ -560,7 +609,7 @@ it exploded. The terminal ranks the unstable names after every run.
 ## Part 6 — Control flow: what decided
 
 Every branching line shows its expression and the recorded verdict
-(see the Event panel notes in Part 2). The instruments below build
+(see the Event panel notes in Part 4). The instruments below build
 on those verdicts.
 
 **The ghost branch.** Flip 👻 in the badges menu and every verdict
@@ -983,9 +1032,9 @@ claims, and star imports are counted as bypassing the audit.
 "Please don't import private stuff" becomes a number that can go
 down.
 
-**The shadowing badge.** A local named `list`, `id`, or like a
-module-level variable silently masks the outer name — the code reads
-fine and resolves wrongly. Every line trace carries a static per-def
+**The shadowing badge.** A local named `list` or `id`, or named like
+a module-level variable, silently masks the outer name — the code
+reads fine and resolves wrongly. Every line trace carries a static per-def
 audit: rows that shadow a builtin, a module global (named with its
 line), or an enclosing function's local wear **👥**, on exactly the
 frames that hold both names. Reading a closure variable is not
@@ -1269,7 +1318,11 @@ entry points), and the bottom-note line **"⚠ not importable here:
 numpy, …"** — the mapper statically collects every external import and
 checks (without executing anything) which ones your current
 environment can actually satisfy. That line is tomorrow's crash,
-announced today.
+announced today. When you're ready to pick an entry,
+`python3 tracer.py --doctor entry.py` runs the same audit deeper
+from the tracer's side — python/venv, entry blockers, every missing
+dep with its install recipe, pytest traps — still without running
+anything (Part 2).
 
 ```bash
 # 1. Give the code its dependencies, in a venv
@@ -1311,7 +1364,11 @@ values, verdicts and mutations event by event.
 ## Current limits (by design, for now)
 
 - One process; threads are traced, but `multiprocessing` children are not.
-- Values are shown as truncated reprs (~120 chars, 20 container items).
+- Values are size-capped, with every cap announced on screen: reprs
+  truncate at ~120 chars, containers encode 30 elements per level and
+  3 levels deep (changes beyond the head get a window — Part 5), one
+  value totals ~8 KB (the ✂ budget), and containers past ~4096
+  elements fall back to head-only change detection.
 - Line-level tracing slows the target ~100×: use triggers/caps for
   anything big. The funnel is mostly self-contained now: find WHERE
   cheaply with the static map, then a `--granularity fn` trace

@@ -396,4 +396,5 @@ authoritative source is `encode()` and `Tracer._record` in `tracer.py`;
 the viewer side is `renderValue()` in `replayer_template.html`. **To add
 a language you emit this — you don't reimplement any of it.**
 
-Thanks for helping.
+Thanks for helping. And if pyreplay saved you time, you can
+[buy me a coffee ☕](https://buymeacoffee.com/numeristas).

@@ -12,6 +12,7 @@ LLM wrote.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-support-yellow?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/numeristas)
 
 <!-- ⬇ Drop a screen recording here — a 15-second GIF of stepping through a
      trace, then zooming a codebase map, sells this faster than any paragraph.
@@ -114,6 +115,12 @@ Bug reports, edge cases, more example programs, and **other languages** are
 all very welcome. **[CONTRIBUTING.md](CONTRIBUTING.md) is the place to start** — one file
 with the roadmap of what to build (12 features to build, plus a "good first"
 list), the ground rules, and the event-log schema a new-language backend emits.
+
+## Support
+
+pyreplay is free and MIT-licensed. If it saved you time understanding a
+codebase, you can [buy me a coffee ☕](https://buymeacoffee.com/numeristas)
+— it keeps the roadmap moving.
 
 ## License
 

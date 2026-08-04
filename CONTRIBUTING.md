@@ -3,16 +3,16 @@
 Everything already built lives in **FEATURES.md** (the catalog, 126
 entries, ordered the way you use the tool) and **TUTORIAL.md** (the
 guide, same order). This file is the other half: **the features not
-built yet** — numbered 1–17 below, 12 still open (a shipped one keeps
-its number, struck through, so references stay stable) — and how to
+built yet** — 12 features, numbered 1–12 below — and how to
 contribute one. It's written so a stranger can pick an item and
-implement it.
+implement it. (Five earlier roadmap items shipped; they now live in
+FEATURES.md as catalog #117–#122.)
 
 ## Start here — how to contribute
 
 New here and want to help? Three steps:
 
-1. **Pick something.** The **Index** below lists the 12 open
+1. **Pick something.** The **Index** below lists the 12
    features. Bug reports, edge cases, and more `example_*.py`
    programs are just as welcome. Adding **another language** is the
    biggest prize — see "Support another language" and the event-log
@@ -55,14 +55,14 @@ design lenses, not quotes:
 - **The Hotz lens — machine truth, zero overhead.** Show the actual
   interpreter (bytecode, specializations), cost nothing when idle,
   attach to anything, never fake a number. → catalog #69/#49/#17,
-  and #10 here.
+  and #5 here.
 - **The Torvalds lens — bisect it, diff it, no magic.** Every bug is
   a difference between a world that works and one that doesn't;
   build the tools that find the first divergence. → catalog
-  #112/#114, and #3 here (shipped: catalog #118).
+  #112/#114/#118, and #7 here.
 - **The Stroustrup lens — types, invariants, resources.** What holds
   always? What type flows here? Who owns this resource and who
-  closed it? → catalog #65/#66/#67, and #5 here (shipped: catalog #120).
+  closed it? → catalog #65/#66/#67/#120, and #1 here.
 
 **Effort:** S = a focused day · M = several days · L = a week+, schema
 touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
@@ -72,57 +72,22 @@ touched · XL = multi-week / research-grade. **Payoff:** ★ nice ·
 
 | # | Feature | Effort | Payoff |
 |---|---------|--------|--------|
-| ~~1~~ | ~~Random-input entry with seed capture~~ — **shipped**: catalog #117 (`--fuzz`) | M | ★★ |
-| ~~2~~ | ~~Inject exceptions/latency on purpose~~ — **shipped**: catalog #119 (`--inject`) | L | ★★ |
-| ~~3~~ | ~~Compare implementations on the same inputs~~ — **shipped**: catalog #118 (`--oracle`) | M | ★★ |
-| 4 | Object-reference graph at an event | L | ★★ |
-| ~~5~~ | ~~I/O lane via audit hooks; resource-leak pairing~~ — **shipped**: catalog #120 (`--io`) | M | ★★ |
-| ~~6~~ | ~~Memory heat on the map (tracemalloc)~~ — **shipped** (v1): catalog #122 (`--memory`); map palette is the stated remainder | M | ★★ |
-| 7 | Lock-wait attribution | L | ★★ |
-| 8 | Multiprocessing children traced into lanes | XL | ★★★ |
-| 9 | Live streaming replayer (--serve) | L | ★★ |
-| 10 | Attach to a running process (PEP 768) | M | ★★★ |
-| 11 | Schema spec + import/export bridges | M | ★★ |
-| 12 | Two traces side by side, cursors synced | M | ★★ |
-| 13 | Export a panel as video/GIF | M | ★★ |
-| 14 | Hear the trace (sonification) | M | ★ |
-| 15 | Symbolic "what input reaches this line" | XL | ★ |
-| 16 | Full deterministic record/replay | XL | ★★ |
-| 17 | NVTX bridge: Python names on the GPU timeline | M | ★★ |
+| 1 | Object-reference graph at an event | L | ★★ |
+| 2 | Lock-wait attribution | L | ★★ |
+| 3 | Multiprocessing children traced into lanes | XL | ★★★ |
+| 4 | Live streaming replayer (--serve) | L | ★★ |
+| 5 | Attach to a running process (PEP 768) | M | ★★★ |
+| 6 | Schema spec + import/export bridges | M | ★★ |
+| 7 | Two traces side by side, cursors synced | M | ★★ |
+| 8 | Export a panel as video/GIF | M | ★★ |
+| 9 | Hear the trace (sonification) | M | ★ |
+| 10 | Symbolic "what input reaches this line" | XL | ★ |
+| 11 | Full deterministic record/replay | XL | ★★ |
+| 12 | NVTX bridge: Python names on the GPU timeline | M | ★★ |
 
 ## The features
 
-### 1. Property/fuzz entry — SHIPPED
-Now **catalog #117** (`--fuzz GEN.py`): seeded `gen(rng)` inputs
-through the N-run harness, run i seeded base+i−1 and recorded;
-first-per-class inputs saved beside their kept traces; the first
-failure gets a line-level microscope trace and the composed
-`--shrink` command. The Hypothesis `@given` bridge from the original
-sketch remains unbuilt (the `gen(rng)` protocol carries it).
-
-### 2. Fault injection — SHIPPED
-Now **catalog #119** (`--inject "module.func:raises=TimeoutError:
-on_call=3"`, also `returns=LITERAL` / `stall=MS`, repeatable):
-post-import wrapper via a meta-path hook, every performed injection
-a first-class recorded event at the call site, 💉 PERTURBED banner
-(rule 4), auto-heat skip, unresolved targets loud. Composes with
---runs (the catch rate) and chaos; refuses the comparison and
-timing experiments with reasons.
-
-### 3. Differential testing — SHIPPED
-Now **catalog #118** (`--oracle REF.py`): both implementations on
-the same input (piped stdin, or `--fuzz` seeded trials), stdouts
-compared judge-style from the console lane; a mismatch keeps input
-+ both traces and composes `--shrink --oracle` (ddmin under the
-disagreement oracle, both sides microscoped on the minimal case).
-One sketch line changed en route, honestly: `--diverge` is NOT
-composed on a mismatch — it aligns two runs of the SAME code, and
-these are two different programs; the minimized input is the
-explanation there.
-
----
-
-### 4. Heap topology view (the pointer graph)
+### 1. Heap topology view (the pointer graph)
 - **What:** at the current event, draw the object-reference graph
   around a chosen variable: nodes = objects (typed, sized), edges =
   references; shared objects (our 🔗 aliases) visibly shared; cycles
@@ -140,40 +105,9 @@ explanation there.
   teaching visualization Python has ever had, absent from tools for
   real codebases.
 
-### 5. The I/O lane — SHIPPED
-Now **catalog #120** (`--io`): `sys.addaudithook` records file opens,
-socket connects/DNS, subprocess spawns, `exec`/`eval` and your direct
-imports as first-class events tied to the causing frame (works at fn
-granularity too); a wrapped `open()` pairs handles and names any file
-still open at exit as a leak, at its site. Transitive stdlib imports
-and importlib's module-body `exec`s are filtered so the lane stays
-signal; socket events carry their target addresses; payload capture
-stays external on purpose. One honesty refinement over the sketch:
-weakref *finalizers* proved the wrong instrument (they fire on GC,
-which for a leaked file may never come) — the leak test is instead
-"a tracked handle whose `.closed` is still False at trace end", so
-only provably-open resources are flagged.
-
-### 6. Memory heat (calorimetry) — SHIPPED
-Now **catalog #122** (`--memory`): `tracemalloc` sampled through the
-run into a growth strip-chart under the scrubber (current + peak
-high-water), with per-module bytes attributed from periodic
-snapshots (in-scope only — the tracer's own event buffer stays out).
-Honesty on every surface: ~2× overhead, process totals include the
-tracer's buffer, and the C-extension blind spot (numpy/torch in C
-reads ~zero; Memray is the native specialist). One design choice
-worth recording: samples are a payload OVERLAY
-(`memory.samples = [[event_index, cur, peak]]`), not stream MEM
-events — a measurement isn't a program moment, and this keeps every
-other feature's event handling untouched. **The v1 remainder landed
-too:** the map's third palette — lens "memory (bytes)", tint = share
-of the largest in-scope snapshot, byte badges + tooltips, and
-multi-run aggregation adopts the largest snapshot WHOLE (one
-distribution is one moment of one run; snapshots never mix).
-
 ---
 
-### 7. Lock-wait attribution
+### 2. Lock-wait attribution
 - **What:** time spent *waiting* vs *holding* each lock/semaphore:
   which call sites contend, who blocked whom, longest queue.
 - **Why:** contention is invisible in source and dominant in threaded
@@ -187,7 +121,7 @@ distribution is one moment of one run; snapshots never mix).
 - **Prior art:** Linux `perf lock`; JVM contention profilers — a
   category Python tooling barely has.
 
-### 8. Multiprocessing lanes (recovers a "documented limit")
+### 3. Multiprocessing lanes (recovers a "documented limit")
 - **What:** children of `multiprocessing`/`concurrent.futures`
   traced too (fn granularity), each child writing
   `trace_…pid.html`-part files, merged into one replayer as extra
@@ -206,7 +140,7 @@ distribution is one moment of one run; snapshots never mix).
   multiprocess tracing; Perfetto's multi-track model (already our
   export target).
 
-### 9. Live mission control (`--serve`)
+### 4. Live mission control (`--serve`)
 - **What:** watch the trace **while the program runs**: tracer
   streams events over a localhost `http.server` + SSE; the replayer
   follows live (or you scrub back while it continues), heartbeat
@@ -223,7 +157,7 @@ distribution is one moment of one run; snapshots never mix).
 - **Prior art:** every observability dashboard; py-spy top's live
   view — but with full event fidelity instead of samples.
 
-### 10. Attach to a running process (PEP 768)
+### 5. Attach to a running process (PEP 768)
 - **What:** `tracer.py --attach PID` — on Python 3.14+, inject a
   `watch()`-style recorder into an ALREADY-RUNNING process via the
   new safe external debugger interface (`sys.remote_exec`), record a
@@ -242,7 +176,7 @@ distribution is one moment of one run; snapshots never mix).
 
 ---
 
-### 11. Rosetta bridges (spec + import/export)
+### 6. Rosetta bridges (spec + import/export)
 - **What:** publish the event schema as a versioned JSON-Schema spec
   (the layer-2 contract, made public); importers: py-spy speedscope
   and VizTracer JSON drawn as heat/lanes on our map/replayer;
@@ -260,13 +194,13 @@ distribution is one moment of one run; snapshots never mix).
 
 ---
 
-### 12. Dual synced replayers
+### 7. Dual synced replayers
 - **What:** open two traces side by side with linked cursors —
   aligned by the catalog #112 divergence map when available, by manual anchor
   pairs otherwise; divergence point marked in both scrubbers.
-- **Why:** before/after a fix, pass vs fail, brute vs fast (#3, shipped: catalog #118):
-  humans diff by eye extremely well when the two films are locked in
-  step.
+- **Why:** before/after a fix, pass vs fail, brute vs fast (the
+  differential oracle, catalog #118): humans diff by eye extremely
+  well when the two films are locked in step.
 - **How:** two iframes + postMessage cursor protocol + an alignment
   table; degrade to proportional sync with an honest "unaligned"
   badge.
@@ -274,7 +208,7 @@ distribution is one moment of one run; snapshots never mix).
 - **Prior art:** diff tools' two-pane discipline applied to
   executions.
 
-### 13. Movie export
+### 8. Movie export
 - **What:** select a panel (the bars view, the graph+overlay, the
   grid) and an event range → export a WebM (canvas captureStream +
   MediaRecorder, browser-native) or animated GIF of it playing.
@@ -287,7 +221,7 @@ distribution is one moment of one run; snapshots never mix).
 - **Prior art:** asciinema for terminals; nothing equivalent for
   execution state.
 
-### 14. Sonification — hear the trace
+### 9. Sonification — hear the trace
 - **What:** map events to sound while playing: pitch by call depth,
   timbre by file, a tick per loop iteration, dissonance on
   exceptions; a run becomes a rhythm you learn.
@@ -302,7 +236,7 @@ distribution is one moment of one run; snapshots never mix).
   auralization literature of the 90s — never shipped in a mainstream
   tool.
 
-### 15. Symbolic branch exploration
+### 10. Symbolic branch exploration
 - **What:** for a chosen never-taken branch: attempt to solve the
   path condition ("what stdin reaches line 84?") via symbolic
   execution of the guarding expressions.
@@ -314,7 +248,7 @@ distribution is one moment of one run; snapshots never mix).
 - **Effort:** XL (bridge: L).
 - **Prior art:** CrossHair; KLEE; concolic testing (DART/SAGE).
 
-### 16. Full deterministic record/replay
+### 11. Full deterministic record/replay
 - **What:** catalog #34 Tier 3 completed into rr-class fidelity: every
   nondeterminism source intercepted so any recorded run re-executes
   identically — enabling reverse-execution debugging on top of our
@@ -330,7 +264,7 @@ distribution is one moment of one run; snapshots never mix).
 
 ---
 
-### 17. NVTX bridge — Python meaning on the GPU timeline
+### 12. NVTX bridge — Python meaning on the GPU timeline
 *(belongs with Section 6 — interchange; recovers Phase 5 of the
 original brief)*
 - **What:** `--export-nvtx` — at fn granularity, emit NVTX ranges
@@ -363,26 +297,23 @@ original brief)*
 - **3D visualization** — aggregation and filtering, not rendering
   heroics (unchanged since the brief).
 - **Rebuilding samplers/profilers** — py-spy and friends exist; we
-  bridge (#11), not clone.
+  bridge (#6), not clone.
 - **Auto-running composed commands from the map** — the ⌖ copy box is
   the interface on purpose: the funnel teaches; a button would
   obscure.
 
-## If you only build five
+## If you only build a few
 
-The learner's cut of the open seventeen:
+The high-payoff cut of the open twelve:
 
-1. ~~**#1 property/fuzz entry**~~ — **shipped** (catalog #117): find
-   the failing case while you sleep, keep the seed, shrink it.
-2. ~~**#3 differential testing**~~ — **shipped** (catalog #118): the
-   brute force is the specification, the loop closed end to end.
-3. ~~**#5 the I/O lane**~~ — **shipped** (catalog #120): "what did
-   this program touch?" from audit hooks, unclosed resources named.
-4. ~~**#6 memory heat**~~ — **shipped** (v1, catalog #122): the
-   growth curve; memory-heat says where it retained. (Map palette
-   is the stated remainder.)
-5. **#10 attach** — the one thing external samplers still have over
+1. **#5 attach** — the one thing external samplers still have over
    pyreplay: joining a process already running.
+2. **#7 dual synced replayers** — two traces side by side, cursors
+   locked; before/after a fix, humans diff by eye extremely well.
+3. **#1 heap topology** — the pointer graph Python Tutor made
+   famous, on real codebases; where aliasing and cycle bugs live.
+4. **#6 schema spec + bridges** — publish the event-log contract so
+   other tools (py-spy, VizTracer) compose with pyreplay.
 
 ## Good first contributions (tasks, not numbered features)
 

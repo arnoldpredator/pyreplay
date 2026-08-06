@@ -10,6 +10,11 @@ map the whole codebase at a glance. It won't fix your bugs (that's what a
 professional IDE is for) — it's the fast first look, especially at code an
 LLM wrote.
 
+What began as a tracer and a map has grown into an **observatory**: ~126
+composable instruments (all catalogued in [FEATURES.md](FEATURES.md)),
+ordered as a funnel — map the whole thing for free, record a run, then
+descend to a single value. Each stage hands you the next.
+
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)
 [![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-support-yellow?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/numeristas)
@@ -22,7 +27,7 @@ LLM wrote.
 
 ## What you get
 
-Two tools that share one JSON event-log format:
+Two tools share one JSON event-log format — they're the two ways in:
 
 - **`tracer.py`** — records a run (every line / call / return, and *which*
   variables changed) into a self-contained `trace_*.html` you step through
@@ -36,6 +41,27 @@ Two tools that share one JSON event-log format:
   a zoomable `map_*.html`: modules laid out by import depth, packages that
   fold, import cycles drawn in red, and the "load-bearing walls" ranked by how
   many modules import them. Overlay a trace to see which parts actually ran.
+
+Behind those two entry points is a **toolkit of instruments that compose**,
+grouped the way you reach for them (the funnel — wide and cheap first):
+
+- **Map the codebase** *(nothing runs)* — load-bearing walls, import cycles,
+  whole-codebase search, package folding, the call graph.
+- **Record & replay** — every value change with semantic views, threads &
+  asyncio as parallel lanes, a near-free black-box flight recorder, a faster
+  `sys.monitoring` engine for big runs.
+- **Read the run** — provenance (*where did this value come from?*), the
+  whyline (*why didn't this line run?*), branch verdicts, bytecode anatomy,
+  call tree & sequence diagram.
+- **Truth & alarms** — a NaN-birth tripwire, contracts (`--invariant`),
+  mined invariants, observed state machines.
+- **The reliability lab** — run N times for stats, diff two runs to the
+  first divergence, shrink a failing input, **fuzz to *find* a failure**,
+  **differential-test against a reference**, **inject faults**, **watch
+  memory grow**, **list what the program touched**.
+
+Each finishing stage **prints the exact next command to paste** — the tool
+hands you the next instrument rather than making you remember it.
 
 ## Quickstart — no install, standard library only
 
@@ -60,6 +86,16 @@ python3 tracer.py --relation \
   --gen gen.py algo.py                          # metamorphic testing: the symmetry
                                                 #    is the oracle; violations keep
                                                 #    both traces, ready to --diverge
+python3 tracer.py --fuzz gen.py --runs 50 t.py  # find a failing input while you
+                                                #    sleep (seeded, reproducible),
+                                                #    then it hands you --shrink
+python3 tracer.py --oracle brute.py fast.py \
+                  < input.txt                   # differential test: the brute force
+                                                #    is the spec; mismatch -> --diverge
+python3 tracer.py --io app.py                   # what did it TOUCH? files, sockets,
+                                                #    subprocesses; unclosed files named
+python3 tracer.py --memory sim.py               # where memory is RETAINED: a growth
+                                                #    curve + per-module bytes
 ```
 
 Open the HTML in any browser. No server, no build step, no dependencies.
